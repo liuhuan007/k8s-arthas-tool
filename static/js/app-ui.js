@@ -2348,7 +2348,12 @@ async function saveCluster() {
     closeModal();
     toast(wasEditing ? '集群已更新' : '集群已添加', 'success');
     await loadClusters();
-    selCluster(name);  // 保存后立即选中该集群
+    // 选中集群但不立即 ping（ping 是异步的，不阻塞保存响应）
+    _ac = name;
+    try { localStorage.setItem('arthas_ac', name); } catch {}
+    renderSidebar();
+    // 延迟 ping，避免 kubectl 阻塞导致前端报错
+    setTimeout(() => pingCluster(name), 800);
     // Auto-load namespaces for sidebar display
     autoLoadNs(name);
   } catch(e) { err.textContent=e.message; err.style.display='block'; }
