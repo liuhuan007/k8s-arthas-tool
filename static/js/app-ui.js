@@ -2219,7 +2219,7 @@ function renderSidebar() {
   if(!_clusters.length) { el.innerHTML='<div class="sb-empty">暂无集群<br>点击 ＋ 添加</div>'; return; }
   el.innerHTML = _clusters.map(c => `
     <div class="sb-itm ${_ac===c.name?'on':''}" onclick="selCluster('${c.name}')">
-      <div class="sb-dt" id="sbd_${c.name.replace(/\W/g,'_')}"></div>
+      <div class="sb-dt" id="sbd_${btoa(encodeURIComponent(c.name)).replace(/[^a-zA-Z0-9]/g,'_')}"></div>
       <span class="sb-nm" title="${c.name}">${c.name}</span>
       <button class="sb-edit" onclick="event.stopPropagation();openEditCluster('${c.name}')" title="编辑">✎</button>
       <button class="sb-del" onclick="event.stopPropagation();delCluster('${c.name}')" title="删除">✕</button>
@@ -2237,7 +2237,7 @@ function selCluster(name) {
 }
 
 async function pingCluster(name) {
-  const did = 'sbd_' + name.replace(/\W/g,'_');
+  const did = 'sbd_' + btoa(encodeURIComponent(name)).replace(/[^a-zA-Z0-9]/g,'_');
   const dot = document.getElementById(did); if(dot) dot.className='sb-dt pinging';
   try {
     const r = await fetch(`${API}/clusters/${encodeURIComponent(name)}/test`, {method:'POST'});
@@ -2332,8 +2332,7 @@ async function saveCluster() {
   if(!name || !kc) { err.textContent='名称和路径必填'; err.style.display='block'; return; }
   err.style.display='none';
   try {
-    // Use PUT if editing existing, POST if new
-    const isEdit = _editingCluster && _editingCluster !== name || !_editingCluster;
+    // 编辑已有集群用 PUT（URL 带旧名称），新增用 POST
     const method = _editingCluster ? 'PUT' : 'POST';
     const url    = _editingCluster
       ? `${API}/clusters/${encodeURIComponent(_editingCluster)}`
