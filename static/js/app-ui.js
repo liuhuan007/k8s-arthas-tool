@@ -2217,13 +2217,17 @@ async function loadClusters() {
 function renderSidebar() {
   const el = document.getElementById('sbCls');
   if(!_clusters.length) { el.innerHTML='<div class="sb-empty">暂无集群<br>点击 ＋ 添加</div>'; return; }
-  el.innerHTML = _clusters.map(c => `
-    <div class="sb-itm ${_ac===c.name?'on':''}" onclick="selCluster('${c.name}')">
+  el.innerHTML = _clusters.map(c => {
+    const safeName = esc(c.name);
+    const jsName = c.name.replace(/'/g, "\\'").replace(/"/g, '\\"');
+    return `
+    <div class="sb-itm ${_ac===c.name?'on':''}" onclick="selCluster('${jsName}')">
       <div class="sb-dt" id="sbd_${btoa(encodeURIComponent(c.name)).replace(/[^a-zA-Z0-9]/g,'_')}"></div>
-      <span class="sb-nm" title="${c.name}">${c.name}</span>
-      <button class="sb-edit" onclick="event.stopPropagation();openEditCluster('${c.name}')" title="编辑">✎</button>
-      <button class="sb-del" onclick="event.stopPropagation();delCluster('${c.name}')" title="删除">✕</button>
-    </div>`).join('');
+      <span class="sb-nm" title="${safeName}">${safeName}</span>
+      <button class="sb-edit" onclick="event.stopPropagation();openEditCluster('${jsName}')" title="编辑">✎</button>
+      <button class="sb-del" onclick="event.stopPropagation();delCluster('${jsName}')" title="删除">✕</button>
+    </div>`;
+  }).join('');
 }
 
 function selCluster(name) {
