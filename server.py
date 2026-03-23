@@ -29,6 +29,8 @@ from pod_monitor import (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
+SERVER_VERSION = "2026.03.23"  # 部署版本标识
+
 app = Flask(__name__,
     static_folder='static',
     static_url_path='/static',
@@ -144,7 +146,24 @@ _load_clusters()
 
 @app.get("/api/health")
 def health():
-    return jsonify({"ok": True, "time": datetime.now().isoformat()})
+    return jsonify({
+        "ok": True,
+        "version": globals().get("SERVER_VERSION", "unknown"),
+        "time": datetime.now().isoformat(),
+        "clusters": list(_clusters.keys()),
+        "clusters_file": str(CLUSTERS_FILE),
+    })
+
+@app.post("/api/debug/put_test")
+def debug_put_test():
+    """调试接口：测试 PUT 请求体解析，帮助排查 ERR_EMPTY_RESPONSE"""
+    try:
+        raw = request.get_data(as_text=False)
+        d = json.loads(raw.decode("utf-8")) if raw else {}
+        return jsonify({"ok": True, "received": d, "raw_len": len(raw)})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -161,16 +180,19 @@ def list_clusters():
 @app.post("/api/clusters")
 def add_cluster():
     try:
-        d    = request.json or {}
-        name = d.get("name", "").strip()
-        kc   = d.get("kubeconfig", "").strip()
-        ctx  = d.get("context", "").strip()
+        raw = request.get_data(as_text=False)
+        try:
+            d = json.loads(raw.decode("utf-8")) if raw else {}
+        except Exception:
+            d = request.json or {}
+        name = str(d.get("name", "")).strip()
+        kc   = str(d.get("kubeconfig", "")).strip()
+        ctx  = str(d.get("context", "")).strip()
         if not name or not kc:
             return jsonify({"error": "name 和 kubeconfig 必填"}), 400
         if not os.path.exists(kc):
             return jsonify({"error": f"kubeconfig 文件不存在: {kc}"}), 400
         _clusters[name] = ClusterConfig(name=name, kubeconfig=kc, context=ctx)
-        # __tmp__ 是旧版前端用于获取 contexts 的临时集群，不持久化
         if name != '__tmp__':
             _save_clusters()
         return jsonify({"ok": True})
@@ -190,19 +212,30 @@ def get_cluster(name: str):
 def update_cluster(name: str):
     """Update cluster config (context switch, rename, etc.)"""
     try:
-        d   = request.json or {}
+        # 强制用 utf-8 解码请求体，避免 Linux 系统编码问题
+        raw = request.get_data(as_text=False)
+        try:
+            d = json.loads(raw.decode("utf-8")) if raw else {}
+        except Exception:
+            d = request.json or {}
+
         old = _clusters.get(name)
         if not old:
             return jsonify({"error": f"集群 '{name}' 不存在"}), 404
-        new_name = d.get("name", old.name).strip()
-        new_kc   = d.get("kubeconfig", old.kubeconfig).strip()
-        new_ctx  = d.get("context",   old.context).strip()
+
+        new_name = str(d.get("name", old.name)).strip()
+        new_kc   = str(d.get("kubeconfig", old.kubeconfig)).strip()
+        new_ctx  = str(d.get("context",   old.context)).strip()
+
         if not new_name or not new_kc:
             return jsonify({"error": "名称和 kubeconfig 路径不能为空"}), 400
-        if not os.path.exists(new_kc):
+
+        # 只有 kubeconfig 路径发生变化时才检查文件存在性
+        if new_kc != old.kubeconfig and not os.path.exists(new_kc):
             return jsonify({"error": f"kubeconfig 文件不存在: {new_kc}"}), 400
+
         if new_name != name:
-            del _clusters[name]
+            _clusters.pop(name, None)
         _clusters[new_name] = ClusterConfig(name=new_name, kubeconfig=new_kc, context=new_ctx)
         _save_clusters()
         return jsonify({"ok": True, "name": new_name})
