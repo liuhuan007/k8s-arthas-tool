@@ -29,8 +29,24 @@ from pod_monitor import (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-app = Flask(__name__, static_folder='.', static_url_path='')
+app = Flask(__name__,
+    static_folder='static',
+    static_url_path='/static',
+)
 CORS(app)
+
+# ── 前端静态文件服务（K8s / Docker 部署时通过 HTTP 访问）──────────────────────
+_BASE_DIR = Path(__file__).parent
+
+@app.get('/')
+@app.get('/index.html')
+def serve_index():
+    return send_file(str(_BASE_DIR / 'index.html'))
+
+@app.get('/login.html')
+def serve_login():
+    return send_file(str(_BASE_DIR / 'login.html'))
+
 
 OUTPUT_DIR    = Path("./profiler_output")
 CLUSTERS_FILE = Path("./clusters.json")
@@ -53,7 +69,7 @@ def _conn_key(cluster: str, ns: str, pod: str) -> str:
 def _load_clusters():
     if CLUSTERS_FILE.exists():
         try:
-            for item in json.loads(CLUSTERS_FILE.read_text(encoding='utf-8')):
+            for item in json.loads(CLUSTERS_FILE.read_text()):
                 c = ClusterConfig(**item)
                 _clusters[c.name] = c
         except Exception:
@@ -62,7 +78,7 @@ def _load_clusters():
 def _save_clusters():
     data = [{"name": c.name, "kubeconfig": c.kubeconfig, "context": c.context}
             for c in _clusters.values()]
-    CLUSTERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    CLUSTERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
 
 def _make_executor(cluster_name: str):
     """Return (KubectlExecutor, error_str)"""
@@ -993,40 +1009,6 @@ def download_local_file(filename: str):
     if not p.exists():
         return jsonify({"error": "不存在"}), 404
     return send_file(str(p), as_attachment=True, download_name=filename)
-
-
-# ── 静态文件路由（HTML 页面）──────────────────────────────────────────────────
-@app.get("/")
-def index_root():
-    """根路径重定向到 index.html"""
-    return send_file("./index.html")
-
-@app.get("/<path:filename>")
-def serve_html(filename: str):
-    """提供 HTML/JS/CSS 等静态文件"""
-    # 安全过滤：防止目录穿越
-    if filename.startswith('..') or '/..' in filename:
-        return jsonify({"error": "非法路径"}), 403
-    
-    file_path = Path("./" + filename)
-    if not file_path.exists() or not file_path.is_file():
-        return jsonify({"error": f"文件不存在：{filename}"}), 404
-    
-    # 根据文件类型设置 MIME
-    mime_types = {
-        '.html': 'text/html',
-        '.css':  'text/css',
-        '.js':   'application/javascript',
-        '.json': 'application/json',
-        '.png':  'image/png',
-        '.jpg':  'image/jpeg',
-        '.jpeg': 'image/jpeg',
-        '.gif':  'image/gif',
-        '.svg':  'image/svg+xml',
-        '.ico':  'image/x-icon',
-    }
-    mime_type = mime_types.get(file_path.suffix.lower(), 'application/octet-stream')
-    return send_file(str(file_path), mimetype=mime_type)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

@@ -1208,7 +1208,7 @@ pre.raw{{white-space:pre-wrap;word-break:break-all;padding:8px;font-size:11px;co
 <div class="content">
   <div class="sum">共 {thread_count} 个线程 · RUNNABLE={running_count} · WAITING(含TIMED)={waiting_count} · BLOCKED={blocked_count}</div>
   <div id="blocks"></div>
-  <pre class="raw" id="raw">{import_html_escape}</pre>
+  <pre class="raw" id="raw">{import_html_escape(thread_text)}</pre>
 </div>
 
 <script>

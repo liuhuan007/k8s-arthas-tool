@@ -1,52 +1,15 @@
 
-// ── State (必须在所有函数之前声明，避免 Temporal Dead Zone 错误) ─────────────
-let _clusters = [], _ac = null;
-let _connected = false, _ap = null;
-let _sid = null, _cid = null, _pollTimer = null, _polling = false;
-let _cmdHist = [], _histIdx = -1, _selCmd = null;
-let _pfTaskId = null, _pfPollTimer = null, _pfStart = null, _pfDur = 60, _pfLL = 0;
-let _snap = null, _histData = [], _logRaw = '', _logWrap = true;
-let _fbSelected = null, _fbCurPath = '/tmp';
-let _editingCluster = null;
-
-// API 配置：优先使用页面当前主机地址，其次使用 localStorage 配置，最后使用默认地址
-(function loadAPIConfig() {
-  // 1. 优先使用 window.API_CONFIG（全局配置）
-  if (window.API_CONFIG) {
-    return window.API_CONFIG;
+// ── API 地址自动检测 ──────────────────────────────────────────────────────────
+// file:// 模式（本地直接打开）→ 使用默认 127.0.0.1:5001
+// http(s):// 模式（K8s/Docker 部署）→ 使用当前页面的 host
+const API = (() => {
+  if (typeof window !== 'undefined' && window.location.protocol.startsWith('http')) {
+    // HTTP 模式：API 和前端同域同端口
+    return `${window.location.protocol}//${window.location.host}/api`;
   }
-  
-  // 2. 其次使用 localStorage 中保存的配置
-  const saved = localStorage.getItem('api_config');
-  if (saved) {
-    try {
-      return JSON.parse(saved);
-    } catch(e) {
-      console.warn('解析 api_config 失败:', e);
-    }
-  }
-  
-  // 3. 自动使用当前页面的主机地址（最智能的方式）
-  // 当用户通过 http://10.101.64.10:5001/ 访问时，自动使用该地址
-  const currentHost = window.location.hostname || 'localhost';
-  const currentPort = window.location.port || '5001';
-  
-  // 如果是通过 file:// 协议打开，使用默认地址
-  if (window.location.protocol === 'file:') {
-    return { host: '127.0.0.1', port: 5001 };
-  }
-  
-  // 否则使用当前页面的主机和端口
-  return { host: currentHost, port: currentPort };
+  // file:// 模式：本地开发
+  return 'http://127.0.0.1:5001/api';
 })();
-
-const API_BASE = loadAPIConfig();
-const API = `http://${API_BASE.host}:${API_BASE.port}/api`;
-
-console.log('📡 API 配置:', API, '(来源：' + 
-  (window.API_CONFIG ? '全局配置' : 
-   localStorage.getItem('api_config') ? 'localStorage' : 
-   window.location.protocol === 'file:' ? '默认配置' : '自动检测') + ')');
 
 // ── 认证工具 ──────────────────────────────────────────────────────────────────
 const AUTH_KEY  = 'arthas_auth_token';
@@ -58,7 +21,8 @@ function doLogout() {
   // 保留 localStorage（记住我），但清除 token 强制重新登录
   localStorage.removeItem(AUTH_KEY);
   localStorage.removeItem(AUTH_USER);
-  window.location.href = 'login.html';
+  // HTTP 模式（K8s/Docker）跳到 /login.html，file:// 模式跳到 login.html
+  window.location.href = window.location.protocol.startsWith('http') ? '/login.html' : 'login.html';
 }
 
 function initUserDisplay() {
@@ -114,6 +78,15 @@ async function safePost(url, body, timeoutMs = 15000) {
   if (!r.ok) throw new Error(d.error || d.message || `请求失败 (${r.status})`);
   return d;
 }
+
+// ── State ──────────────────────────────────────────────────────────────────────
+let _clusters = [], _ac = null;
+let _connected = false, _ap = null;
+let _sid = null, _cid = null, _pollTimer = null, _polling = false;
+let _cmdHist = [], _histIdx = -1, _selCmd = null;
+let _pfTaskId = null, _pfPollTimer = null, _pfStart = null, _pfDur = 60, _pfLL = 0;
+let _snap = null, _histData = [], _logRaw = '', _logWrap = true;
+let _fbSelected = null, _fbCurPath = '/tmp';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -435,11 +408,7 @@ const CMDS = [
     { id:'thread', name:'thread', icon:'🧵', type:'once',
       desc:'线程列表 + CPU 占用（-n 最忙N个，-b 检测死锁）',
       tip:`输出所有线程或指定线程的状态和 CPU 占用。\n-n N：输出 CPU 最高的前N个线程及堆栈，排查 CPU 飙高的核心命令。\n-b：检测处于 BLOCKED 的线程，定位死锁。\ntid：指定线程ID查看完整调用栈。`,
-      example:`thread
-thread -n 3
-thread 12
-thread -b
-thread --state BLOCKED`,
+      example:`thread\nthread -n 3\nthread 12\nthread -b\nthread --state BLOCKED`,
       doc:`https://arthas.aliyun.com/en/doc/thread.html`,
       params:[
         {k:'-n', ph:'最忙前N个线程', def:''},
@@ -2270,6 +2239,8 @@ async function delCluster(name) {
   if(_ac===name) _ac=null; loadClusters();
 }
 
+let _editingCluster = null;
+
 function openAddCluster() {
   _editingCluster = null;
   document.getElementById('mName').value = '';
@@ -2354,9 +2325,10 @@ async function saveCluster() {
     });
     const d = await r.json();
     if(!r.ok) { err.textContent = d.error; err.style.display='block'; return; }
+    const wasEditing = !!_editingCluster;
     _editingCluster = null;
     closeModal();
-    toast(_editingCluster ? '集群已更新' : '集群已添加', 'success');
+    toast(wasEditing ? '集群已更新' : '集群已添加', 'success');
     await loadClusters();
     selCluster(name);
     // Auto-load namespaces for sidebar display

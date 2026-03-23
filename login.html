@@ -328,8 +328,11 @@ window.addEventListener('DOMContentLoaded', () => {
 });
 
 function redirect() {
-  const p = new URLSearchParams(window.location.search);
-  window.location.href = p.get('next') || 'index.html';
+  const p    = new URLSearchParams(window.location.search);
+  const next = p.get('next');
+  if (next) { window.location.href = next; return; }
+  // HTTP 模式跳到根路径，file:// 模式跳到 index.html
+  window.location.href = window.location.protocol.startsWith('http') ? '/' : 'index.html';
 }
 
 function doLogin(e) {

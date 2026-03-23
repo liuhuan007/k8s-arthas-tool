@@ -8,7 +8,10 @@
 (function() {
   var AUTH_KEY = 'arthas_auth_token';
   var token = sessionStorage.getItem(AUTH_KEY) || localStorage.getItem(AUTH_KEY);
-  if(!token) { window.location.replace('login.html?next=index.html'); }
+  if(!token) {
+    var loginUrl = window.location.protocol.startsWith('http') ? '/login.html' : 'login.html';
+    window.location.replace(loginUrl + '?next=' + encodeURIComponent(window.location.href));
+  }
 })();
 </script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
