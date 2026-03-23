@@ -1,5 +1,42 @@
 
-const API = 'http://127.0.0.1:5001/api';
+// API 配置：优先使用页面当前主机地址，其次使用 localStorage 配置，最后使用默认地址
+(function loadAPIConfig() {
+  // 1. 优先使用 window.API_CONFIG（全局配置）
+  if (window.API_CONFIG) {
+    return window.API_CONFIG;
+  }
+  
+  // 2. 其次使用 localStorage 中保存的配置
+  const saved = localStorage.getItem('api_config');
+  if (saved) {
+    try {
+      return JSON.parse(saved);
+    } catch(e) {
+      console.warn('解析 api_config 失败:', e);
+    }
+  }
+  
+  // 3. 自动使用当前页面的主机地址（最智能的方式）
+  // 当用户通过 http://10.101.64.10:5001/ 访问时，自动使用该地址
+  const currentHost = window.location.hostname || 'localhost';
+  const currentPort = window.location.port || '5001';
+  
+  // 如果是通过 file:// 协议打开，使用默认地址
+  if (window.location.protocol === 'file:') {
+    return { host: '127.0.0.1', port: 5001 };
+  }
+  
+  // 否则使用当前页面的主机和端口
+  return { host: currentHost, port: currentPort };
+})();
+
+const API_BASE = loadAPIConfig();
+const API = `http://${API_BASE.host}:${API_BASE.port}/api`;
+
+console.log('📡 API 配置:', API, '(来源：' + 
+  (window.API_CONFIG ? '全局配置' : 
+   localStorage.getItem('api_config') ? 'localStorage' : 
+   window.location.protocol === 'file:' ? '默认配置' : '自动检测') + ')');
 
 // ── 认证工具 ──────────────────────────────────────────────────────────────────
 const AUTH_KEY  = 'arthas_auth_token';
