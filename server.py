@@ -221,6 +221,27 @@ def get_contexts_api(name: str):
         "current":  ex.get_current_context(),
     })
 
+@app.post("/api/contexts")
+def get_contexts_by_kubeconfig():
+    """
+    根据 kubeconfig 路径直接返回 contexts，不创建/保存任何集群配置。
+    替代旧的 __tmp__ 临时集群方案，避免 ERR_EMPTY_RESPONSE。
+    """
+    d  = request.json or {}
+    kc = d.get("kubeconfig", "").strip()
+    if not kc:
+        return jsonify({"error": "kubeconfig 必填"}), 400
+    if not os.path.exists(kc):
+        return jsonify({"error": f"kubeconfig 文件不存在: {kc}"}), 400
+    try:
+        ex = KubectlExecutor(kc, "")
+        return jsonify({
+            "contexts": ex.get_contexts(),
+            "current":  ex.get_current_context(),
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Pod quick-check (no Arthas needed)

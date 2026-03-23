@@ -2305,11 +2305,14 @@ async function fetchCtxs() {
   const kc = document.getElementById('mKc').value.trim();
   if(!kc) { toast('请先填写 kubeconfig 路径','warn'); return; }
   try {
-    const r1 = await fetch(`${API}/clusters`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({name:'__tmp__',kubeconfig:kc,context:''})});
-    if(!r1.ok) { const e=await r1.json(); toast(e.error,'error'); return; }
-    const r2 = await fetch(`${API}/clusters/__tmp__/contexts`);
+    // 使用专用接口直接获取 contexts，不创建/删除临时集群，避免服务器崩溃
+    const r2 = await fetch(`${API}/contexts`, {
+      method: 'POST',
+      headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({kubeconfig: kc}),
+    });
+    if(!r2.ok) { const e=await r2.json(); toast(e.error || '获取失败', 'error'); return; }
     const d = await r2.json();
-    await fetch(`${API}/clusters/__tmp__`, {method:'DELETE'});
     const sel = document.getElementById('mCtxSel');
     sel.innerHTML = '<option value="">—</option>' + (d.contexts||[]).map(c=>`<option value="${c}">${c}</option>`).join('');
     if(d.current) {
