@@ -95,7 +95,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .cp-cat-hd:first-child{border-top:none;margin-top:0}
 .cp-cat-hd:hover{background:rgba(255,255,255,.03);color:var(--tx)}
 .cp-cat-arrow{font-size:8px;color:var(--tx3);flex-shrink:0;width:10px;text-align:center}
-.cp-cat-cnt{margin-left:auto;background:var(--bg3);border-radius:8px;padding:1px 6px;font-size:9px;color:var(--tx3);font-weight:400}
+.cp-cat-cnt{margin-left:auto;background:rgba(56,189,248,.15);border:1px solid rgba(56,189,248,.25);border-radius:8px;padding:1px 7px;font-size:10px;color:var(--a);font-weight:700;min-width:20px;text-align:center}
 .cp-cat-body{padding-bottom:3px}
 .cp-cmd{display:flex;align-items:flex-start;gap:7px;padding:5px 10px;cursor:pointer;border-left:2px solid transparent;transition:all.15s}
 .cp-cmd:hover{background:rgba(255,255,255,.03);border-left-color:var(--a2)}.cp-cmd.active{background:rgba(167,139,250,.07);border-left-color:var(--a2)}

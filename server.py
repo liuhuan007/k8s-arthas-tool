@@ -42,9 +42,13 @@ def handle_exception(e):
     traceback.print_exc()
     return jsonify({"error": str(e), "type": type(e).__name__}), 500
 
-# ── 前端静态文件服务（K8s / Docker 部署时通过 HTTP 访问）──────────────────────
-_BASE_DIR = Path(__file__).parent
+# ── 路径初始化（基于 server.py 文件位置，不依赖启动时工作目录）─────────────────
+_BASE_DIR     = Path(__file__).parent
+OUTPUT_DIR    = _BASE_DIR / "profiler_output"
+CLUSTERS_FILE = _BASE_DIR / "clusters.json"
+OUTPUT_DIR.mkdir(exist_ok=True)
 
+# ── 前端静态文件服务（K8s / Docker 部署时通过 HTTP 访问）──────────────────────
 @app.get('/')
 @app.get('/index.html')
 def serve_index():
@@ -53,13 +57,6 @@ def serve_index():
 @app.get('/login.html')
 def serve_login():
     return send_file(str(_BASE_DIR / 'login.html'))
-
-
-OUTPUT_DIR    = _BASE_DIR / "profiler_output"
-# 使用脚本所在目录作为基准路径，避免相对路径问题
-_BASE_DIR     = Path(__file__).parent
-CLUSTERS_FILE = _BASE_DIR / "clusters.json"
-OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ── In-memory state ───────────────────────────────────────────────────────────
 _clusters:    dict[str, ClusterConfig]  = {}
