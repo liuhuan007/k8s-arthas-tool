@@ -35,6 +35,13 @@ app = Flask(__name__,
 )
 CORS(app)
 
+@app.errorhandler(Exception)
+def handle_exception(e):
+    """全局异常处理 - 确保任何未捕获异常都返回 JSON 而不是关闭连接"""
+    import traceback
+    traceback.print_exc()
+    return jsonify({"error": str(e), "type": type(e).__name__}), 500
+
 # ── 前端静态文件服务（K8s / Docker 部署时通过 HTTP 访问）──────────────────────
 _BASE_DIR = Path(__file__).parent
 
@@ -48,8 +55,10 @@ def serve_login():
     return send_file(str(_BASE_DIR / 'login.html'))
 
 
-OUTPUT_DIR    = Path("./profiler_output")
-CLUSTERS_FILE = Path("./clusters.json")
+OUTPUT_DIR    = _BASE_DIR / "profiler_output"
+# 使用脚本所在目录作为基准路径，避免相对路径问题
+_BASE_DIR     = Path(__file__).parent
+CLUSTERS_FILE = _BASE_DIR / "clusters.json"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ── In-memory state ───────────────────────────────────────────────────────────

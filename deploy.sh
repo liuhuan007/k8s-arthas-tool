@@ -249,6 +249,7 @@ start_daemon() {
     kill -0 "$op" 2>/dev/null && { warn "停止已有实例 PID=$op"; kill "$op"; sleep 2; }
     rm -f "$PID_FILE"; }
   info "后台启动..."
+  cd "${SCRIPT_DIR}" || true
   nohup "$pcmd" "${SCRIPT_DIR}/server.py" --host "$HOST" --port "$PORT" \
     >> "$LOG_FILE" 2>&1 &
   local pid=$!; echo "$pid" > "$PID_FILE"
@@ -279,6 +280,8 @@ start_foreground() {
   } || echo "  前端: http://${HOST}:${PORT}/"
   echo "  按 Ctrl+C 停止"
   echo "────────────────────────────────────────────"
+  # 切换到项目目录再启动，确保相对路径（clusters.json 等）在正确位置
+  cd "${SCRIPT_DIR}" || true
   exec "$pcmd" "${SCRIPT_DIR}/server.py" --host "$HOST" --port "$PORT"
 }
 
