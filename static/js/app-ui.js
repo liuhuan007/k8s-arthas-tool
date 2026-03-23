@@ -397,7 +397,11 @@ const CMDS = [
     { id:'thread', name:'thread', icon:'🧵', type:'once',
       desc:'线程列表 + CPU 占用（-n 最忙N个，-b 检测死锁）',
       tip:`输出所有线程或指定线程的状态和 CPU 占用。\n-n N：输出 CPU 最高的前N个线程及堆栈，排查 CPU 飙高的核心命令。\n-b：检测处于 BLOCKED 的线程，定位死锁。\ntid：指定线程ID查看完整调用栈。`,
-      example:`thread\nthread -n 3\nthread 12\nthread -b\nthread --state BLOCKED`,
+      example:`thread
+thread -n 3
+thread 12
+thread -b
+thread --state BLOCKED`,
       doc:`https://arthas.aliyun.com/en/doc/thread.html`,
       params:[
         {k:'-n', ph:'最忙前N个线程', def:''},

@@ -29,7 +29,7 @@ from pod_monitor import (
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
-app = Flask(__name__)
+app = Flask(__name__, static_folder='.', static_url_path='')
 CORS(app)
 
 OUTPUT_DIR    = Path("./profiler_output")
@@ -993,6 +993,40 @@ def download_local_file(filename: str):
     if not p.exists():
         return jsonify({"error": "不存在"}), 404
     return send_file(str(p), as_attachment=True, download_name=filename)
+
+
+# ── 静态文件路由（HTML 页面）──────────────────────────────────────────────────
+@app.get("/")
+def index_root():
+    """根路径重定向到 index.html"""
+    return send_file("./index.html")
+
+@app.get("/<path:filename>")
+def serve_html(filename: str):
+    """提供 HTML/JS/CSS 等静态文件"""
+    # 安全过滤：防止目录穿越
+    if filename.startswith('..') or '/..' in filename:
+        return jsonify({"error": "非法路径"}), 403
+    
+    file_path = Path("./" + filename)
+    if not file_path.exists() or not file_path.is_file():
+        return jsonify({"error": f"文件不存在：{filename}"}), 404
+    
+    # 根据文件类型设置 MIME
+    mime_types = {
+        '.html': 'text/html',
+        '.css':  'text/css',
+        '.js':   'application/javascript',
+        '.json': 'application/json',
+        '.png':  'image/png',
+        '.jpg':  'image/jpeg',
+        '.jpeg': 'image/jpeg',
+        '.gif':  'image/gif',
+        '.svg':  'image/svg+xml',
+        '.ico':  'image/x-icon',
+    }
+    mime_type = mime_types.get(file_path.suffix.lower(), 'application/octet-stream')
+    return send_file(str(file_path), mimetype=mime_type)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
