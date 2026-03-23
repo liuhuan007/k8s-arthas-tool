@@ -7,6 +7,7 @@ let _cmdHist = [], _histIdx = -1, _selCmd = null;
 let _pfTaskId = null, _pfPollTimer = null, _pfStart = null, _pfDur = 60, _pfLL = 0;
 let _snap = null, _histData = [], _logRaw = '', _logWrap = true;
 let _fbSelected = null, _fbCurPath = '/tmp';
+let _editingCluster = null;
 
 // API 配置：优先使用页面当前主机地址，其次使用 localStorage 配置，最后使用默认地址
 (function loadAPIConfig() {
@@ -2268,8 +2269,6 @@ async function delCluster(name) {
   await fetch(`${API}/clusters/${encodeURIComponent(name)}`, {method:'DELETE'});
   if(_ac===name) _ac=null; loadClusters();
 }
-
-let _editingCluster = null;
 
 function openAddCluster() {
   _editingCluster = null;
