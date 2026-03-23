@@ -1,0 +1,95 @@
+# =============================================================================
+# Arthas K8s 诊断台 — kubectl 最小权限 RBAC
+#
+# 部署说明:
+#   kubectl apply -f deploy/rbac.yaml
+#
+# 按需修改:
+#   - namespace: 改为实际的目标 namespace
+#   - subjects.name: 改为实际的 ServiceAccount 或用户名
+# =============================================================================
+
+---
+# ServiceAccount（如果用 in-cluster 模式）
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: arthas-tool
+  namespace: default  # 改为工具运行的 namespace
+
+---
+# Role: 对单个 namespace 的权限（推荐，最小权限）
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: arthas-tool-role
+  namespace: default  # 改为目标 namespace（允许诊断哪个 namespace 就填哪个）
+rules:
+  # 查询 Pod 列表和详情
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  # 执行 kubectl exec（终端、Arthas 连接、文件操作等）
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  # kubectl port-forward（Arthas HTTP API 代理）
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create"]
+  # 读取容器日志
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  # 查看 K8s 事件
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+  # 查看 Namespace 列表
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["get", "list"]
+
+---
+# RoleBinding: 绑定 ServiceAccount
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: arthas-tool-binding
+  namespace: default  # 同 Role 的 namespace
+subjects:
+  - kind: ServiceAccount
+    name: arthas-tool
+    namespace: default
+  # 也可以绑定给用户（kubeconfig 中的用户名）：
+  # - kind: User
+  #   name: your-username
+  #   apiGroup: rbac.authorization.k8s.io
+roleRef:
+  kind: Role
+  name: arthas-tool-role
+  apiGroup: rbac.authorization.k8s.io
+
+---
+# （可选）ClusterRole: 跨 namespace 诊断时使用
+# 如果需要诊断多个 namespace 中的 Pod，用 ClusterRoleBinding 代替
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: arthas-tool-cluster-role
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/portforward"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["events", "namespaces"]
+    verbs: ["get", "list", "watch"]

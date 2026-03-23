@@ -1,0 +1,441 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>Arthas K8s 诊断台</title>
+<script>
+// ── 登录检查（页面最早执行，避免内容闪烁）────────────────────────────────────
+(function() {
+  var AUTH_KEY = 'arthas_auth_token';
+  var token = sessionStorage.getItem(AUTH_KEY) || localStorage.getItem(AUTH_KEY);
+  if(!token) { window.location.replace('login.html?next=index.html'); }
+})();
+</script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="static/css/app.css">
+</head>
+<body>
+</head>
+<body>
+
+<!-- Topbar -->
+<div class="topbar">
+  <div class="tb-logo"><div class="tb-hex"></div><span class="tb-title">Arthas <em>K8s</em></span></div>
+  <div class="tb-links">
+    <a class="tb-lnk" href="https://arthas.aliyun.com/en/doc/" target="_blank">📖 官方文档</a>
+    <a class="tb-lnk" href="https://arthas.aliyun.com/en/doc/http-api.html" target="_blank">🔌 HTTP API</a>
+    <a class="tb-lnk" href="https://arthas.aliyun.com/en/doc/commands.html" target="_blank">📋 命令手册</a>
+  </div>
+  <div class="tb-right" style="display:flex;align-items:center;gap:10px">
+    <div class="tb-srv"><div class="dot" id="svDot"></div><span id="svLbl">连接中...</span></div>
+    <div style="display:flex;align-items:center;gap:8px;border-left:1px solid rgba(255,255,255,.2);padding-left:12px">
+      <span style="font-size:12px;color:rgba(255,255,255,.8)">
+        👤 <span id="loginUser">seeyon</span>
+      </span>
+      <button onclick="doLogout()" title="退出登录"
+        style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:4px;
+               color:#fff;padding:3px 10px;font-size:11px;cursor:pointer;font-family:var(--mono)">
+        退出
+      </button>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+
+<!-- ── Sidebar ── -->
+<div class="sidebar">
+  <div class="sb-hd"><span>集群</span><button onclick="openAddCluster()" title="添加集群">＋</button></div>
+  <div class="sb-cls" id="sbCls"><div class="sb-empty">暂无集群<br>点击 ＋ 添加</div></div>
+  <div class="pod-target">
+    <div class="pt-lbl">Namespace</div>
+    <input class="pt-inp" id="ptNs" value="default" placeholder="default">
+    <div class="pt-lbl">Pod</div>
+    <div style="display:flex;gap:5px">
+      <input class="pt-inp" id="ptPod" placeholder="pod-name-xxxxx" style="flex:1">
+      <button class="pt-btn ghost" onclick="loadPods()" style="flex:0 0 28px;padding:0;font-size:14px" title="加载 Pod 列表">↻</button>
+    </div>
+    <select class="pt-sel" id="ptPodSel" style="display:none;margin-top:5px" onchange="onPodSel(this.value)">
+      <option value="">— 选择 Pod —</option>
+    </select>
+    <div class="pt-lbl">Container</div>
+    <select class="pt-sel" id="ptCtr"><option value="">默认容器</option></select>
+    <!-- Arthas JAR: only shown when Arthas/JProfiler tab is active -->
+    <div id="ptArthasWrap" style="display:none">
+      <div class="pt-lbl">Arthas JAR 路径</div>
+      <input class="pt-inp" id="ptArthas" value="/app/arthas/arthas-boot.jar">
+    </div>
+    <div class="pt-sep"></div>
+    <div class="pt-row">
+      <button class="pt-btn ghost" onclick="checkPod()">🔍 检查</button>
+      <button class="pt-btn" id="ptConnBtn" onclick="arthasConnect()">⚡ 连接</button>
+    </div>
+    <div class="pt-stat" id="ptStat"></div>
+  </div>
+</div>
+
+<!-- ── Main ── -->
+<div class="main">
+  <div class="tabbar">
+    <div class="tb-tab on" id="tab-console"  onclick="switchTab('console')">⚡ Arthas 诊断</div>
+    <div class="tb-tab"    id="tab-profiler" onclick="switchTab('profiler')">🔥 JProfiler</div>
+    <div class="tb-tab"    id="tab-monitor"  onclick="switchTab('monitor')">📊 Pod 监控</div>
+    <div class="tb-tab"    id="tab-filebrowser" onclick="switchTab('filebrowser')">📂 文件下载</div>
+    <div class="tb-tab"    id="tab-terminal" onclick="switchTab('terminal')">🖥️ 终端</div>
+    <div class="tb-tab"    id="tab-history"  onclick="switchTab('history')">📋 历史记录 <span class="cnt" id="cntHistory">0</span></div>
+  </div>
+
+  <div class="panels">
+
+    <!-- Arthas Console -->
+    <div class="panel on" id="panel-console">
+      <div class="ac-grid">
+        <div class="cmd-pal">
+          <div class="cp-hd">
+            <div class="cp-title">🎯 命令面板</div>
+            <button class="cp-cbtn" id="cpBtn" onclick="arthasConnect()">⚡ 连接 Arthas</button>
+            <div class="cp-cst" id="cpSt"></div>
+          </div>
+          <div class="cp-search"><input id="cmdSearch" placeholder="搜索命令..." oninput="filterCmds(this.value)"></div>
+          <div class="cp-cats" id="cmdPal"></div>
+        </div>
+        <div class="ac-right">
+          <div class="con-tb">
+            <span class="con-title" id="conTitle">等待连接...</span>
+            <button class="ib danger" id="btnStop" onclick="interruptCmd()" style="display:none">⏹ 中断</button>
+            <button class="ib" onclick="clearConOut()">清空</button>
+          </div>
+          <div class="con-out" id="conOut">
+            <div class="o-dim">── Arthas K8s 诊断台 ─────────────────────────────────────────────────────</div>
+            <div class="o-dim">左侧配置集群和 Pod，点击「⚡ 连接」建立 Arthas HTTP API 会话</div>
+            <div class="o-dim">命令面板支持 30+ 诊断命令，watch/trace/dashboard 支持持续输出 Session</div>
+          </div>
+          <div class="bldr" id="cmdBldr" style="display:none">
+            <div class="bldr-lbl" id="bldrLbl">命令参数</div>
+            <div class="bldr-flds" id="bldrFlds"></div>
+          </div>
+          <div class="con-inw">
+            <div class="cin-row">
+              <div class="cin-ta"><textarea id="cmdTa" rows="1" placeholder="输入 Arthas 命令...  Enter=执行  Shift+Enter=换行  ↑↓=历史" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea></div>
+              <button class="cin-run" id="runBtn" onclick="runCmd()" disabled>执行 ▶</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- JProfiler -->
+    <div class="panel" id="panel-profiler">
+      <div class="pf-grid">
+        <div class="pf-cfg">
+          <!-- 采样工具选择 -->
+          <div class="sec-lbl">采样工具</div>
+          <div style="display:flex;gap:6px;margin-bottom:10px">
+            <button class="ib pf-mode-btn on" id="pfMode-profiler" onclick="pfSetMode('profiler')" style="flex:1;padding:6px 0;font-size:11px">🔥 async-profiler</button>
+            <button class="ib pf-mode-btn"    id="pfMode-jfr"      onclick="pfSetMode('jfr')"      style="flex:1;padding:6px 0;font-size:11px">📊 JDK JFR</button>
+            <button class="ib pf-mode-btn"    id="pfMode-dump"     onclick="pfSetMode('dump')"     style="flex:1;padding:6px 0;font-size:11px">💾 Dump</button>
+            <button class="ib pf-mode-btn"    id="pfMode-gclog"    onclick="pfSetMode('gclog')"    style="flex:1;padding:6px 0;font-size:11px">📑 GC日志</button>
+          </div>
+          <div id="pfModeDesc" style="padding:7px 10px;background:var(--bg3);border:1px solid var(--ln);border-radius:5px;font-size:11px;color:var(--tx2);margin-bottom:10px;line-height:1.6">
+            async-profiler: 低开销采样分析，支持 CPU/内存/锁等事件，生成火焰图。适用所有 JDK 版本。
+          </div>
+          <div class="divider"></div>
+
+          <!-- async-profiler 参数 -->
+          <div id="pfCfg-profiler">
+            <div class="sec-lbl">采样参数</div>
+            <div class="fg"><label class="fl">采样事件 (--event)</label>
+              <select class="fs" id="pfEvent">
+                <option value="cpu">cpu — CPU 使用（默认，最常用）</option>
+                <option value="alloc">alloc — 内存分配（对象创建热点）</option>
+                <option value="lock">lock — 锁竞争（synchronized/ReentrantLock）</option>
+                <option value="wall">wall — Wall-clock（含阻塞时间）</option>
+                <option value="itimer">itimer — 系统计时器（低权限环境）</option>
+                <option value="cache-misses">cache-misses — L1 缓存失效</option>
+              </select>
+            </div>
+            <div class="fg"><label class="fl">输出格式</label>
+              <select class="fs" id="pfFmt">
+                <option value="html">flamegraph — 交互式火焰图 HTML（推荐）</option>
+                <option value="jfr">jfr — async-profiler JFR 格式（JMC 打开）</option>
+                <option value="collapsed">collapsed — 折叠栈文本</option>
+                <option value="md">md — Markdown 报告（AI 友好）</option>
+              </select>
+            </div>
+            <div class="fg"><label class="fl">时长 (秒)</label>
+              <div class="sl-row">
+                <input type="range" min="30" max="1800" value="60" step="30" id="pfDur" oninput="pfDurSync(this.value)">
+                <input type="number" min="30" max="7200" value="60" id="pfDurNum"
+                  style="width:70px;padding:4px 6px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--a);font-family:var(--mono);font-size:13px;font-weight:600;text-align:center;outline:none"
+                  oninput="pfDurSync(this.value,'num')">
+                <span style="font-size:11px;color:var(--tx2)">秒</span>
+              </div>
+              <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+                <button onclick="pfSetDur(60)"  class="ib" style="font-size:10px;padding:2px 7px">1分钟</button>
+                <button onclick="pfSetDur(120)" class="ib" style="font-size:10px;padding:2px 7px">2分钟</button>
+                <button onclick="pfSetDur(300)" class="ib" style="font-size:10px;padding:2px 7px">5分钟</button>
+                <button onclick="pfSetDur(600)" class="ib" style="font-size:10px;padding:2px 7px">10分钟</button>
+                <button onclick="pfSetDur(1800)" class="ib" style="font-size:10px;padding:2px 7px">30分钟</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- JDK JFR 参数 -->
+          <div id="pfCfg-jfr" style="display:none">
+            <div class="sec-lbl">JDK JFR 参数</div>
+            <div style="padding:7px 10px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.2);border-radius:5px;font-size:11px;color:var(--a6);margin-bottom:10px;line-height:1.6">
+              ⚠ JDK JFR 需要 JDK 11+，通过 Arthas <code>jfr</code> 命令控制
+            </div>
+            <!-- 录制名称固定为 arthas-jfr，不需要用户配置 -->
+            <input type="hidden" id="jfrName" value="arthas-jfr">
+            <div class="fg"><label class="fl">时长 (秒)</label>
+              <div class="sl-row">
+                <input type="range" min="10" max="1800" value="60" step="10" id="jfrDur" oninput="document.getElementById('jfrDurNum').value=this.value">
+                <input type="number" min="10" max="7200" value="60" id="jfrDurNum"
+                  style="width:70px;padding:4px 6px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--a);font-family:var(--mono);font-size:13px;font-weight:600;text-align:center;outline:none"
+                  oninput="document.getElementById('jfrDur').value=Math.min(this.value,1800)">
+                <span style="font-size:11px;color:var(--tx2)">秒</span>
+              </div>
+            </div>
+            <div class="fg"><label class="fl">设置文件 (可选)</label>
+              <select class="fs" id="jfrSettings">
+                <option value="default">default — 低开销默认配置</option>
+                <option value="profile">profile — 详细分析配置（较高开销）</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- Dump 参数 -->
+          <div id="pfCfg-dump" style="display:none">
+            <div class="sec-lbl">Dump 类型</div>
+            <div class="fg">
+              <label class="fl">选择 Dump 操作</label>
+              <select class="fs" id="dumpType" onchange="pfUpdateDumpOpts()">
+                <option value="thread">线程 Dump (thread -all) — 分析死锁/卡顿</option>
+                <option value="heap">Heap Dump (heapdump) — 分析内存泄漏 OOM</option>
+              </select>
+            </div>
+            <div id="dumpHeapOpts" style="display:none">
+              <div class="fg"><label class="fl">输出路径（自动用时间戳命名）</label>
+                <input class="fi" id="dumpHeapFile" value="" placeholder="自动生成 /tmp/heap_podname_时间戳.hprof" readonly style="color:var(--tx3);font-size:11px">
+              </div>
+              <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--tx2);cursor:pointer;margin-top:4px">
+                <input type="checkbox" id="dumpHeapLive" checked style="accent-color:var(--a)">
+                <span>仅 live 对象 (--live，减小文件体积)</span>
+              </label>
+            </div>
+          </div>
+
+          <!-- GC 日志 -->
+          <div id="pfCfg-gclog" style="display:none">
+            <div class="sec-lbl">GC 日志分析</div>
+            <div style="padding:7px 10px;background:var(--bg3);border:1px solid var(--ln);border-radius:5px;font-size:11px;color:var(--tx2);margin-bottom:10px;line-height:1.6">
+              自动从 JVM 启动参数中探测 GC 日志路径，支持 JDK 8 (-Xloggc) 和 JDK 9+ (-Xlog:gc)
+            </div>
+            <div id="gcLogInfo" style="display:none;margin-bottom:8px">
+              <div class="fg"><label class="fl">检测到的 GC 参数</label>
+                <div id="gcFlagsDisplay" style="font-size:11px;color:var(--a);font-family:var(--mono);padding:4px 0;word-break:break-all;white-space:pre-wrap"></div>
+              </div>
+              <div class="fg"><label class="fl">日志文件</label>
+                <div id="gcPathList" style="display:flex;flex-direction:column;gap:4px"></div>
+              </div>
+            </div>
+            <div id="gcHint" style="display:none;padding:7px 10px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.2);border-radius:5px;font-size:11px;color:var(--a6);line-height:1.7;white-space:pre-wrap"></div>
+          </div>
+
+          <div class="divider"></div>
+          <button class="btn btn-p btn-w" id="pfBtn" onclick="pfStart()">▶ 开始</button>
+          <div id="pfProg" style="display:none;margin-top:12px">
+            <div style="display:flex;justify-content:space-between;margin-bottom:5px">
+              <span style="font-size:11px;color:var(--tx2)" id="pfProgLbl">启动中...</span>
+              <span style="font-size:12px;color:var(--a)" id="pfProgPct">0%</span>
+            </div>
+            <div class="prog-bar"><div class="prog-fill" id="pfProgFill"></div></div>
+          </div>
+        </div>
+        <div class="pf-log" style="display:flex;flex-direction:column;overflow:hidden">
+          <!-- Log header -->
+          <div style="display:flex;align-items:center;padding:0 14px;height:36px;border-bottom:1px solid var(--ln);flex-shrink:0;background:var(--bg1)">
+            <span style="font-size:11px;color:var(--tx2)">采样日志</span>
+            <span id="pfLogCnt" style="font-size:10px;color:var(--tx3);margin-left:8px">0行</span>
+            <button class="ib" style="margin-left:auto;font-size:11px" onclick="pfClearLog()">清空</button>
+            <button class="ib" style="margin-left:6px;font-size:11px" onclick="switchTab('history')" title="查看全部历史任务">📋 历史记录 ↗</button>
+          </div>
+          <!-- Log panel -->
+          <div id="pfl-panel-log" style="flex:1;overflow-y:auto;padding:10px 14px;font-size:12px;line-height:1.8">
+            <div class="o-dim">等待启动...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pod Monitor -->
+    <div class="panel" id="panel-monitor">
+      <div class="pm-wrap">
+        <div class="pm-stabs">
+          <div class="pm-st on" id="pms-ov" onclick="switchPm('ov')">📊 概览</div>
+          <div class="pm-st"    id="pms-mt" onclick="switchPm('mt')">📈 指标</div>
+          <div class="pm-st"    id="pms-pr" onclick="switchPm('pr')">⚙️ 进程</div>
+          <div class="pm-st"    id="pms-nw" onclick="switchPm('nw')">🌐 网络</div>
+          <div class="pm-st"    id="pms-ev" onclick="switchPm('ev')">🔔 事件 <span id="evBdg"></span></div>
+          <div class="pm-st"    id="pms-lg" onclick="switchPm('lg')">📄 日志</div>
+          <div class="pm-st"    id="pms-cf" onclick="switchPm('cf')">🔧 配置</div>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding-right:10px;flex-shrink:0">
+            <span id="pmTs" style="font-size:10px;color:var(--tx3)"></span>
+            <button class="ib" onclick="loadSnap()">↻ 刷新</button>
+          </div>
+        </div>
+        <div class="pm-panels">
+          <div class="pm-panel on" id="pmp-ov"><div style="color:var(--tx3);padding:40px;text-align:center">选择 Pod 后点击「↻ 刷新」加载监控数据</div></div>
+          <div class="pm-panel" id="pmp-mt"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
+          <div class="pm-panel" id="pmp-pr"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
+          <div class="pm-panel" id="pmp-nw"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
+          <div class="pm-panel" id="pmp-ev"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
+          <div class="pm-panel" id="pmp-lg" style="padding:0">
+            <div class="log-panel">
+              <div class="log-tb">
+                <select id="logCtr" style="width:128px"></select>
+                <select id="logTail"><option value="200" selected>200行</option><option value="500">500行</option><option value="1000">1000行</option><option value="3000">3000行</option></select>
+                <select id="logSince"><option value="">不限时间</option><option value="5m">近5分钟</option><option value="30m">近30分钟</option><option value="1h">近1小时</option><option value="6h">近6小时</option></select>
+                <input id="logFilt" type="text" placeholder="🔍 关键词过滤...">
+                <button class="btn btn-p" style="padding:4px 12px;font-size:11px" onclick="loadLogs()">加载日志</button>
+                <button class="btn btn-dl" style="padding:4px 12px;font-size:11px" onclick="downloadLogsFile()" id="btnDlLog">↓ 下载</button>
+                <button class="btn btn-g" style="padding:4px 9px;font-size:11px" onclick="toggleWrap()">换行</button>
+                <span id="logStat" style="font-size:10px;color:var(--tx3)"></span>
+              </div>
+              <div class="log-box" id="logBox"><div class="o-dim">点击「加载日志」获取...</div></div>
+            </div>
+          </div>
+          <div class="pm-panel" id="pmp-cf"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- File Browser -->
+    <div class="panel" id="panel-filebrowser">
+      <div class="fb-wrap">
+        <div style="margin-bottom:8px">
+          <div style="font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:8px;font-family:var(--sans);font-weight:700">📂 Pod 文件下载 — 通过 kubectl cp 下载 Pod 内任意文件</div>
+        </div>
+        <div class="fb-tb">
+          <span style="font-size:11px;color:var(--tx2);flex-shrink:0">路径</span>
+          <input class="fb-path" id="fbPath" value="/tmp" placeholder="/tmp 或其他路径" onkeydown="if(event.key==='Enter')fbList()">
+          <button class="btn btn-p" onclick="fbList()">🔍 列出文件</button>
+          <button class="btn btn-g" onclick="fbUp()">⬆ 上级</button>
+          <span id="fbStatus" style="font-size:11px;color:var(--tx2)"></span>
+        </div>
+        <div style="display:flex;gap:10px;flex:1;overflow:hidden;min-height:0">
+          <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+            <div style="font-size:10px;color:var(--tx3);margin-bottom:5px;padding:0 2px">
+              <span id="fbCurPath" style="color:var(--a)"></span>
+              <span id="fbCount" style="color:var(--tx3)"></span>
+            </div>
+            <div class="fb-list" id="fbList">
+              <div style="color:var(--tx3);padding:30px;text-align:center;font-size:12px">输入路径后点击「列出文件」</div>
+            </div>
+            <div class="fb-actions">
+              <button class="btn btn-dl" id="fbDlBtn" onclick="fbDownload()" disabled>↓ 下载选中文件</button>
+              <button class="btn btn-g" id="fbPreviewBtn" onclick="fbPreview()" disabled>👁 预览 (文本)</button>
+              <span id="fbSelInfo" style="font-size:11px;color:var(--tx2);align-self:center"></span>
+            </div>
+          </div>
+          <div class="fb-preview" id="fbPreviewBox"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Unified History Panel -->
+    <div class="panel" id="panel-history">
+      <div style="flex:1;overflow:hidden;display:flex;flex-direction:column">
+        <!-- Sub-tabs -->
+        <div style="display:flex;gap:0;border-bottom:1px solid var(--ln);flex-shrink:0;background:var(--bg2)">
+          <div class="pm-st on" id="hist-profiler" onclick="switchHistTab('profiler')" style="font-size:11px">
+            🔥 JProfiler 任务 <span id="cntPfTasks" style="background:var(--bg3);border-radius:10px;padding:1px 6px;font-size:10px">0</span>
+          </div>
+          <div class="pm-st" id="hist-files" onclick="switchHistTab('files')" style="font-size:11px">
+            💾 下载文件 <span id="cntDlFiles" style="background:var(--bg3);border-radius:10px;padding:1px 6px;font-size:10px">0</span>
+          </div>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:0 10px">
+            <button class="ib" style="font-size:11px" onclick="loadHistory()">↻ 刷新</button>
+          </div>
+        </div>
+        <!-- Sub-panels -->
+        <div style="flex:1;overflow:hidden">
+          <div id="hist-panel-profiler" style="height:100%;overflow-y:auto;padding:14px">
+            <div style="color:var(--tx3);text-align:center;padding:40px">暂无采样任务</div>
+          </div>
+          <div id="hist-panel-files" style="height:100%;overflow-y:auto;padding:14px;display:none">
+            <div style="color:var(--tx3);text-align:center;padding:40px">暂无下载记录</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Terminal -->
+    <!-- Terminal Panel — macOS style -->
+<div class="panel" id="panel-terminal">
+  <div class="xterm-container">
+    <!-- macOS-style title bar -->
+    <div class="xterm-titlebar">
+      <div class="xterm-dots">
+        <div class="xterm-dot red"    onclick="switchTab('console')" title="关闭 → 返回 Arthas"></div>
+        <div class="xterm-dot yellow" onclick="termClear()"          title="清屏"></div>
+        <div class="xterm-dot green"  onclick="termInit()"           title="重新连接"></div>
+      </div>
+      <span class="xterm-title" id="termTitle">Pod Terminal</span>
+      <button class="xterm-conn" id="termConnBtn" onclick="termInit()">连接</button>
+    </div>
+    <!-- Output area -->
+    <div class="xterm-screen" id="termOut" onclick="document.getElementById('termInput').focus()"></div>
+    <!-- Tab completion popup (inside container, above input bar) -->
+    <div id="tabPopup" class="tab-popup"></div>
+    <!-- Input bar — flex-shrink:0 keeps it always visible at bottom -->
+    <div class="xterm-input-bar" style="flex-shrink:0">
+      <span class="xterm-input-ps1" id="termPrompt">
+        <span class="ps1-user" id="termUser">root</span><span class="ps1-at">@</span><span class="ps1-host" id="termHostP">pod</span><span class="ps1-sep">:</span><span class="ps1-path" id="termCwdP">~</span><span class="ps1-sym"> # </span>
+      </span>
+      <input class="xterm-input" id="termInput"
+        onkeydown="termKeyDown(event)"
+        autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+      <div class="xterm-spin" id="termSpin" style="display:none"></div>
+    </div>
+  </div>
+</div>
+
+
+  </div>
+</div>
+</div>
+
+<!-- Add Cluster Modal -->
+<div class="modal-bg" id="clModal">
+  <div class="modal">
+    <div class="mhd"><span class="m-tt" id="m-tt">添加 K8s 集群</span><button class="m-cl" onclick="closeModal()">✕</button></div>
+    <div class="mbd">
+      <div class="fg"><label class="fl">集群显示名称</label><input class="fi" id="mName" placeholder="生产-东区"></div>
+      <div class="fg"><label class="fl">KubeConfig 文件路径（服务器上的绝对路径）</label><input class="fi" id="mKc" placeholder="/root/.kube/config"></div>
+      <div class="fg">
+        <label class="fl">Context（留空=kubeconfig 当前默认 context）</label>
+        <div style="display:flex;gap:8px">
+          <input class="fi" id="mCtx" placeholder="可选，如 prod-east" style="flex:1">
+          <button class="btn btn-g" onclick="fetchCtxs()" style="padding:6px 10px;font-size:11px;white-space:nowrap">获取列表</button>
+        </div>
+      </div>
+      <div class="fg" id="mCtxWrap" style="display:none">
+        <label class="fl">选择 Context</label>
+        <select class="fs" id="mCtxSel" onchange="document.getElementById('mCtx').value=this.value"><option value="">—</option></select>
+      </div>
+      <div id="mErr" style="color:var(--a5);font-size:11px;margin-top:6px;display:none"></div>
+    </div>
+    <div class="mft">
+      <button class="btn btn-g" onclick="closeModal()">取消</button>
+      <button class="btn btn-p" onclick="saveCluster()">保存并连接测试</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+<script src="static/js/app-ui.js"></script>
+<script src="static/js/app-terminal.js"></script>
+</body>
+</html>
