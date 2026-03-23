@@ -71,14 +71,22 @@ def _load_clusters():
         try:
             for item in json.loads(CLUSTERS_FILE.read_text(encoding='utf-8')):
                 c = ClusterConfig(**item)
+                # 清理旧版本遗留的 __tmp__ 临时集群记录
+                if c.name == '__tmp__':
+                    continue
                 _clusters[c.name] = c
         except Exception:
             pass
 
 def _save_clusters():
+    """Save clusters config - atomic write to avoid corruption on Linux."""
     data = [{"name": c.name, "kubeconfig": c.kubeconfig, "context": c.context}
             for c in _clusters.values()]
-    CLUSTERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
+    content_str = json.dumps(data, ensure_ascii=False, indent=2)
+    # Atomic write: write to temp file then rename (safe on Linux)
+    tmp = CLUSTERS_FILE.with_suffix('.tmp')
+    tmp.write_text(content_str, encoding='utf-8')
+    tmp.replace(CLUSTERS_FILE)
 
 def _make_executor(cluster_name: str):
     """Return (KubectlExecutor, error_str)"""
@@ -146,55 +154,75 @@ def list_clusters():
 
 @app.post("/api/clusters")
 def add_cluster():
-    d    = request.json
-    name = d.get("name", "").strip()
-    kc   = d.get("kubeconfig", "").strip()
-    ctx  = d.get("context", "").strip()
-    if not name or not kc:
-        return jsonify({"error": "name 和 kubeconfig 必填"}), 400
-    if not os.path.exists(kc):
-        return jsonify({"error": f"kubeconfig 文件不存在: {kc}"}), 400
-    _clusters[name] = ClusterConfig(name=name, kubeconfig=kc, context=ctx)
-    _save_clusters()
-    return jsonify({"ok": True})
+    try:
+        d    = request.json or {}
+        name = d.get("name", "").strip()
+        kc   = d.get("kubeconfig", "").strip()
+        ctx  = d.get("context", "").strip()
+        if not name or not kc:
+            return jsonify({"error": "name 和 kubeconfig 必填"}), 400
+        if not os.path.exists(kc):
+            return jsonify({"error": f"kubeconfig 文件不存在: {kc}"}), 400
+        _clusters[name] = ClusterConfig(name=name, kubeconfig=kc, context=ctx)
+        # __tmp__ 是旧版前端用于获取 contexts 的临时集群，不持久化
+        if name != '__tmp__':
+            _save_clusters()
+        return jsonify({"ok": True})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": f"添加失败: {str(e)}"}), 500
 
 @app.put("/api/clusters/<path:name>")
 def update_cluster(name: str):
     """Update cluster config (context switch, rename, etc.)"""
-    d   = request.json
-    old = _clusters.get(name)
-    if not old:
-        return jsonify({"error": "不存在"}), 404
-    new_name = d.get("name", old.name).strip()
-    new_kc   = d.get("kubeconfig", old.kubeconfig).strip()
-    new_ctx  = d.get("context",   old.context).strip()
-    if not os.path.exists(new_kc):
-        return jsonify({"error": f"文件不存在: {new_kc}"}), 400
-    if new_name != name:
-        del _clusters[name]
-    _clusters[new_name] = ClusterConfig(name=new_name, kubeconfig=new_kc, context=new_ctx)
-    _save_clusters()
-    return jsonify({"ok": True})
+    try:
+        d   = request.json or {}
+        old = _clusters.get(name)
+        if not old:
+            return jsonify({"error": f"集群 '{name}' 不存在"}), 404
+        new_name = d.get("name", old.name).strip()
+        new_kc   = d.get("kubeconfig", old.kubeconfig).strip()
+        new_ctx  = d.get("context",   old.context).strip()
+        if not new_name or not new_kc:
+            return jsonify({"error": "名称和 kubeconfig 路径不能为空"}), 400
+        if not os.path.exists(new_kc):
+            return jsonify({"error": f"kubeconfig 文件不存在: {new_kc}"}), 400
+        if new_name != name:
+            del _clusters[name]
+        _clusters[new_name] = ClusterConfig(name=new_name, kubeconfig=new_kc, context=new_ctx)
+        _save_clusters()
+        return jsonify({"ok": True, "name": new_name})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": f"保存失败: {str(e)}"}), 500
 
 @app.delete("/api/clusters/<path:name>")
 def del_cluster(name: str):
-    _clusters.pop(name, None)
-    _save_clusters()
-    return jsonify({"ok": True})
+    try:
+        _clusters.pop(name, None)
+        _save_clusters()
+        return jsonify({"ok": True})
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"error": str(e)}), 500
 
 @app.post("/api/clusters/<path:name>/test")
 def test_cluster(name: str):
-    ex, err = _make_executor(name)
-    if not ex:
-        return jsonify({"ok": False, "error": err}), 404
-    ok, info    = ex.cluster_info()
-    contexts    = ex.get_contexts()
-    current_ctx = ex.get_current_context()
-    return jsonify({
-        "ok": ok, "info": info,
-        "contexts": contexts,
-        "current_context": current_ctx,
-    })
+    try:
+        ex, err = _make_executor(name)
+        if not ex:
+            return jsonify({"ok": False, "error": err}), 404
+        ok, info    = ex.cluster_info()
+        contexts    = ex.get_contexts()
+        current_ctx = ex.get_current_context()
+        return jsonify({
+            "ok": ok, "info": info,
+            "contexts": contexts,
+            "current_context": current_ctx,
+        })
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.get("/api/clusters/<path:name>/namespaces")
 def get_namespaces(name: str):
