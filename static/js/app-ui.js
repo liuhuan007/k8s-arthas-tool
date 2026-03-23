@@ -2217,17 +2217,34 @@ async function loadClusters() {
 function renderSidebar() {
   const el = document.getElementById('sbCls');
   if(!_clusters.length) { el.innerHTML='<div class="sb-empty">暂无集群<br>点击 ＋ 添加</div>'; return; }
-  el.innerHTML = _clusters.map(c => {
+  el.innerHTML = _clusters.map((c, idx) => {
     const safeName = esc(c.name);
-    const jsName = c.name.replace(/'/g, "\\'").replace(/"/g, '\\"');
+    // 使用 data 属性存储集群名称，避免 HTML 属性中的字符串转义问题
     return `
-    <div class="sb-itm ${_ac===c.name?'on':''}" onclick="selCluster('${jsName}')">
+    <div class="sb-itm ${_ac===c.name?'on':''}" data-cluster-name="${safeName}" data-cluster-idx="${idx}">
       <div class="sb-dt" id="sbd_${btoa(encodeURIComponent(c.name)).replace(/[^a-zA-Z0-9]/g,'_')}"></div>
       <span class="sb-nm" title="${safeName}">${safeName}</span>
-      <button class="sb-edit" onclick="event.stopPropagation();openEditCluster('${jsName}')" title="编辑">✎</button>
-      <button class="sb-del" onclick="event.stopPropagation();delCluster('${jsName}')" title="删除">✕</button>
+      <button class="sb-edit" data-action="edit" title="编辑">✎</button>
+      <button class="sb-del" data-action="del" title="删除">✕</button>
     </div>`;
   }).join('');
+  
+  // 绑定事件委托，避免内联 onclick 的字符串转义问题
+  el.querySelectorAll('.sb-itm').forEach(item => {
+    const name = item.dataset.clusterName;
+    item.addEventListener('click', (e) => {
+      if (e.target.tagName === 'BUTTON') return; // 按钮有单独处理
+      selCluster(name);
+    });
+    item.querySelector('[data-action="edit"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      openEditCluster(name);
+    });
+    item.querySelector('[data-action="del"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      delCluster(name);
+    });
+  });
 }
 
 function selCluster(name) {
@@ -2336,13 +2353,14 @@ async function saveCluster() {
   if(!name || !kc) { err.textContent='名称和路径必填'; err.style.display='block'; return; }
   err.style.display='none';
   try {
-    // 编辑已有集群用 PUT（URL 带旧名称），新增用 POST
-    const method = _editingCluster ? 'PUT' : 'POST';
+    // 编辑已有集群用 POST（避免某些代理/防火墙拦截 PUT），新增也用 POST
+    // 编辑时 URL 带旧名称，后端通过 URL 参数识别是更新操作
     const url    = _editingCluster
       ? `${API}/clusters/${encodeURIComponent(_editingCluster)}`
       : `${API}/clusters`;
+    console.log('[saveCluster] _editingCluster=', _editingCluster, 'url=', url);
     const r = await fetch(url, {
-      method, headers: {'Content-Type':'application/json'},
+      method: 'POST', headers: {'Content-Type':'application/json'},
       body: JSON.stringify({name, kubeconfig:kc, context:ctx}),
     });
     const d = await r.json();

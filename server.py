@@ -227,34 +227,40 @@ def get_cluster(name: str):
         return jsonify({"error": f"集群 '{name}' 不存在"}), 404
     return jsonify({"name": c.name, "kubeconfig": c.kubeconfig, "context": c.context})
 
-@app.route("/api/clusters/<path:name>", methods=["PUT"])
+@app.route("/api/clusters/<path:name>", methods=["PUT", "POST"])
 def update_cluster(name: str):
-    """Update cluster config (context switch, rename, etc.)"""
+    """Update cluster config (context switch, rename, etc.)
+    同时支持 PUT 和 POST，避免某些代理/防火墙拦截 PUT 请求
+    """
     import logging
     logger = logging.getLogger(__name__)
     
-    # Flask 3.x 会自动解码 path 参数，不需要再调用 unquote
-    logger.info(f"[update_cluster] name={name}, _clusters keys={list(_clusters.keys())}")
+    logger.info(f"[update_cluster] method={request.method}, URL name={name}, repr={repr(name)}")
+    logger.info(f"[update_cluster] _clusters keys={[repr(k) for k in _clusters.keys()]}")
+    logger.info(f"[update_cluster] request headers: {dict(request.headers)}")
     
     try:
-        # 强制用 utf-8 解码请求体，避免 Linux 系统编码问题
-        # 注意：不要先调用 request.get_data() 再调用 request.json，这会导致冲突
-        d = {}
-        try:
-            # 优先使用 request.get_json()，它不会消费请求流
-            d = request.get_json(force=True, silent=True) or {}
-            logger.info(f"[update_cluster] parsed JSON: {d}")
-        except Exception as e:
-            logger.error(f"[update_cluster] JSON parse error: {e}")
-            # fallback: 手动解析
-            raw = request.get_data(as_text=False)
-            if raw:
-                d = json.loads(raw.decode("utf-8"))
+        # 解析请求体
+        d = request.get_json(force=True, silent=True) or {}
+        logger.info(f"[update_cluster] request JSON: {d}")
+        
+        if not d:
+            return jsonify({"error": "请求体为空"}), 400
 
+        # 查找集群 - 尝试多种匹配方式
         old = _clusters.get(name)
+        
+        # 如果没找到，尝试其他方式匹配
         if not old:
-            logger.error(f"[update_cluster] Cluster '{name}' not found in _clusters")
-            return jsonify({"error": f"集群 '{name}' 不存在"}), 404
+            for key in _clusters.keys():
+                if key.strip() == name.strip():
+                    old = _clusters[key]
+                    logger.info(f"[update_cluster] matched by strip: '{key}'")
+                    break
+        
+        if not old:
+            logger.error(f"[update_cluster] Cluster '{name}' not found")
+            return jsonify({"error": f"集群 '{name}' 不存在", "available": list(_clusters.keys())}), 404
 
         new_name = str(d.get("name", old.name)).strip()
         new_kc   = str(d.get("kubeconfig", old.kubeconfig)).strip()
