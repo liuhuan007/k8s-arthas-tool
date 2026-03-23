@@ -1,7 +1,7 @@
 [
   {
-    "name": "性能环境",
+    "name": "鎬ц兘鐜",
     "kubeconfig": "C:\\Users\\Administrator\\.kube\\config-performance",
-    "context": ""
+    "context": "kubernetes-admin@cluster.local"
   }
 ]

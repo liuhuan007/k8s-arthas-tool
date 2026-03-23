@@ -69,7 +69,7 @@ def _conn_key(cluster: str, ns: str, pod: str) -> str:
 def _load_clusters():
     if CLUSTERS_FILE.exists():
         try:
-            for item in json.loads(CLUSTERS_FILE.read_text()):
+            for item in json.loads(CLUSTERS_FILE.read_text(encoding='utf-8')):
                 c = ClusterConfig(**item)
                 _clusters[c.name] = c
         except Exception:
@@ -78,7 +78,7 @@ def _load_clusters():
 def _save_clusters():
     data = [{"name": c.name, "kubeconfig": c.kubeconfig, "context": c.context}
             for c in _clusters.values()]
-    CLUSTERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    CLUSTERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding='utf-8')
 
 def _make_executor(cluster_name: str):
     """Return (KubectlExecutor, error_str)"""

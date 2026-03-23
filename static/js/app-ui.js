@@ -1552,7 +1552,7 @@ async function pfRunDump(t) {
     try {
       const r = await fetch(`${API}/profile/start`, {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({...t, mode: 'threaddump', duration: 0, format: 'txt'}),
+        body: JSON.stringify({...t, mode: 'threaddump', duration: 0, format: 'html'}),
       });
       const d = await r.json(); if(!r.ok||d.error) throw new Error(d.error||'失败');
       _pfTaskId = d.task_id;
@@ -2200,7 +2200,18 @@ async function fbPreview() {
 // ── Cluster management ─────────────────────────────────────────────────────────
 async function loadClusters() {
   try { const r = await fetch(`${API}/clusters`); _clusters = await r.json(); } catch { _clusters = []; }
+  // 恢复上次选中的集群（或自动选中第一个）
+  if (!_ac && _clusters.length) {
+    const saved = (() => { try { return localStorage.getItem('arthas_ac'); } catch { return null; } })();
+    const found = saved && _clusters.find(c => c.name === saved);
+    // 优先恢复上次选中，没有则自动选第一个
+    const target = found ? found.name : _clusters[0].name;
+    _ac = target;
+    try { localStorage.setItem('arthas_ac', target); } catch {}
+  }
   renderSidebar();
+  // 自动 ping 当前集群
+  if (_ac) pingCluster(_ac);
 }
 
 function renderSidebar() {
@@ -2216,7 +2227,9 @@ function renderSidebar() {
 }
 
 function selCluster(name) {
-  _ac = name; renderSidebar(); pingCluster(name);
+  _ac = name;
+  try { localStorage.setItem('arthas_ac', name); } catch {}
+  renderSidebar(); pingCluster(name);
   // Auto-load namespaces for this cluster
   const cached = window._clusterNs && window._clusterNs[name];
   if(cached) { populateNsList(cached); }
@@ -2299,7 +2312,10 @@ async function fetchCtxs() {
     await fetch(`${API}/clusters/__tmp__`, {method:'DELETE'});
     const sel = document.getElementById('mCtxSel');
     sel.innerHTML = '<option value="">—</option>' + (d.contexts||[]).map(c=>`<option value="${c}">${c}</option>`).join('');
-    if(d.current) sel.value = d.current;
+    if(d.current) {
+      sel.value = d.current;
+      document.getElementById('mCtx').value = d.current;  // 同步到文本框，保存时能读取
+    }
     document.getElementById('mCtxWrap').style.display = 'block';
     toast(`找到 ${(d.contexts||[]).length} 个 context`);
   } catch(e) { toast('获取失败: '+e.message, 'error'); }
@@ -2330,7 +2346,7 @@ async function saveCluster() {
     closeModal();
     toast(wasEditing ? '集群已更新' : '集群已添加', 'success');
     await loadClusters();
-    selCluster(name);
+    selCluster(name);  // 保存后立即选中该集群
     // Auto-load namespaces for sidebar display
     autoLoadNs(name);
   } catch(e) { err.textContent=e.message; err.style.display='block'; }

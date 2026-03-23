@@ -23,6 +23,187 @@ ARTHAS_HTTP_PORT    = 8563   # 官方默认
 ARTHAS_TELNET_PORT  = 3658   # 官方默认
 PF_BASE_PORT        = 39200  # 本地 port-forward 起始端口
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# Thread Dump HTML 模板（独立函数，与主业务逻辑完全分离）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _build_threaddump_html(
+    pod_name: str,
+    namespace: str,
+    ts: str,
+    thread_count: int,
+    running_count: int,
+    waiting_count: int,
+    blocked_count: int,
+    deadlock_count: int,
+    threads_data: list,
+    raw_html: str,       # HTML-escaped 原始文本（用于 Raw Text 视图）
+    json_threads: str,   # JSON 序列化后的线程数组字符串
+) -> str:
+    """
+    生成线程 Dump 的 HTML 报告。
+    纯数据转换函数，不依赖任何实例状态，可独立测试。
+    """
+    import html as _html
+
+    ts_fmt = f"{ts[:8]} {ts[8:10]}:{ts[10:12]}:{ts[12:]}"
+    deadlock_badge = (
+        f"<div class=\"stat\" style=\"border-color:#f7768e\">"
+        f"<b style=\"color:#f7768e\">{deadlock_count}</b>DEADLOCK</div>"
+        if deadlock_count else ""
+    )
+
+    # ── Pre-build all variable parts to avoid backslash-in-f-string issues ──
+    # Python f-string does not allow backslash inside {} expressions.
+    # Single quotes in onclick attributes MUST use &apos; or be placed outside f-string.
+    p_name_esc = _html.escape(pod_name)
+    ns_esc     = _html.escape(namespace)
+
+    # Toolbar buttons — use double-quoted onclick attrs, single-quoted JS args via &apos;
+    btn_all = f'<button class="tbtn on" onclick="filt(&apos;all&apos;,this)">All ({thread_count})</button>'
+    btn_r   = f'<button class="tbtn" onclick="filt(&apos;r&apos;,this)">🟢 RUNNABLE ({running_count})</button>'
+    btn_w   = f'<button class="tbtn" onclick="filt(&apos;w&apos;,this)">🟠 WAITING ({waiting_count})</button>'
+    btn_b   = f'<button class="tbtn" onclick="filt(&apos;b&apos;,this)">🔴 BLOCKED ({blocked_count})</button>'
+    summary = f"共 {thread_count} 个线程 · RUNNABLE={running_count} · WAITING(含TIMED)={waiting_count} · BLOCKED={blocked_count}"
+
+    # JS innerHTML toggle — use double-quote string in JS to avoid single-quote conflict
+
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="UTF-8">
+<title>Thread Dump — {p_name_esc}</title>
+<style>
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{background:#1a1b26;color:#a9b1d6;font-family:'JetBrains Mono','Fira Code','Consolas',monospace;font-size:13px;line-height:1.6}}
+.header{{background:#16161e;border-bottom:1px solid #292e42;padding:14px 20px;position:sticky;top:0;z-index:100}}
+.h-title{{font-size:15px;font-weight:700;color:#c0caf5;margin-bottom:6px}}
+.h-meta{{font-size:11px;color:#565f89;margin-bottom:8px}}
+.stats{{display:flex;gap:10px;flex-wrap:wrap}}
+.stat{{background:#1a1b26;border:1px solid #292e42;border-radius:5px;padding:4px 12px;font-size:11px;color:#9aa5ce}}
+.stat b{{font-size:15px;display:block}}
+.stat.s-run b{{color:#9ece6a}}.stat.s-blk b{{color:#f7768e}}.stat.s-wai b{{color:#ff9e64}}.stat.s-all b{{color:#7aa2f7}}
+.toolbar{{background:#16161e;border-bottom:1px solid #292e42;padding:7px 20px;display:flex;gap:7px;align-items:center;flex-wrap:wrap;position:sticky;top:61px;z-index:99}}
+.tbtn{{background:#24283b;border:1px solid #292e42;border-radius:4px;color:#9aa5ce;padding:3px 10px;font-size:11px;cursor:pointer;font-family:inherit;transition:all .12s}}
+.tbtn:hover{{background:#292e42;color:#c0caf5}}.tbtn.on{{background:#2d3f6c;border-color:#7aa2f7;color:#7aa2f7}}
+#qsearch{{background:#1a1b26;border:1px solid #3b4261;border-radius:4px;color:#a9b1d6;padding:3px 10px;font-size:11px;font-family:inherit;width:220px;outline:none}}
+#qsearch:focus{{border-color:#7aa2f7}}
+.mcnt{{font-size:11px;color:#565f89;min-width:80px}}
+.tog{{font-size:11px;color:#565f89;cursor:pointer;text-decoration:underline;padding:0 3px}}.tog:hover{{color:#9aa5ce}}
+.content{{padding:12px 20px 60px}}
+.tb{{margin-bottom:1px;border-radius:3px;border-left:3px solid #292e42}}
+.tb.r{{border-left-color:#9ece6a}}.tb.b{{border-left-color:#f7768e;background:rgba(247,118,142,.03)}}
+.tb.w{{border-left-color:#ff9e64;background:rgba(255,158,100,.02)}}.tb.tw{{border-left-color:#e0af68}}
+.tb.hid{{display:none}}
+.th{{cursor:pointer;padding:4px 8px;border-radius:2px;display:flex;align-items:baseline;gap:6px;font-size:12px;user-select:none}}
+.th:hover{{background:rgba(255,255,255,.04)}}
+.th-name{{color:#c0caf5;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px}}
+.th-id{{color:#565f89;font-size:11px;white-space:nowrap}}
+.th-cpu{{color:#9ece6a;font-size:10px;background:rgba(158,206,106,.1);border-radius:3px;padding:0 5px}}
+.th-dt{{color:#ff9e64;font-size:10px}}
+.th-state{{margin-left:auto;font-size:10px;border-radius:3px;padding:1px 6px;font-weight:600;flex-shrink:0}}
+.th-state.r{{color:#9ece6a;background:rgba(158,206,106,.1)}}.th-state.b{{color:#f7768e;background:rgba(247,118,142,.1)}}
+.th-state.w,.th-state.tw{{color:#ff9e64;background:rgba(255,158,100,.1)}}.th-state.o{{color:#9aa5ce;background:rgba(154,165,206,.1)}}
+.th-arrow{{color:#565f89;font-size:9px;transition:transform .12s;flex-shrink:0;width:12px}}
+.tb.open .th-arrow{{transform:rotate(90deg)}}
+.tbody{{display:none;padding:0 8px 6px 16px;font-size:12px}}.tb.open .tbody{{display:block}}
+.tm{{color:#565f89;font-size:11px;padding:2px 0}}
+.tf{{color:#565f89;padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+.tf .pkg{{color:#3b4261}}.tf .cls{{color:#7dcfff}}.tf .mth{{color:#73daca}}.tf .loc{{color:#e0af68}}.tf .nat{{color:#ff9e64}}
+.lw{{color:#f7768e;font-size:11px;padding:2px 0}}
+.sum{{background:#24283b;border-radius:4px;padding:6px 12px;font-size:11px;color:#565f89;margin-bottom:8px}}
+pre.raw{{white-space:pre-wrap;word-break:break-all;padding:8px;font-size:11px;color:#565f89;display:none;line-height:1.5}}
+</style></head><body>
+<div class="header">
+  <div class="h-title">🧵 Thread Dump &nbsp;<span style="font-weight:400;color:#565f89;font-size:12px">— {p_name_esc}</span></div>
+  <div class="h-meta">Namespace: {ns_esc} &nbsp;·&nbsp; Time: {ts_fmt} &nbsp;·&nbsp; Command: thread -n 9999</div>
+  <div class="stats">
+    <div class="stat s-all"><b>{thread_count}</b>Total</div>
+    <div class="stat s-run"><b>{running_count}</b>RUNNABLE</div>
+    <div class="stat s-wai"><b>{waiting_count}</b>WAITING</div>
+    <div class="stat s-blk"><b>{blocked_count}</b>BLOCKED</div>
+    {deadlock_badge}
+  </div>
+</div>
+<div class="toolbar">
+  {btn_all}
+  {btn_r}
+  {btn_w}
+  {btn_b}
+  <span style="margin-left:auto"></span>
+  <input id="qsearch" placeholder="Filter thread / class..." oninput="qsrch(this.value)">
+  <span class="mcnt" id="mcnt"></span>
+  <button class="tbtn" onclick="togRaw()" id="rawBtn">Raw Text</button>
+  <span class="tog" onclick="togAll(true)">Expand all</span>
+  <span class="tog" onclick="togAll(false)">Collapse all</span>
+</div>
+<div class="content">
+  <div class="sum">{summary}</div>
+  <div id="blocks"></div>
+  <pre class="raw" id="raw">{raw_html}</pre>
+</div>
+<script>
+const THREADS={json_threads};
+function sc(s){{return s==='RUNNABLE'?'r':s==='BLOCKED'?'b':s==='WAITING'?'w':s==='TIMED_WAITING'?'tw':'o'}}
+function sl(s){{return s==='TIMED_WAITING'?'T_WAIT':s||'?'}}
+function fmtF(f){{
+  var ln=f.lineNumber,cls=f.className||'',mth=f.methodName||'',fn=f.fileName||'';
+  var p=cls.split('.'),cn=p.pop(),pkg=p.join('.');
+  var loc=ln===-2?'<span class="nat">Native Method</span>':fn?'<span class="loc">'+fn+':'+ln+'</span>':'<span class="loc">Unknown</span>';
+  return '<div class="tf"><span class="pkg">'+(pkg?pkg+'.':'')+'</span><span class="cls">'+cn+'</span>.<span class="mth">'+mth+'</span>('+loc+')</div>';
+}}
+var C=document.getElementById('blocks');
+THREADS.forEach(function(th){{
+  var s=th.state||'',c=sc(s);
+  var dm=th.daemon?' <span style="color:#565f89;font-size:10px">[D]</span>':'';
+  var nat=th.inNative?' <span style="color:#ff9e64;font-size:10px">[native]</span>':'';
+  var cpu=th.cpu!=null&&th.cpu>0?'<span class="th-cpu">'+th.cpu+'%</span>':'';
+  var dt=th.deltaTime>0?'<span class="th-dt">+'+th.deltaTime+'ms</span>':'';
+  var lw=th.lockName?'<div class="lw">⏸ waiting on <span style="color:#f7768e">'+th.lockName+'</span></div>':'';
+  var frames=(th.stackTrace||[]).map(fmtF).join('');
+  var meta=[th.group?'group='+th.group:'','prio='+th.priority,th.blockedCount>0?'blocked='+th.blockedCount:'',th.time!=null?'time='+th.time+'ms':''].filter(Boolean).join(' · ');
+  var key=(th.name+' '+(th.stackTrace||[]).map(function(f){{return f.className+'.'+f.methodName}}).join(' ')).toLowerCase();
+  var el=document.createElement('div');
+  el.className='tb '+c;el.dataset.c=c;el.dataset.key=key;
+  el.innerHTML=
+    '<div class="th" onclick="this.parentElement.classList.toggle(&quot;open&quot;)">'+
+    '<span class="th-arrow">►</span>'+
+    '<span class="th-name">'+th.name+'</span>'+dm+nat+
+    '<span class="th-id">Id='+th.id+'</span>'+cpu+dt+
+    '<span class="th-state '+c+'">'+sl(s)+'</span></div>'+
+    '<div class="tbody"><div class="tm">'+meta+'</div>'+lw+frames+'</div>';
+  if(c==='b') el.classList.add('open');
+  C.appendChild(el);
+}});
+function filt(s,btn){{
+  document.querySelectorAll('.tbtn').forEach(function(b){{b.classList.remove('on')}});
+  if(btn) btn.classList.add('on');
+  document.querySelectorAll('.tb').forEach(function(el){{
+    var ec=el.dataset.c;
+    var show=s==='all'||ec===s||(s==='w'&&(ec==='w'||ec==='tw'));
+    el.classList.toggle('hid',!show);
+  }});
+  qsrch(document.getElementById('qsearch').value);
+}}
+function qsrch(q){{
+  q=q.toLowerCase().trim();var n=0;
+  document.querySelectorAll('.tb:not(.hid)').forEach(function(el){{
+    var m=!q||el.dataset.key.includes(q);
+    el.style.opacity=m?'1':'0.15';if(m&&q)n++;
+  }});
+  document.getElementById('mcnt').textContent=q?n+' matched':'';
+}}
+function togRaw(){{
+  var raw=document.getElementById('raw'),btn=document.getElementById('rawBtn');
+  var blk=document.getElementById('blocks'),show=raw.style.display!=='block';
+  raw.style.display=show?'block':'none';blk.style.display=show?'none':'';
+  btn.textContent=show?'Structured':'Raw Text';btn.classList.toggle('on',show);
+}}
+function togAll(o){{
+  document.querySelectorAll('.tb').forEach(function(el){{if(o)el.classList.add('open');else el.classList.remove('open')}});
+}}
+</script></body></html>"""
+
+
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Layer 0: Data Models
@@ -696,6 +877,7 @@ class ArthasConnection:
 # Layer 5: ProfilerWorkflow  —  business orchestration for JProfiler sampling
 # ═══════════════════════════════════════════════════════════════════════════════
 
+
 class ProfilerWorkflow:
     """
     性能分析任务编排，支持 4 种模式:
@@ -1125,163 +1307,21 @@ class ProfilerWorkflow:
         running_count = sum(1 for th in threads_data if th.get("state") == "RUNNABLE") if threads_data else 0
         deadlock_count = thread_text.lower().count("deadlock")
 
-        # HTML 转义 + JSON 序列化（供模板使用）
+        # 生成 HTML 报告（调用独立模板函数）
         import html as _html
-        import_html_escape = _html.escape(thread_text)
-        json_threads = json.dumps(threads_data, ensure_ascii=False)
-
-        html_content = f"""<!DOCTYPE html>
-<html lang="zh-CN"><head><meta charset="UTF-8">
-<title>Thread Dump — {t.pod_name}</title>
-<style>
-*{{box-sizing:border-box;margin:0;padding:0}}
-body{{background:#1a1b26;color:#a9b1d6;font-family:'JetBrains Mono','Fira Code','Consolas',monospace;font-size:13px;line-height:1.6}}
-.header{{background:#16161e;border-bottom:1px solid #292e42;padding:14px 20px;position:sticky;top:0;z-index:100}}
-.h-title{{font-size:15px;font-weight:700;color:#c0caf5;margin-bottom:6px}}
-.h-meta{{font-size:11px;color:#565f89;margin-bottom:8px}}
-.stats{{display:flex;gap:10px;flex-wrap:wrap}}
-.stat{{background:#1a1b26;border:1px solid #292e42;border-radius:5px;padding:4px 12px;font-size:11px;color:#9aa5ce}}
-.stat b{{font-size:15px;display:block}}
-.stat.s-run b{{color:#9ece6a}} .stat.s-blk b{{color:#f7768e}}
-.stat.s-wai b{{color:#ff9e64}} .stat.s-all b{{color:#7aa2f7}}
-.toolbar{{background:#16161e;border-bottom:1px solid #292e42;padding:7px 20px;display:flex;gap:7px;align-items:center;flex-wrap:wrap;position:sticky;top:61px;z-index:99}}
-.tbtn{{background:#24283b;border:1px solid #292e42;border-radius:4px;color:#9aa5ce;padding:3px 10px;font-size:11px;cursor:pointer;font-family:inherit;transition:all .12s}}
-.tbtn:hover{{background:#292e42;color:#c0caf5}} .tbtn.on{{background:#2d3f6c;border-color:#7aa2f7;color:#7aa2f7}}
-#qsearch{{background:#1a1b26;border:1px solid #3b4261;border-radius:4px;color:#a9b1d6;padding:3px 10px;font-size:11px;font-family:inherit;width:220px;outline:none}}
-#qsearch:focus{{border-color:#7aa2f7}}
-.mcnt{{font-size:11px;color:#565f89;min-width:80px}}
-.tog{{font-size:11px;color:#565f89;cursor:pointer;text-decoration:underline;padding:0 3px}}
-.tog:hover{{color:#9aa5ce}}
-.content{{padding:12px 20px 60px}}
-.tb{{margin-bottom:1px;border-radius:3px;border-left:3px solid #292e42}}
-.tb.r{{border-left-color:#9ece6a}} .tb.b{{border-left-color:#f7768e;background:rgba(247,118,142,.03)}}
-.tb.w{{border-left-color:#ff9e64;background:rgba(255,158,100,.02)}} .tb.tw{{border-left-color:#e0af68}}
-.tb.hid{{display:none}}
-.th{{cursor:pointer;padding:4px 8px;border-radius:2px;display:flex;align-items:baseline;gap:6px;font-size:12px;user-select:none}}
-.th:hover{{background:rgba(255,255,255,.04)}}
-.th-name{{color:#c0caf5;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:420px}}
-.th-id{{color:#565f89;font-size:11px;white-space:nowrap}}
-.th-cpu{{color:#9ece6a;font-size:10px;background:rgba(158,206,106,.1);border-radius:3px;padding:0 5px}}
-.th-dt{{color:#ff9e64;font-size:10px}}
-.th-state{{margin-left:auto;font-size:10px;border-radius:3px;padding:1px 6px;font-weight:600;flex-shrink:0}}
-.th-state.r{{color:#9ece6a;background:rgba(158,206,106,.1)}}
-.th-state.b{{color:#f7768e;background:rgba(247,118,142,.1)}}
-.th-state.w,.th-state.tw{{color:#ff9e64;background:rgba(255,158,100,.1)}}
-.th-state.o{{color:#9aa5ce;background:rgba(154,165,206,.1)}}
-.th-arrow{{color:#565f89;font-size:9px;transition:transform .12s;flex-shrink:0;width:12px}}
-.tb.open .th-arrow{{transform:rotate(90deg)}}
-.tbody{{display:none;padding:0 8px 6px 16px;font-size:12px}}
-.tb.open .tbody{{display:block}}
-.tm{{color:#565f89;font-size:11px;padding:2px 0}}
-.tf{{color:#565f89;padding:1px 0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-.tf .pkg{{color:#3b4261}} .tf .cls{{color:#7dcfff}} .tf .mth{{color:#73daca}} .tf .loc{{color:#e0af68}} .tf .nat{{color:#ff9e64}}
-.lw{{color:#f7768e;font-size:11px;padding:2px 0}}
-.sum{{background:#24283b;border-radius:4px;padding:6px 12px;font-size:11px;color:#565f89;margin-bottom:8px}}
-pre.raw{{white-space:pre-wrap;word-break:break-all;padding:8px;font-size:11px;color:#565f89;display:none;line-height:1.5}}
-</style></head><body>
-
-<div class="header">
-  <div class="h-title">🧵 Thread Dump &nbsp;<span style="font-weight:400;color:#565f89;font-size:12px">— {t.pod_name}</span></div>
-  <div class="h-meta">Namespace: {t.namespace} &nbsp;·&nbsp; Time: {ts[:8]} {ts[8:10]}:{ts[10:12]}:{ts[12:]} &nbsp;·&nbsp; Command: thread -n 9999</div>
-  <div class="stats">
-    <div class="stat s-all"><b>{thread_count}</b>Total</div>
-    <div class="stat s-run"><b>{running_count}</b>RUNNABLE</div>
-    <div class="stat s-wai"><b>{waiting_count}</b>WAITING</div>
-    <div class="stat s-blk"><b>{blocked_count}</b>BLOCKED</div>
-    {"<div class='stat' style='border-color:#f7768e'><b style='color:#f7768e'>" + str(deadlock_count) + "</b>DEADLOCK</div>" if deadlock_count else ""}
-  </div>
-</div>
-
-<div class="toolbar">
-  <button class="tbtn on" id="btn-all"      onclick="filt('all',this)">All ({thread_count})</button>
-  <button class="tbtn"    id="btn-r"        onclick="filt('r',this)">🟢 RUNNABLE ({running_count})</button>
-  <button class="tbtn"    id="btn-w"        onclick="filt('w',this)">🟠 WAITING ({waiting_count})</button>
-  <button class="tbtn"    id="btn-b"        onclick="filt('b',this)">🔴 BLOCKED ({blocked_count})</button>
-  <span style="margin-left:auto"></span>
-  <input id="qsearch" placeholder="Filter thread / class..." oninput="qsrch(this.value)">
-  <span class="mcnt" id="mcnt"></span>
-  <button class="tbtn" onclick="togRaw()" id="rawBtn">Raw Text</button>
-  <span class="tog" onclick="togAll(true)">Expand all</span>
-  <span class="tog" onclick="togAll(false)">Collapse all</span>
-</div>
-
-<div class="content">
-  <div class="sum">共 {thread_count} 个线程 · RUNNABLE={running_count} · WAITING(含TIMED)={waiting_count} · BLOCKED={blocked_count}</div>
-  <div id="blocks"></div>
-  <pre class="raw" id="raw">{import_html_escape(thread_text)}</pre>
-</div>
-
-<script>
-const THREADS = {json_threads};
-
-function sc(s){{return s==='RUNNABLE'?'r':s==='BLOCKED'?'b':s==='WAITING'?'w':s==='TIMED_WAITING'?'tw':'o'}}
-function sl(s){{return s==='TIMED_WAITING'?'T_WAIT':s||'?'}}
-function fmtF(f){{
-  const ln=f.lineNumber,cls=f.className||'',mth=f.methodName||'',fn=f.fileName||'';
-  const p=cls.split('.'),cn=p.pop(),pkg=p.join('.');
-  const loc=ln===-2?`<span class="nat">Native Method</span>`:fn?`<span class="loc">${{fn}}:${{ln}}</span>`:`<span class="loc">Unknown</span>`;
-  return `<div class="tf"><span class="pkg">${{pkg?pkg+'.':''}}</span><span class="cls">${{cn}}</span>.<span class="mth">${{mth}}</span>(${{loc}})</div>`;
-}}
-
-const C = document.getElementById('blocks');
-THREADS.forEach(th => {{
-  const s=th.state||'', c=sc(s);
-  const dm=th.daemon?' <span style="color:#565f89;font-size:10px">[D]</span>':'';
-  const nat=th.inNative?' <span style="color:#ff9e64;font-size:10px">[native]</span>':'';
-  const cpu=th.cpu!=null&&th.cpu>0?`<span class="th-cpu">${{th.cpu}}%</span>`:'';
-  const dt=th.deltaTime>0?`<span class="th-dt">+${{th.deltaTime}}ms</span>`:'';
-  const lw=th.lockName?`<div class="lw">⏸ waiting on <span style="color:#f7768e">${{th.lockName}}</span></div>`:'';
-  const frames=(th.stackTrace||[]).map(fmtF).join('');
-  const meta=[th.group?`group=${{th.group}}`:'',`prio=${{th.priority}}`,th.blockedCount>0?`blocked=${{th.blockedCount}}`:'',th.time!=null?`time=${{th.time}}ms`:''].filter(Boolean).join(' · ');
-  const key=(th.name+' '+(th.stackTrace||[]).map(f=>f.className+'.'+f.methodName).join(' ')).toLowerCase();
-  const el=document.createElement('div');
-  el.className=`tb ${{c}}`;el.dataset.c=c;el.dataset.key=key;
-  el.innerHTML=
-    `<div class="th" onclick="this.parentElement.classList.toggle('open')">` +
-    `<span class="th-arrow">▶</span>` +
-    `<span class="th-name">${{th.name}}</span>${{dm}}${{nat}}` +
-    `<span class="th-id">Id=${{th.id}}</span>${{cpu}}${{dt}}` +
-    `<span class="th-state ${{c}}">${{sl(s)}}</span></div>` +
-    `<div class="tbody"><div class="tm">${{meta}}</div>${{lw}}${{frames}}</div>`;
-  if(c==='b') el.classList.add('open');
-  C.appendChild(el);
-}});
-
-let cur='all';
-function filt(s,btn){{
-  cur=s;
-  document.querySelectorAll('.tbtn').forEach(b=>b.classList.remove('on'));
-  if(btn) btn.classList.add('on');
-  document.querySelectorAll('.tb').forEach(el=>{{
-    const ec=el.dataset.c;
-    const show=s==='all'||ec===s||(s==='w'&&(ec==='w'||ec==='tw'));
-    el.classList.toggle('hid',!show);
-  }});
-  qsrch(document.getElementById('qsearch').value);
-}}
-
-function qsrch(q){{
-  q=q.toLowerCase().trim();
-  let n=0;
-  document.querySelectorAll('.tb:not(.hid)').forEach(el=>{{
-    const m=!q||el.dataset.key.includes(q);
-    el.style.opacity=m?'1':'0.15';
-    if(m&&q) n++;
-  }});
-  document.getElementById('mcnt').textContent=q?n+' matched':'';
-}}
-
-function togRaw(){{
-  const raw=document.getElementById('raw'),btn=document.getElementById('rawBtn');
-  const blk=document.getElementById('blocks'),show=raw.style.display!=='block';
-  raw.style.display=show?'block':'none';blk.style.display=show?'none':'';
-  btn.textContent=show?'Structured':'Raw Text';btn.classList.toggle('on',show);
-}}
-
-function togAll(o){{
-  document.querySelectorAll('.tb').forEach(el=>{{ if(o) el.classList.add('open'); else el.classList.remove('open'); }});
-}}
-</script></body></html>"""
+        html_content = _build_threaddump_html(
+            pod_name      = t.pod_name,
+            namespace     = t.namespace,
+            ts            = ts,
+            thread_count  = thread_count,
+            running_count = running_count,
+            waiting_count = waiting_count,
+            blocked_count = blocked_count,
+            deadlock_count= deadlock_count,
+            threads_data  = threads_data,
+            raw_html      = _html.escape(thread_text),
+            json_threads  = json.dumps(threads_data, ensure_ascii=False),
+        )
 
         # 写本地 HTML 文件
         local_file = str(Path(output_dir) / f"threaddump-{t.pod_name}-{ts}.html")
