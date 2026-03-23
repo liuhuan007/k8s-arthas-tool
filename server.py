@@ -12,6 +12,7 @@ REST endpoints:
   /api/files/*           Local output file download
 """
 import json, os, threading, uuid, time, tempfile, shutil, shlex
+from urllib.parse import unquote
 from datetime import datetime
 from pathlib import Path
 
@@ -203,6 +204,7 @@ def add_cluster():
 @app.get("/api/clusters/<path:name>")
 def get_cluster(name: str):
     """获取单个集群详情"""
+    name = unquote(name)
     c = _clusters.get(name)
     if not c:
         return jsonify({"error": f"集群 '{name}' 不存在"}), 404
@@ -211,6 +213,7 @@ def get_cluster(name: str):
 @app.route("/api/clusters/<path:name>", methods=["PUT"])
 def update_cluster(name: str):
     """Update cluster config (context switch, rename, etc.)"""
+    name = unquote(name)  # werkzeug 3.x 不自动解码 path 参数
     try:
         # 强制用 utf-8 解码请求体，避免 Linux 系统编码问题
         raw = request.get_data(as_text=False)
@@ -245,6 +248,7 @@ def update_cluster(name: str):
 
 @app.route("/api/clusters/<path:name>", methods=["DELETE"])
 def del_cluster(name: str):
+    name = unquote(name)
     try:
         _clusters.pop(name, None)
         _save_clusters()
@@ -255,6 +259,7 @@ def del_cluster(name: str):
 
 @app.post("/api/clusters/<path:name>/test")
 def test_cluster(name: str):
+    name = unquote(name)
     try:
         ex, err = _make_executor(name)
         if not ex:
@@ -273,6 +278,7 @@ def test_cluster(name: str):
 
 @app.get("/api/clusters/<path:name>/namespaces")
 def get_namespaces(name: str):
+    name = unquote(name)
     ex, err = _make_executor(name)
     if not ex:
         return jsonify({"namespaces": [], "error": err})
@@ -280,6 +286,7 @@ def get_namespaces(name: str):
 
 @app.get("/api/clusters/<path:name>/pods")
 def get_pods(name: str):
+    name = unquote(name)
     ex, err = _make_executor(name)
     ns = request.args.get("namespace", "default")
     if not ex:
@@ -288,6 +295,7 @@ def get_pods(name: str):
 
 @app.get("/api/clusters/<path:name>/contexts")
 def get_contexts_api(name: str):
+    name = unquote(name)
     ex, err = _make_executor(name)
     if not ex:
         return jsonify({"contexts": [], "current": "", "error": err})
