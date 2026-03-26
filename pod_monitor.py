@@ -16,10 +16,10 @@ import subprocess, json, re, time, threading
 from datetime import datetime, timezone
 from collections import deque
 from dataclasses import dataclass, field, asdict
-from typing import Optional
+from typing import Optional, Dict, Deque
 
 # ── 时序指标缓冲（最近 60 个采样点）────────────────────────────────────────────
-_metrics_history: dict[str, deque] = {}  # key="{cluster}/{ns}/{pod}" -> deque of snapshots
+_metrics_history = {}  # type: Dict[str, Deque]  # key="{cluster}/{ns}/{pod}" -> deque of snapshots
 _metrics_lock = threading.Lock()
 MAX_HISTORY = 60   # 保留最近 60 个点
 POLL_INTERVAL = 15  # 秒

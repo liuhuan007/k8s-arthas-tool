@@ -13,7 +13,7 @@ import subprocess, socket, time, os, json, logging, urllib.request, urllib.error
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List, Dict, Tuple
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 log = logging.getLogger(__name__)
@@ -247,7 +247,7 @@ class KubectlExecutor:
             cmd += ["--context", self.context]
         return cmd
 
-    def _run(self, args: list, timeout: int = 30) -> tuple[int, str, str]:
+    def _run(self, args: List, timeout: int = 30) -> Tuple[int, str, str]:
         cmd = self._base_cmd() + args
         log.debug("kubectl: %s", " ".join(cmd))
         try:
@@ -260,12 +260,12 @@ class KubectlExecutor:
 
     # ── cluster queries ────────────────────────────────────────────────────────
 
-    def get_namespaces(self) -> list[str]:
+    def get_namespaces(self) -> List[str]:
         rc, out, _ = self._run(
             ["get", "ns", "-o", "jsonpath={.items[*].metadata.name}"], timeout=15)
         return out.strip().split() if rc == 0 and out.strip() else []
 
-    def get_pods(self, namespace: str) -> list[dict]:
+    def get_pods(self, namespace: str) -> List[Dict]:
         rc, out, _ = self._run(
             ["-n", namespace, "get", "pods", "-o", "json"], timeout=20)
         if rc != 0:
@@ -284,7 +284,7 @@ class KubectlExecutor:
         except Exception:
             return []
 
-    def get_contexts(self) -> list[str]:
+    def get_contexts(self) -> List[str]:
         rc, out, _ = self._run(["config", "get-contexts", "-o", "name"])
         return [x.strip() for x in out.strip().splitlines() if x.strip()] if rc == 0 else []
 
@@ -306,7 +306,7 @@ class KubectlExecutor:
         except Exception:
             return None
 
-    def cluster_info(self) -> tuple[bool, str]:
+    def cluster_info(self) -> Tuple[bool, str]:
         rc, out, err = self._run(
             ["cluster-info", "--request-timeout=5s"], timeout=10)
         return rc == 0, (out or err).strip()[:400]
@@ -314,7 +314,7 @@ class KubectlExecutor:
     # ── pod exec ──────────────────────────────────────────────────────────────
 
     def exec_pod(self, namespace: str, pod: str, container: str,
-                 shell_cmd: str, timeout: int = 30) -> tuple[int, str, str]:
+                 shell_cmd: str, timeout: int = 30) -> Tuple[int, str, str]:
         args = ["-n", namespace, "exec", pod]
         if container:
             args += ["-c", container]
@@ -340,7 +340,7 @@ class KubectlExecutor:
     # ── file transfer ─────────────────────────────────────────────────────────
 
     def cp_from_pod(self, namespace: str, pod: str, container: str,
-                    pod_path: str, local_path: str) -> tuple[int, str, str]:
+                    pod_path: str, local_path: str) -> Tuple[int, str, str]:
         """
         三级降级策略下载 Pod 内文件:
           1. kubectl cp <pod>:<src> <local> -n <ns>   flags 后置
@@ -406,7 +406,7 @@ class KubectlExecutor:
             f"kubectl cp: {err1}\ncat: {err2}\nbase64: {err3}"
         )
 
-    def get_events(self, namespace: str, pod: str) -> list[dict]:
+    def get_events(self, namespace: str, pod: str) -> List[Dict]:
         rc, out, _ = self._run([
             "-n", namespace, "get", "events",
             "--field-selector", f"involvedObject.name={pod}",
@@ -480,7 +480,7 @@ class ArthasAgentManager:
         self.t   = target
         self._pid: Optional[int] = None
 
-    def _exec(self, cmd: str, timeout: int = 30) -> tuple[int, str, str]:
+    def _exec(self, cmd: str, timeout: int = 30) -> Tuple[int, str, str]:
         return self.ex.exec_pod(
             self.t.namespace, self.t.pod_name, self.t.container, cmd, timeout)
 
@@ -520,7 +520,7 @@ class ArthasAgentManager:
         )
         return rc == 0 and out.strip() in ("200", "400", "404")
 
-    def _find_arthas_pids(self) -> list[int]:
+    def _find_arthas_pids(self) -> List[int]:
         """
         返回 Pod 内所有 arthas-boot 进程的 PID 列表。
         用于检查是否有残留进程，决策是否 kill 再重启。
@@ -538,7 +538,7 @@ class ArthasAgentManager:
                     pids.append(int(parts[1]))
         return pids
 
-    def _kill_stale_arthas(self, pids: list[int]) -> str:
+    def _kill_stale_arthas(self, pids: List[int]) -> str:
         """
         清理残留 arthas-boot 进程。
         只清理引导进程，不影响被 attach 的目标 Java 应用进程。
@@ -574,7 +574,7 @@ class ArthasAgentManager:
                 return True
         return False
 
-    def ensure_agent_running(self) -> tuple[bool, str]:
+    def ensure_agent_running(self) -> Tuple[bool, str]:
         """
         确保 Arthas agent 在 Pod 内运行，严格防止重复启动。
 
@@ -790,7 +790,7 @@ class ArthasConnection:
                 pass
             self._pf_proc = None
 
-    def _start_port_forward(self) -> tuple[bool, str]:
+    def _start_port_forward(self) -> Tuple[bool, str]:
         self._stop_port_forward()
         self.local_port = self._alloc_port()
         self._pf_proc = self.executor.start_port_forward(
@@ -813,7 +813,7 @@ class ArthasConnection:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def connect(self) -> tuple[bool, str]:
+    def connect(self) -> Tuple[bool, str]:
         """
         建立完整的 Arthas 连接，防止重复操作。
 
