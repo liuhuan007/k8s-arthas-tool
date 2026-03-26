@@ -36,7 +36,7 @@ def _build_threaddump_html(
     waiting_count: int,
     blocked_count: int,
     deadlock_count: int,
-    threads_data: list,
+    threads_data: List,
     raw_html: str,       # HTML-escaped 原始文本（用于 Raw Text 视图）
     json_threads: str,   # JSON 序列化后的线程数组字符串
 ) -> str:
@@ -914,7 +914,7 @@ class ProfilerWorkflow:
 
     def __init__(self, conn: ArthasConnection):
         self.conn       = conn
-        self.logs: list = []
+        self.logs = []  # type: List[Dict]
         self.result     = {"status": "running", "local_file": "", "message": ""}
         self._cancelled = False
 

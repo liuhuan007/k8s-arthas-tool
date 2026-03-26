@@ -16,7 +16,7 @@ import subprocess, json, re, time, threading
 from datetime import datetime, timezone
 from collections import deque
 from dataclasses import dataclass, field, asdict
-from typing import Optional, Dict, Deque
+from typing import Optional, Dict, Deque, List
 
 # ── 时序指标缓冲（最近 60 个采样点）────────────────────────────────────────────
 _metrics_history = {}  # type: Dict[str, Deque]  # key="{cluster}/{ns}/{pod}" -> deque of snapshots
@@ -135,7 +135,7 @@ class KubectlRunner:
             f"base64:     {err3}"
         )
 
-    def get_pod_json(self, ns: str, pod: str) -> Optional[dict]:
+    def get_pod_json(self, ns: str, pod: str):  # type: (str, str) -> Optional[dict]
         rc, out, err = self.run("get", "pod", pod, "-o", "json", ns=ns)
         if rc != 0:
             return None
@@ -144,7 +144,7 @@ class KubectlRunner:
         except Exception:
             return None
 
-    def get_pod_metrics(self, ns: str, pod: str) -> Optional[dict]:
+    def get_pod_metrics(self, ns: str, pod: str):  # type: (str, str) -> Optional[dict]
         """kubectl top pod（需要 metrics-server）"""
         rc, out, err = self.run("top", "pod", pod, "--no-headers", ns=ns, timeout=15)
         if rc != 0:
@@ -155,7 +155,7 @@ class KubectlRunner:
             return None
         return {"cpu_raw": parts[1], "memory_raw": parts[2]}
 
-    def get_pod_events(self, ns: str, pod: str) -> list:
+    def get_pod_events(self, ns: str, pod: str):  # type: (str, str) -> list
         rc, out, err = self.run(
             "get", "events",
             "--field-selector", f"involvedObject.name={pod}",
@@ -519,8 +519,8 @@ def collect_pod_snapshot(runner: KubectlRunner, ns: str, pod: str,
 
 # ── 后台轮询（存入历史缓冲）──────────────────────────────────────────────────────
 
-_poll_threads: dict = {}  # key -> thread
-_poll_stop: dict = {}     # key -> bool
+_poll_threads = {}  # type: Dict[str, threading.Thread]  # key -> thread
+_poll_stop = {}     # type: Dict[str, bool]  # key -> bool
 
 
 def start_metrics_polling(runner: KubectlRunner, cluster: str,
@@ -571,7 +571,7 @@ def stop_metrics_polling(cluster: str, ns: str, pod: str):
     _poll_stop[key] = True
 
 
-def get_metrics_history(cluster: str, ns: str, pod: str) -> list:
+def get_metrics_history(cluster: str, ns: str, pod: str):  # type: (str, str, str) -> list
     key = f"{cluster}/{ns}/{pod}"
     with _metrics_lock:
         return list(_metrics_history.get(key, []))
