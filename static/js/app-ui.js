@@ -81,12 +81,16 @@ async function safePost(url, body, timeoutMs = 15000) {
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let _clusters = [], _ac = null;
+let _connections = [], _currentConnId = null;
 let _connected = false, _ap = null;
 let _sid = null, _cid = null, _pollTimer = null, _polling = false;
 let _cmdHist = [], _histIdx = -1, _selCmd = null;
 let _pfTaskId = null, _pfPollTimer = null, _pfStart = null, _pfDur = 60, _pfLL = 0;
+let _pfPollingForConn = null; // 记录当前轮询是为哪个连接服务
 let _snap = null, _histData = [], _logRaw = '', _logWrap = true;
 let _fbSelected = null, _fbCurPath = '/tmp';
+// 每个连接的采样任务状态缓存
+let _pfTasksByConn = {}; // { connId: { taskId, startTime, duration, logLines, status } }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
@@ -100,6 +104,289 @@ function toast(msg, type='info') {
   const c = {success:'var(--a3)',error:'var(--a5)',warn:'var(--a4)',info:'var(--tx)'};
   el.textContent = msg; el.style.borderColor = c[type]||'var(--ln2)'; el.style.display = 'block';
   clearTimeout(el._t); el._t = setTimeout(() => el.style.display='none', 3200);
+}
+
+// ── Connection Management ─────────────────────────────────────────────────────
+function renderConnList() {
+  const el = document.getElementById('connList');
+  if (_connections.length === 0) {
+    el.innerHTML = '<div class="sb-empty">暂无连接<br>使用下方添加</div>';
+    return;
+  }
+  let html = '';
+  _connections.forEach(c => {
+    const isActive = c.id === _currentConnId;
+    html += `
+      <div class="conn-itm ${isActive?'on':''}" onclick="switchConnection('${c.id}')" title="集群: ${esc(c.cluster_name)}\n环境: ${c.namespace}\nPod: ${c.pod_name}\n端口: ${c.local_port}">
+        <div style="flex:1;overflow:hidden">
+          <div style="font-weight:600;color:${isActive?'var(--a)':'var(--tx)'};margin-bottom:3px">
+            <span style="font-size:11px">🔹</span> ${esc(c.cluster_name)}
+          </div>
+          <div style="font-size:10px;color:var(--tx2)">
+            <span style="opacity:0.8">${c.namespace}</span>
+            <span style="margin:0 4px;opacity:0.5">/</span>
+            <span style="font-weight:500;color:${isActive?'var(--a)':'var(--tx)'}">${c.pod_name}</span>
+            <span style="margin-left:6px;font-size:9px;color:var(--tx3);opacity:0.7">:${c.local_port}</span>
+          </div>
+        </div>
+        <button class="del-conn" onclick="event.stopPropagation();deleteConnection('${c.id}')" title="删除连接">✕</button>
+      </div>
+    `;
+  });
+  el.innerHTML = html;
+}
+
+async function loadConnectionCommands(connId) {
+  // 加载连接的命令历史
+  try {
+    const r = await fetch(`${API}/arthas/commands?connection_id=${connId}&limit=50`);
+    const d = await r.json();
+    if (d.ok && d.commands) {
+      // 清空当前输出区
+      const co = coEl();
+      co.innerHTML = '<div class="o-dim">── Arthas K8s 诊断台 ─────────────────────────────────────────────────────</div>';
+
+      // 按时间倒序显示（最新的在上面）
+      d.commands.reverse().forEach(cmd => {
+        clog(esc(cmd.command), 'cmd');
+        if (cmd.error) {
+          clog('✗ ' + esc(cmd.error), 'err');
+        } else if (cmd.output) {
+          clog(esc(cmd.output));
+        }
+      });
+    }
+  } catch(e) {
+    console.error('Load commands error:', e);
+  }
+}
+
+async function switchConnection(connId) {
+  if (connId === _currentConnId) return;
+  const conn = _connections.find(c => c.id === connId);
+  if (!conn) return;
+
+  // 构建连接参数
+  const t = {
+    cluster_name: conn.cluster_name,
+    namespace: conn.namespace,
+    pod_name: conn.pod_name,
+    container: conn.container,
+    arthas_jar: conn.arthas_jar
+  };
+
+  // 显示加载状态
+  setConnStatus('dim', `正在切换到 ${conn.cluster_name} / ${conn.namespace} / ${conn.pod_name} ...`);
+
+  try {
+    // 调用后端 connect 接口重新建立连接
+    const r = await fetch(`${API}/arthas/connect`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({...t, connection_id: connId})
+    });
+    const d = await r.json();
+
+    if (d.ok) {
+      // 保存旧连接的采样任务状态（必须在设置 _currentConnId 之前）
+      const oldConnId = _currentConnId;
+      const hadRunningTask = _pfTaskId && _pfPollTimer;
+      if (oldConnId && hadRunningTask) {
+        _pfTasksByConn[oldConnId] = {
+          taskId: _pfTaskId,
+          pollTimer: null,  // 不保存定时器引用
+          startTime: _pfStart,
+          duration: _pfDur,
+          logLines: _pfLL,
+          status: 'running'
+        };
+      } else if (oldConnId) {
+        // 如果任务已完成或没有运行，清除旧连接的缓存状态
+        delete _pfTasksByConn[oldConnId];
+      }
+
+      // 现在可以设置新的当前连接
+      _currentConnId = connId;
+      _connected = true;
+      _ap = t;
+
+      // 更新连接的 local_port
+      conn.local_port = d.local_port;
+
+      // 清理当前会话状态
+      _polling = false;
+      if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+      _sid = null;
+      _cid = null;
+
+      // 停止当前采样轮询
+      if (_pfPollTimer) {
+        clearInterval(_pfPollTimer);
+        _pfPollTimer = null;
+      }
+
+      _pfTaskId = null;
+      _pfLL = 0;
+
+      // 更新 UI
+      renderConnList();
+      setConnStatus('ok', `✓ ${conn.cluster_name} / ${conn.namespace} / ${conn.pod_name}   local port: ${conn.local_port}`);
+      setPtStat('ok', 'Arthas 已连接');
+      setCpSt('ok', `✓ 已连接  (port:${conn.local_port})`);
+      document.getElementById('conTitle').textContent = `${conn.cluster_name}/${conn.namespace}/${conn.pod_name}`;
+      document.getElementById('runBtn').disabled = false;
+
+      // 更新 Pod 目标选择器
+      const ptNs = document.getElementById('ptNs');
+      const ptPod = document.getElementById('ptPod');
+      if (ptNs && ptPod) {
+        ptNs.value = conn.namespace;
+        ptPod.value = conn.pod_name;
+      }
+
+      // 加载该连接的命令历史
+      await loadConnectionCommands(connId);
+
+      // 加载该连接的采样日志
+      const profilerTab = document.getElementById('tab-profiler');
+      if (profilerTab && profilerTab.classList.contains('on')) {
+        loadConnectionProfilerLogs(connId);
+      }
+
+      // 恢复该连接的采样任务状态（如果有正在进行的任务）
+      const targetTask = _pfTasksByConn[connId];
+      const hasRunningTask = targetTask && targetTask.taskId && targetTask.status === 'running';
+
+      if (hasRunningTask) {
+        _pfTaskId = targetTask.taskId;
+        _pfStart = targetTask.startTime;
+        _pfDur = targetTask.duration;
+        _pfLL = targetTask.logLines;
+        _pfPollingForConn = connId;  // 设置当前轮询为这个连接服务
+
+        // 重新启动轮询
+        _pfPollTimer = setInterval(pfPoll, 2000);
+
+        // 更新进度条显示
+        const pfProg = document.getElementById('pfProg');
+        const pfProgFill = document.getElementById('pfProgFill');
+        const pfProgPct = document.getElementById('pfProgPct');
+        const pfProgLbl = document.getElementById('pfProgLbl');
+        const pfBtn = document.getElementById('pfBtn');
+        if (pfProg) pfProg.style.display = 'block';
+        if (pfProgFill) pfProgFill.style.width = `${Math.min((Date.now() - _pfStart) / 1000 / _pfDur * 100, 100)}%`;
+        if (pfProgPct) pfProgPct.textContent = `${Math.min(Math.floor((Date.now() - _pfStart) / 1000), _pfDur)}s`;
+        if (pfProgLbl) pfProgLbl.textContent = `采集中...`;
+        if (pfBtn) {
+          pfBtn.disabled = true;
+          pfBtn.textContent = '⏳ 采集中';
+        }
+      } else {
+        // 如果没有正在进行的任务，重置进度条、按钮和日志
+        _pfPollingForConn = null;  // 清空轮询连接标记
+        const pfProg = document.getElementById('pfProg');
+        const pfProgFill = document.getElementById('pfProgFill');
+        const pfProgPct = document.getElementById('pfProgPct');
+        const pfProgLbl = document.getElementById('pfProgLbl');
+        const pfBtn = document.getElementById('pfBtn');
+        const pfLogPanel = document.getElementById('pfl-panel-log');
+        const pfLogCnt = document.getElementById('pfLogCnt');
+        if (pfProg) pfProg.style.display = 'none';
+        if (pfProgFill) pfProgFill.style.width = '0%';
+        if (pfProgPct) pfProgPct.textContent = '0%';
+        if (pfProgLbl) pfProgLbl.textContent = '启动中...';
+        if (pfBtn) {
+          pfBtn.disabled = false;
+          pfBtn.textContent = '▶ 开始';
+        }
+        if (pfLogPanel) pfLogPanel.innerHTML = '<div class="o-dim">等待启动...</div>';
+        if (pfLogCnt) pfLogCnt.textContent = '0行';
+      }
+
+      // 如果当前标签是 Pod 监控，重新加载数据
+      const monitorTab = document.getElementById('tab-monitor');
+      if (monitorTab && monitorTab.classList.contains('on')) {
+        loadSnap();
+      }
+
+      // 如果采样工具的历史记录面板是打开的，则刷新
+      const historyPanel = document.getElementById('pfl-panel-history');
+      if (historyPanel && historyPanel.style.display !== 'none') {
+        loadPfHistoryForCurrentConn();
+      }
+
+      // 显示切换提示
+      const tip = document.createElement('div');
+      tip.style.cssText = 'position:fixed;top:60px;right:20px;background:var(--bg1);border:1px solid var(--a);border-radius:6px;padding:12px 16px;font-size:12px;z-index:9999;box-shadow:0 4px 12px rgba(0,0,0,0.3);animation:slideIn 0.3s ease-out';
+      tip.innerHTML = `
+        <div style="font-weight:600;color:var(--a);margin-bottom:6px">✓ 已切换连接</div>
+        <div style="color:var(--tx2);line-height:1.6">
+          <div><span style="color:var(--tx3)">集群:</span> ${conn.cluster_name}</div>
+          <div><span style="color:var(--tx3)">环境:</span> ${conn.namespace}</div>
+          <div><span style="color:var(--tx3)">Pod:</span> ${conn.pod_name}</div>
+        </div>
+      `;
+      document.body.appendChild(tip);
+
+      // 添加动画样式
+      if (!document.getElementById('switch-tip-style')) {
+        const style = document.createElement('style');
+        style.id = 'switch-tip-style';
+        style.textContent = `@keyframes slideIn {from{transform:translateX(100px);opacity:0}to{transform:translateX(0);opacity:1}}`;
+        document.head.appendChild(style);
+      }
+
+      setTimeout(() => {
+        tip.style.opacity = '0';
+        tip.style.transform = 'translateX(100px)';
+        tip.style.transition = 'all 0.3s ease-out';
+        setTimeout(() => tip.remove(), 300);
+      }, 2500);
+
+      saveConnections();
+    } else {
+      // 切换失败
+      setConnStatus('fail', '✗ 切换失败: ' + d.message);
+      toast('切换连接失败: ' + d.message, 'error');
+    }
+  } catch(e) {
+    setConnStatus('fail', '✗ 切换失败: ' + e.message);
+    toast('切换连接失败', 'error');
+    console.error('Switch connection error:', e);
+  }
+}
+
+function deleteConnection(connId) {
+  if (!confirm('确定删除此连接吗？')) return;
+  _connections = _connections.filter(c => c.id !== connId);
+  if (_currentConnId === connId) {
+    _currentConnId = null;
+    _connected = false;
+    _ap = null;
+    setConnStatus('', '');
+    setPtStat('', '');
+    setCpSt('', '');
+    document.getElementById('conTitle').textContent = '等待连接...';
+    document.getElementById('runBtn').disabled = true;
+  }
+  renderConnList();
+  saveConnections();
+}
+
+function saveConnections() {
+  localStorage.setItem('arthas_connections', JSON.stringify(_connections));
+}
+
+function loadConnections() {
+  try {
+    const data = localStorage.getItem('arthas_connections');
+    if (data) {
+      _connections = JSON.parse(data);
+      renderConnList();
+    }
+  } catch(e) {
+    console.error('加载连接失败:', e);
+  }
 }
 
 function switchTab(n) {
@@ -127,7 +414,20 @@ function switchTab(n) {
   }
 
   if(n==='history') loadHistory();
-  if(n==='profiler') { setTimeout(()=>loadPfHistory(),100); }
+  if(n==='profiler') {
+    setTimeout(() => {
+      // 不再在这里加载历史，因为顶部历史显示全部，采样工具有自己的历史面板
+      // 如果历史面板是打开的，则刷新当前连接的历史
+      const historyPanel = document.getElementById('pfl-panel-history');
+      if (historyPanel && historyPanel.style.display !== 'none') {
+        loadPfHistoryForCurrentConn();
+      }
+      // 加载当前连接的采样日志
+      if (_currentConnId) {
+        loadConnectionProfilerLogs(_currentConnId);
+      }
+    }, 100);
+  }
   if(n==='terminal') { setTimeout(()=>{ document.getElementById('termInput')?.focus(); },100); }
 }
 
@@ -228,35 +528,64 @@ async function checkPod() {
 
 // ── Arthas Connect ─────────────────────────────────────────────────────────────
 async function arthasConnect() {
-  if(_connected) { await arthasDC(); return; }
   const t = getT();
   if(!t.cluster_name || !t.pod_name) { toast('请先配置集群和 Pod','warn'); return; }
-  const cpBtn = document.getElementById('cpBtn'), ptBtn = document.getElementById('ptConnBtn');
-  cpBtn.disabled = true; cpBtn.textContent = '连接中...'; ptBtn.textContent = '连接中...';
-  setCpSt('', ''); clog('正在连接 Arthas HTTP API...', 'dim');
+  const ptBtn = document.getElementById('ptConnBtn');
+  ptBtn.disabled = true; ptBtn.textContent = '连接中...';
+  setCpSt('', ''); setConnStatus('dim', `正在连接 ${t.cluster_name} / ${t.namespace} / ${t.pod_name} ...`);
   try {
     const r = await fetch(`${API}/arthas/connect`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(t)});
     const d = await r.json();
     if(d.ok) {
-      _connected = true; _ap = t;
-      cpBtn.textContent = '✓ 已连接'; cpBtn.className = 'cp-cbtn connected'; cpBtn.disabled = false;
-      ptBtn.textContent = '断开'; ptBtn.className = 'pt-btn dc';
+      // 添加到连接列表
+      const connId = Date.now().toString();
+      const newConn = {
+        id: connId,
+        cluster_name: t.cluster_name,
+        namespace: t.namespace,
+        pod_name: t.pod_name,
+        container: t.container,
+        arthas_jar: t.arthas_jar,
+        local_port: d.local_port,
+        message: d.message,
+        created_at: new Date().toISOString()
+      };
+
+      // 检查是否已存在相同的 Pod 连接
+      const existingIndex = _connections.findIndex(c =>
+        c.cluster_name === t.cluster_name && c.namespace === t.namespace && c.pod_name === t.pod_name
+      );
+
+      if (existingIndex >= 0) {
+        // 更新现有连接
+        _connections[existingIndex] = newConn;
+        _currentConnId = newConn.id;
+      } else {
+        // 添加新连接
+        _connections.push(newConn);
+        _currentConnId = newConn.id;
+      }
+
+      _connected = true;
+      _ap = t;
+      ptBtn.textContent = '⚡ 连接'; ptBtn.className = 'pt-btn'; ptBtn.disabled = false;
+
+      renderConnList();
       setCpSt('ok', `✓ ${d.message}  (port:${d.local_port})`);
       document.getElementById('runBtn').disabled = false;
       document.getElementById('conTitle').textContent = `${t.cluster_name}/${t.namespace}/${t.pod_name}`;
       setPtStat('ok', 'Arthas 已连接');
-      clog(`连接成功！local port: ${d.local_port}`, 'ok');
+      setConnStatus('ok', `✓ ${t.cluster_name} / ${t.namespace} / ${t.pod_name}   local port: ${d.local_port}`);
+      saveConnections();
       toast('连接成功', 'success');
     } else {
       setCpSt('fail', '✗ ' + d.message); setPtStat('fail', d.message);
       clog('✗ ' + d.message, 'err'); toast('连接失败','error');
-      cpBtn.disabled = false; cpBtn.textContent = '⚡ 连接 Arthas';
-      ptBtn.textContent = '⚡ 连接'; ptBtn.className = 'pt-btn';
+      ptBtn.disabled = false; ptBtn.textContent = '⚡ 连接'; ptBtn.className = 'pt-btn';
     }
   } catch(e) {
     clog('✗ ' + e.message, 'err');
-    cpBtn.disabled = false; cpBtn.textContent = '⚡ 连接 Arthas';
-    ptBtn.textContent = '⚡ 连接'; ptBtn.className = 'pt-btn';
+    ptBtn.disabled = false; ptBtn.textContent = '⚡ 连接'; ptBtn.className = 'pt-btn';
   }
 }
 
@@ -265,13 +594,21 @@ async function arthasDC() {
   if(_sid && _ap) try { await fetch(`${API}/arthas/session/close`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({..._ap, session_id: _sid})}); } catch {}
   if(_ap) try { await fetch(`${API}/arthas/disconnect`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(_ap)}); } catch {}
   _connected = false; _ap = null; _sid = null; _cid = null;
-  const cpBtn = document.getElementById('cpBtn'), ptBtn = document.getElementById('ptConnBtn');
-  cpBtn.textContent = '⚡ 连接 Arthas'; cpBtn.className = 'cp-cbtn'; cpBtn.disabled = false;
-  ptBtn.textContent = '⚡ 连接'; ptBtn.className = 'pt-btn';
+  const ptBtn = document.getElementById('ptConnBtn');
+  ptBtn.disabled = false; ptBtn.textContent = '⚡ 连接'; ptBtn.className = 'pt-btn';
   document.getElementById('runBtn').disabled = true;
-  setCpSt('', ''); setPtStat('', '');
+  setCpSt('', ''); setPtStat('', ''); setConnStatus('', '');
   document.getElementById('btnStop').style.display = 'none';
   clog('── 已断开连接 ──', 'dim'); toast('已断开','info');
+}
+
+function setConnStatus(type, msg) {
+  const el = document.getElementById('connStatus');
+  if (!el) return;
+  if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+  el.style.display = 'block';
+  el.className = type === 'ok' ? 'conn-status ok' : type === 'dim' ? 'conn-status dim' : 'conn-status';
+  el.textContent = msg;
 }
 
 function setCpSt(type, msg) {
@@ -882,7 +1219,7 @@ async function runOnce(command) {
   document.getElementById('runBtn').disabled = true;
   try {
     const r = await fetch(`${API}/arthas/exec`, {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({..._ap, command, timeout_ms: 60000})});
+      body: JSON.stringify({..._ap, command, connection_id: _currentConnId, timeout_ms: 60000})});
     const d = await r.json(); renderRes(d);
   } catch(e) { clog('✗ ' + esc(e.message), 'err'); }
   document.getElementById('runBtn').disabled = false;
@@ -1078,15 +1415,27 @@ const RENDERERS = {
     for(const [cat, entries] of Object.entries(r)) {
       if(skip.has(cat) || !entries) continue;
       let body = '';
+
+      // 格式化值，处理嵌套对象
+      const formatValue = (v) => {
+        if (v === null || v === undefined) return '';
+        if (typeof v === 'string') return v;
+        if (typeof v === 'number' || typeof v === 'boolean') return String(v);
+        if (typeof v === 'object') {
+          return JSON.stringify(v, null, 2);
+        }
+        return String(v);
+      };
+
       if(Array.isArray(entries)) {
         body = R.table(['Name','Value'], entries.map(e => [
           `<span style="color:#7aa2f7">${esc(e.name||e.key||'')}</span>`,
-          `<span style="color:#a9b1d6">${esc(String(e.value??e.val??''))}</span>`
+          `<span style="color:#a9b1d6;white-space:pre-wrap;font-family:monospace;font-size:11px">${esc(formatValue(e.value??e.val??''))}</span>`
         ]));
       } else if(typeof entries === 'object') {
         body = R.table(['Key','Value'], Object.entries(entries).map(([k,v]) => [
           `<span style="color:#7aa2f7">${esc(k)}</span>`,
-          `<span style="color:#a9b1d6">${esc(String(v??''))}</span>`
+          `<span style="color:#a9b1d6;white-space:pre-wrap;font-family:monospace;font-size:11px">${esc(formatValue(v))}</span>`
         ]));
       } else {
         body = `<span style="color:#a9b1d6">${esc(String(entries))}</span>`;
@@ -1507,6 +1856,7 @@ async function pfStart() {
     });
     const d = await r.json(); if(!r.ok||d.error) throw new Error(d.error||'失败');
     _pfTaskId = d.task_id; pfLog(`任务已创建: ${d.task_id}`, 'ok');
+    _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
     _pfPollTimer = setInterval(pfPoll, 2000);
   } catch(e) { pfLog('失败: '+e.message, 'err'); document.getElementById('pfBtn').disabled = false; }
 }
@@ -1536,8 +1886,9 @@ async function pfRunJfr(t) {
                             duration: dur, format: 'jfr'}),
     });
     const d = await r.json(); if(!r.ok||d.error) throw new Error(d.error||'失败');
-    _pfTaskId = d.task_id; pfLog(`JFR 任务已创建: ${d.task_id}`, 'ok');
-    _pfPollTimer = setInterval(pfPoll, 2000);
+      _pfTaskId = d.task_id; pfLog(`JFR 任务已创建: ${d.task_id}`, 'ok');
+      _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
+      _pfPollTimer = setInterval(pfPoll, 2000);
   } catch(e) { pfLog('失败: '+e.message, 'err'); document.getElementById('pfBtn').disabled = false; }
 }
 
@@ -1558,6 +1909,7 @@ async function pfRunDump(t) {
       _pfTaskId = d.task_id;
       pfLog(`线程 Dump 任务: ${d.task_id}`, 'ok');
       pfLog('正在采集，通常 5~10 秒完成...', 'dim');
+      _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
       _pfPollTimer = setInterval(pfPoll, 1500);
     } catch(e) { pfLog('失败: '+e.message, 'err'); document.getElementById('pfBtn').disabled = false; }
   } else {
@@ -1580,6 +1932,7 @@ async function pfRunDump(t) {
       _pfTaskId = d.task_id;
       pfLog(`Heap Dump 任务: ${d.task_id}`, 'ok');
       pfLog('采集中，请等待...', 'dim');
+      _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
       _pfPollTimer = setInterval(pfPoll, 2000);
     } catch(e) { pfLog('失败: '+e.message, 'err'); document.getElementById('pfBtn').disabled = false; }
   }
@@ -1715,40 +2068,211 @@ async function pfPoll() {
   if(!_pfTaskId) return;
   try {
     const r = await fetch(`${API}/profile/${_pfTaskId}`); const d = await r.json();
-    (d.logs||[]).slice(_pfLL).forEach(l => pfLog(l.message, l.level)); _pfLL = d.logs?.length||0;
-    const el = (Date.now()-_pfStart)/1000;
-    const totalDur = _pfDur || 30;
-    const pct = Math.min(90, (el/(totalDur+20))*100);
-    document.getElementById('pfProgFill').style.width = pct+'%';
-    document.getElementById('pfProgPct').textContent = Math.round(pct)+'%';
-    document.getElementById('pfProgLbl').textContent = d.status==='running'
-      ? `${_pfMode === 'dump' ? '导出中' : '采样'} ${Math.round(el)}s${_pfDur ? '/'+_pfDur+'s' : ''}`
-      : d.status;
-    if(d.status==='completed'||d.status==='failed') {
-      clearInterval(_pfPollTimer); _pfPollTimer = null; _pfLL = 0;
-      document.getElementById('pfBtn').disabled = false;
-      if(d.status==='completed') {
-        document.getElementById('pfProgFill').style.width='100%';
-        document.getElementById('pfProgPct').textContent='100%';
-        toast('完成！','success'); loadLocalFiles(); loadPfHistory();
-      } else toast('失败','error');
-      _pfTaskId = null;
+
+    // 只为当前连接输出日志和更新 UI
+    if (_pfPollingForConn === _currentConnId) {
+      (d.logs||[]).slice(_pfLL).forEach(l => pfLog(l.message, l.level));
+      _pfLL = d.logs?.length||0;
+      const el = (Date.now()-_pfStart)/1000;
+      const totalDur = _pfDur || 30;
+      const pct = Math.min(90, (el/(totalDur+20))*100);
+      document.getElementById('pfProgFill').style.width = pct+'%';
+      document.getElementById('pfProgPct').textContent = Math.round(pct)+'%';
+      document.getElementById('pfProgLbl').textContent = d.status==='running'
+        ? `${_pfMode === 'dump' ? '导出中' : '采样'} ${Math.round(el)}s${_pfDur ? '/'+_pfDur+'s' : ''}`
+        : d.status;
+      if(d.status==='completed'||d.status==='failed') {
+        clearInterval(_pfPollTimer); _pfPollTimer = null; _pfLL = 0;
+        _pfPollingForConn = null;  // 清空轮询连接标记
+        document.getElementById('pfBtn').disabled = false;
+        if(d.status==='completed') {
+          document.getElementById('pfProgFill').style.width='100%';
+          document.getElementById('pfProgPct').textContent='100%';
+          toast('完成！','success'); loadLocalFiles(); loadPfHistory();
+        } else toast('失败','error');
+
+        // 清除该连接的任务状态缓存
+        if (_currentConnId && _pfTasksByConn[_currentConnId]) {
+          delete _pfTasksByConn[_currentConnId];
+        }
+        _pfTaskId = null;
+      }
+    } else {
+      // 不是当前连接，只更新日志位置计数，不输出到 DOM
+      _pfLL = d.logs?.length||0;
     }
   } catch {}
 }
 
-function pfLog(msg, lv='info') {
+async function pfLog(msg, lv='info') {
   const el = document.getElementById('pfl-panel-log');
   if(el && el.children.length===1 && el.children[0].textContent==='等待启动...') el.innerHTML='';
   const cls = {info:'o-line',dim:'o-dim',ok:'o-ok',error:'o-err',warn:'o-warn',success:'o-ok'}[lv]||'o-line';
-  const d = document.createElement('div'); d.className = cls; d.textContent = msg;
-  el.appendChild(d); el.scrollTop = el.scrollHeight;
-  const _cntEl = document.getElementById('pfLogCnt'); if(_cntEl) _cntEl.textContent = (el?.children.length||0) + '行';
+  const d = document.createElement('div');
+  d.className = cls;
+  // 使用 innerHTML 而不是 textContent，保留换行符
+  d.innerHTML = msg.replace(/\n/g, '<br>');
+  el.appendChild(d);
+  el.scrollTop = el.scrollHeight;
+
+  const _cntEl = document.getElementById('pfLogCnt');
+  if(_cntEl) _cntEl.textContent = (el?.children.length||0) + '行';
+
+  // 保存到数据库
+  if (_currentConnId) {
+    try {
+      await fetch(`${API}/profile/logs`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          connection_id: _currentConnId,
+          message: msg,
+          level: lv
+        })
+      });
+    } catch(e) {
+      console.error('Failed to save profiler log:', e);
+    }
+  }
 }
-function pfClearLog() {
+async function pfClearLog() {
   const el = document.getElementById('pfl-panel-log');
   if(el) el.innerHTML='<div class="o-dim">等待启动...</div>';
   const c = document.getElementById('pfLogCnt'); if(c) c.textContent='0行';
+
+  // 清空数据库中的日志
+  if (_currentConnId) {
+    try {
+      await fetch(`${API}/profile/logs/${_currentConnId}`, {
+        method: 'DELETE'
+      });
+    } catch(e) {
+      console.error('Failed to clear profiler logs:', e);
+    }
+  }
+
+  // 清空当前连接的任务状态缓存（如果任务已完成或被取消）
+  if (_currentConnId && _pfTasksByConn[_currentConnId] && !_pfTaskId) {
+    delete _pfTasksByConn[_currentConnId];
+  }
+}
+
+function togglePfHistory() {
+  const logPanel = document.getElementById('pfl-panel-log');
+  const historyPanel = document.getElementById('pfl-panel-history');
+  const btn = document.querySelector('#pfl-panel-history').closest('.pf-log').querySelector('button[onclick*="togglePfHistory"]');
+
+  if (historyPanel.style.display === 'none') {
+    // 显示历史记录面板
+    historyPanel.style.display = 'block';
+    if (btn) {
+      btn.textContent = '📋 返回日志';
+      btn.title = '返回采样日志';
+    }
+    loadPfHistoryForCurrentConn();
+  } else {
+    // 显示日志面板
+    historyPanel.style.display = 'none';
+    if (btn) {
+      btn.textContent = '📋 本地历史';
+      btn.title = '查看当前连接的历史记录';
+    }
+  }
+}
+
+async function loadPfHistoryForCurrentConn() {
+  try {
+    const r = await fetch(`${API}/profile`); const allTasks = await r.json();
+
+    // 过滤出当前连接的采样任务
+    let currentTasks = allTasks;
+    if (_currentConnId) {
+      const currentConn = _connections.find(c => c.id === _currentConnId);
+      if (currentConn) {
+        currentTasks = allTasks.filter(t =>
+          t.config.cluster === currentConn.cluster_name &&
+          t.config.namespace === currentConn.namespace &&
+          t.config.pod === currentConn.pod_name
+        );
+      }
+    }
+
+    // 更新连接名称显示
+    const connNameEl = document.getElementById('pfHistConnName');
+    if (connNameEl && _currentConnId) {
+      const currentConn = _connections.find(c => c.id === _currentConnId);
+      if (currentConn) {
+        connNameEl.textContent = `${currentConn.cluster_name}/${currentConn.namespace}/${currentConn.pod_name}`;
+      }
+    }
+
+    // 渲染历史记录
+    const el = document.getElementById('pfl-history-list');
+    if (!currentTasks.length) {
+      el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:20px">暂无历史记录</div>';
+      return;
+    }
+
+    const icons = {completed:'✅',failed:'❌',running:'⏳',starting:'⏳'};
+    const labels = {completed:'完成',failed:'失败',running:'运行中',starting:'启动中'};
+    const bcls = {completed:'st-ok',failed:'st-fail',running:'st-run',starting:'st-run'};
+
+    el.innerHTML = currentTasks.map(t => `
+      <div style="padding:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:6px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-size:14px">${icons[t.status]||'❓'}</span>
+          <span style="font-size:11px;color:var(--tx2)">${t.config.mode||"profiler"}</span>
+          <span class="st-badge ${bcls[t.status]||''}" style="font-size:10px">${labels[t.status]||t.status}</span>
+          <span style="margin-left:auto;font-size:10px;color:var(--tx3)">${fmtTs(t.created_at)}</span>
+        </div>
+        <div style="font-size:10px;color:var(--tx2);line-height:1.5">
+          <div>事件: ${t.config.event||"-"}</div>
+          <div>时长: ${t.config.duration}s · 格式: ${t.config.format}</div>
+        </div>
+        ${t.has_file?`<div style="margin-top:6px;padding:6px 8px;background:rgba(122,162,247,.08);border-radius:4px;font-size:10px;font-family:monospace;color:var(--a)">
+          📄 ${t.file_name||'output'}
+        </div><a href="${API}/profile/${t.id}/download" class="btn btn-dl" style="display:inline-block;margin-top:6px;padding:4px 10px;font-size:10px" download>↓ 下载</a>`:''}
+      </div>
+    `).join('');
+  } catch(e) {
+    console.error('Failed to load current connection history:', e);
+  }
+}
+
+async function loadConnectionProfilerLogs(connId) {
+  // 从数据库加载连接的采样日志
+  const el = document.getElementById('pfl-panel-log');
+  if (!el) return;
+
+  try {
+    const r = await fetch(`${API}/profile/logs/${connId}`);
+    const d = await r.json();
+    const logs = d.logs || [];
+
+    if (logs.length === 0) {
+      el.innerHTML = '<div class="o-dim">暂无采样日志</div>';
+      const c = document.getElementById('pfLogCnt');
+      if (c) c.textContent = '0行';
+      return;
+    }
+
+    el.innerHTML = '';
+    logs.forEach(log => {
+      const cls = {info:'o-line',dim:'o-dim',ok:'o-ok',error:'o-err',warn:'o-warn',success:'o-ok'}[log.level]||'o-line';
+      const d = document.createElement('div');
+      d.className = cls;
+      // 使用 innerHTML 保留换行符
+      d.innerHTML = log.message.replace(/\n/g, '<br>');
+      el.appendChild(d);
+    });
+    el.scrollTop = el.scrollHeight;
+
+    const c = document.getElementById('pfLogCnt');
+    if (c) c.textContent = logs.length + '行';
+  } catch(e) {
+    console.error('Failed to load profiler logs:', e);
+    el.innerHTML = '<div class="o-dim">加载日志失败</div>';
+  }
 }
 
 // ── Pod Monitor ───────────────────────────────────────────────────────────────
@@ -2383,28 +2907,44 @@ async function saveCluster() {
 
 // ── Tasks & Files ──────────────────────────────────────────────────────────────
 async function loadHistory() {
-  await loadPfHistory();
+  await loadPfHistory(false); // 显示所有连接的历史
   await loadLocalFiles();
   const t = (window._pfTasksCount||0) + (window._dlFilesCount||0);
   const el = document.getElementById('cntHistory');
   if(el) el.textContent = t;
 }
 
-async function loadPfHistory() {
+async function loadPfHistory(filterByCurrentConn = false) {
   try {
     const r = await fetch(`${API}/profile`); const tasks = await r.json();
-    window._pfTasksCount = tasks.length;
-    document.getElementById('cntPfTasks').textContent = tasks.length;
+
+    // 如果指定只显示当前连接的历史，则过滤任务
+    let filteredTasks = tasks;
+    if (filterByCurrentConn && _currentConnId) {
+      const currentConn = _connections.find(c => c.id === _currentConnId);
+      if (currentConn) {
+        filteredTasks = tasks.filter(t =>
+          t.config.cluster === currentConn.cluster_name &&
+          t.config.namespace === currentConn.namespace &&
+          t.config.pod === currentConn.pod_name
+        );
+      }
+    }
+
+    window._pfTasksCount = filteredTasks.length;
+    document.getElementById('cntPfTasks').textContent = filteredTasks.length;
+
     // Update history panel only
     const el = document.getElementById('hist-panel-profiler');
-    [el].forEach(container => {
-    if(!container) return;
-    if(!tasks.length) { el.innerHTML='<div style="color:var(--tx3);text-align:center;padding:40px">暂无任务</div>'; return; }
+    if(!el) return;
+    if(!filteredTasks.length) {
+      el.innerHTML='<div style="color:var(--tx3);text-align:center;padding:40px">暂无任务</div>';
+      return;
+    }
     const icons = {completed:'✅',failed:'❌',running:'⏳',starting:'⏳'};
     const labels = {completed:'完成',failed:'失败',running:'运行中',starting:'启动中'};
     const bcls = {completed:'st-ok',failed:'st-fail',running:'st-run',starting:'st-run'};
-    if(!tasks.length) { container.innerHTML='<div style="color:var(--tx3);text-align:center;padding:40px">暂无采样任务</div>'; return; }
-    container.innerHTML = tasks.map(t => `<div class="tc">
+    el.innerHTML = filteredTasks.map(t => `<div class="tc">
       <div class="tc-inner">
         <div style="font-size:18px;flex-shrink:0">${icons[t.status]||'❓'}</div>
         <div class="tc-info">
@@ -2414,7 +2954,6 @@ async function loadPfHistory() {
         ${t.has_file?`<a href="${API}/profile/${t.id}/download" class="btn btn-dl" style="padding:5px 10px;font-size:11px" download>↓ 下载</a>`:''}
       </div>
     </div>`).join('');
-    }); // end forEach
   } catch {}
 }
 
@@ -2443,6 +2982,7 @@ async function loadLocalFiles() {
 // Runs after DOM is ready (script is at bottom of <body>)
 
 initUserDisplay();
+loadConnections();
 renderCmdPal();
 checkHealth();
 setInterval(checkHealth, 8000);
