@@ -11,9 +11,10 @@ REST endpoints:
   /api/pod/files/*       Pod file browser + download
   /api/files/*           Local output file download
 """
-import json, os, threading, uuid, time, tempfile, shutil, shlex
+import json, os, threading, uuid, time, tempfile, shutil, shlex, sqlite3
 from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -48,6 +49,7 @@ def handle_exception(e):
 _BASE_DIR     = Path(__file__).parent
 OUTPUT_DIR    = _BASE_DIR / "profiler_output"
 CLUSTERS_FILE = _BASE_DIR / "clusters.json"
+DB_FILE       = _BASE_DIR / "arthas.db"
 OUTPUT_DIR.mkdir(exist_ok=True)
 
 # ── 前端静态文件服务（K8s / Docker 部署时通过 HTTP 访问）──────────────────────
@@ -66,6 +68,111 @@ _connections: dict[str, ArthasConnection] = {}   # "{cluster}/{ns}/{pod}" → co
 _tasks:       dict[str, dict]           = {}     # task_id → task dict
 _lock = threading.Lock()
 
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Database - SQLite
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _init_db():
+    """初始化 SQLite 数据库"""
+    conn = sqlite3.connect(str(DB_FILE))
+    cursor = conn.cursor()
+
+    # 连接记录表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS connections (
+            id TEXT PRIMARY KEY,
+            cluster_name TEXT NOT NULL,
+            namespace TEXT NOT NULL,
+            pod_name TEXT NOT NULL,
+            local_port INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Arthas 命令历史表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS arthas_commands (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_id TEXT NOT NULL,
+            command TEXT NOT NULL,
+            output TEXT,
+            error TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+        )
+    ''')
+
+    # 采样任务历史表
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS profiler_tasks (
+            id TEXT PRIMARY KEY,
+            connection_id TEXT NOT NULL,
+            mode TEXT NOT NULL,
+            event TEXT,
+            duration INTEGER,
+            status TEXT,
+            output_path TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+        )
+    ''')
+
+    conn.commit()
+    conn.close()
+
+def _get_db():
+    """获取数据库连接"""
+    conn = sqlite3.connect(str(DB_FILE), timeout=10)
+    conn.row_factory = sqlite3.Row  # 返回字典格式
+    return conn
+
+def _save_connection(conn_id: str, cluster_name: str, namespace: str, pod_name: str, local_port: int):
+    """保存或更新连接记录"""
+    conn = _get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT OR REPLACE INTO connections (id, cluster_name, namespace, pod_name, local_port, updated_at)
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+    ''', (conn_id, cluster_name, namespace, pod_name, local_port))
+    conn.commit()
+    conn.close()
+
+def _get_connection(conn_id: str) -> Optional[dict]:
+    """获取连接信息"""
+    conn = _get_db()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM connections WHERE id = ?', (conn_id,))
+    row = cursor.fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+def _save_arthas_command(conn_id: str, command: str, output: str = None, error: str = None):
+    """保存 Arthas 命令历史"""
+    conn = _get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO arthas_commands (connection_id, command, output, error)
+        VALUES (?, ?, ?, ?)
+    ''', (conn_id, command, output, error))
+    conn.commit()
+    conn.close()
+
+def _get_arthas_commands(conn_id: str, limit: int = 100) -> List[dict]:
+    """获取连接的命令历史"""
+    conn = _get_db()
+    cursor = conn.cursor()
+    cursor.execute('''
+        SELECT command, output, error, timestamp
+        FROM arthas_commands
+        WHERE connection_id = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+    ''', (conn_id, limit))
+    rows = cursor.fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Helpers
@@ -426,12 +533,29 @@ def arthas_connect():
 
     # Already alive?
     if conn.is_alive():
-        return jsonify({"ok": True, "message": "已连接", "local_port": conn.local_port})
+        # 保存连接信息到数据库
+        conn_id = d.get("connection_id", str(int(time.time() * 1000)))
+        _save_connection(conn_id, d["cluster_name"], d["namespace"], d["pod_name"], conn.local_port)
+        return jsonify({
+            "ok": True,
+            "message": "已连接",
+            "local_port": conn.local_port,
+            "connection_id": conn_id
+        })
 
     ok, msg = conn.connect()
+    if ok:
+        # 保存连接信息到数据库
+        conn_id = d.get("connection_id", str(int(time.time() * 1000)))
+        _save_connection(conn_id, d["cluster_name"], d["namespace"], d["pod_name"], conn.local_port)
+        return jsonify({
+            "ok": True, "message": msg,
+            "local_port": conn.local_port,
+            "connection_id": conn_id
+        })
     return jsonify({
-        "ok": ok, "message": msg,
-        "local_port": conn.local_port if ok else 0,
+        "ok": False, "message": msg,
+        "local_port": 0,
     })
 
 @app.post("/api/arthas/disconnect")
@@ -468,10 +592,23 @@ def arthas_exec():
         return jsonify({"state": "FAILED", "message": err}), 400
     if not conn.client:
         return jsonify({"state": "FAILED", "message": "未连接，请先调用 /api/arthas/connect"}), 400
+
+    conn_id = d.get("connection_id", "")
+    command = d.get("command", "")
+
     try:
-        resp = conn.client.exec_once(d.get("command",""), int(d.get("timeout_ms", 30000)))
+        resp = conn.client.exec_once(command, int(d.get("timeout_ms", 30000)))
+
+        # 保存命令历史到数据库
+        if conn_id and command:
+            output = resp.get("response", "")
+            error = resp.get("message", "") if resp.get("state") == "FAILED" else None
+            _save_arthas_command(conn_id, command, output, error)
+
         return jsonify(resp)
     except Exception as e:
+        if conn_id and command:
+            _save_arthas_command(conn_id, command, None, str(e))
         return jsonify({"state": "FAILED", "message": str(e)}), 500
 
 # ── Session commands ──────────────────────────────────────────────────────────
@@ -595,6 +732,19 @@ def profile_start():
 
     threading.Thread(target=_run, daemon=True).start()
     return jsonify({"task_id": task_id})
+
+@app.get("/api/arthas/commands")
+def get_arthas_commands():
+    """获取连接的 Arthas 命令历史"""
+    conn_id = request.args.get("connection_id")
+    limit = int(request.args.get("limit", 100))
+    if not conn_id:
+        return jsonify({"error": "Missing connection_id"}), 400
+    try:
+        commands = _get_arthas_commands(conn_id, limit)
+        return jsonify({"ok": True, "commands": commands})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.get("/api/profile")
 def list_profiles():
@@ -1166,5 +1316,10 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=5001)
     parser.add_argument("--host", default="127.0.0.1")
     args = parser.parse_args()
+
+    # 初始化数据库
+    _init_db()
+    _load_clusters()
+
     print(f"🚀  K8s Arthas Tool  →  http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=False, threaded=True)
