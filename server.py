@@ -14,7 +14,7 @@ REST endpoints:
 import json, os, threading, uuid, time, tempfile, shutil, shlex, sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Optional, Dict
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -171,7 +171,7 @@ def _save_arthas_command(conn_id: str, command: str, output: str = None, error: 
     conn.commit()
     conn.close()
 
-def _get_arthas_commands(conn_id: str, limit: int = 100) -> List[dict]:
+def _get_arthas_commands(conn_id: str, limit: int = 100) -> List[Dict]:
     """获取连接的命令历史"""
     conn = _get_db()
     cursor = conn.cursor()
@@ -197,7 +197,7 @@ def _save_profiler_log(conn_id: str, message: str, level: str = 'info'):
     conn.commit()
     conn.close()
 
-def _get_profiler_logs(conn_id: str, limit: int = 1000) -> List[dict]:
+def _get_profiler_logs(conn_id: str, limit: int = 1000) -> List[Dict]:
     """获取连接的采样日志"""
     conn = _get_db()
     cursor = conn.cursor()
