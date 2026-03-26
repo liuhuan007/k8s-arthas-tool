@@ -914,7 +914,7 @@ class ProfilerWorkflow:
 
     def __init__(self, conn: ArthasConnection):
         self.conn       = conn
-        self.logs: list = []
+        self.logs = []  # type: List[Dict]
         self.result     = {"status": "running", "local_file": "", "message": ""}
         self._cancelled = False
 

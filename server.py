@@ -14,7 +14,7 @@ REST endpoints:
 import json, os, threading, uuid, time, tempfile, shutil, shlex, sqlite3
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Tuple
 
 from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
@@ -63,9 +63,9 @@ def serve_login():
     return send_file(str(_BASE_DIR / 'login.html'))
 
 # ── In-memory state ───────────────────────────────────────────────────────────
-_clusters:    dict[str, ClusterConfig]  = {}
-_connections: dict[str, ArthasConnection] = {}   # "{cluster}/{ns}/{pod}" → conn
-_tasks:       dict[str, dict]           = {}     # task_id → task dict
+_clusters = {}    # type: dict[str, ClusterConfig]  # noqa
+_connections = {}   # type: dict[str, ArthasConnection]  # noqa
+_tasks = {}        # type: dict[str, dict]  # noqa
 _lock = threading.Lock()
 
 
@@ -1124,7 +1124,7 @@ def pod_files_list():
 
     # ── 用 stat 批量获取精确 mtime（BusyBox stat: %y = modification time）──
     # 格式: filename|||2024-01-15 10:30:45.000000000
-    stat_map: dict[str, str] = {}
+    stat_map = {}  # type: Dict[str, str]
     stat_cmd = (
         # GNU stat
         f'stat -c "%n|||%y" "{path}"/* 2>/dev/null'
