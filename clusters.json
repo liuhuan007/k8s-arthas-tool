@@ -1,7 +1,8 @@
 [
   {
+    "id": "e272008a",
     "name": "性能环境",
-    "kubeconfig": "/root/.kube/config",
+    "kubeconfig": "C:\\Users\\Administrator\\.kube\\config-performance",
     "context": "kubernetes-admin@cluster.local"
   }
 ]

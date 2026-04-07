@@ -12,10 +12,16 @@ RUN apt-get update && apt-get install -y curl && \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 复制项目文件
-COPY server.py profiler_backend.py pod_monitor.py ./
-COPY static/ ./static/
-COPY index.html login.html ./
+# 复制项目文件（新的目录结构）
+COPY server.py ./
+COPY api ./api
+COPY models ./models
+COPY services ./services
+COPY backend ./backend
+COPY static ./static
+COPY openspec ./openspec
+COPY clusters.json ./
+COPY rbac.yaml ./
 
 # 创建输出目录
 RUN mkdir -p profiler_output

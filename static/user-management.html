@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>用户管理 - K8s Arthas Tool</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/app.css">
+    <style>
+        body { background:var(--bg); color:var(--tx); font-family:var(--mono); margin:0; overflow:auto }
+        .admin-page { display:flex; flex-direction:column; min-height:100vh }
+
+        /* ── Topbar (与主页一致) ── */
+        .topbar{height:44px;background:var(--bg1);border-bottom:1px solid var(--ln);display:flex;align-items:center;flex-shrink:0}
+        .tb-logo{display:flex;align-items:center;gap:10px;padding:0 16px;border-right:1px solid var(--ln);height:100%;flex-shrink:0}
+        .tb-hex{width:24px;height:24px;background:var(--a);clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)}
+        .tb-title{font-family:var(--sans);font-weight:800;font-size:14px;letter-spacing:-.5px}
+        .tb-title em{color:var(--a);font-style:normal}
+        .tb-links{display:flex;align-items:center;height:100%;flex:1;padding:0 10px;gap:4px}
+        .tb-lnk{padding:3px 9px;border-radius:3px;font-size:11px;border:1px solid var(--ln2);color:var(--tx2);cursor:pointer;transition:all.15s;text-decoration:none}
+        .tb-lnk:hover{border-color:var(--a);color:var(--a);background:rgba(56,189,248,.06)}
+        .tb-right{display:flex;align-items:center;height:100%;margin-left:auto}
+        .tb-srv{display:flex;align-items:center;gap:6px;padding:0 14px;border-left:1px solid var(--ln);font-size:11px;color:var(--tx2)}
+
+        /* ── Content ── */
+        .admin-content{flex:1;padding:24px 30px;max-width:1400px;margin:0 auto;width:100%}
+        .admin-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--ln)}
+        .admin-header h1{font-family:var(--sans);font-size:18px;font-weight:700;color:var(--tx);margin:0}
+        .admin-header h1 span{color:var(--a)}
+
+        /* ── Buttons ── */
+        .btn-row{display:flex;gap:8px}
+        .ab{padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-family:var(--mono);border:none;transition:all.15s;font-weight:500}
+        .ab-p{background:var(--a);color:#0b0f18;font-weight:600}.ab-p:hover{filter:brightness(1.1)}
+        .ab-g{background:none;color:var(--tx2);border:1px solid var(--ln)}.ab-g:hover{border-color:var(--a);color:var(--a)}
+        .ab-d{background:rgba(248,113,113,.12);color:var(--a5);border:1px solid rgba(248,113,113,.25)}.ab-d:hover{background:rgba(248,113,113,.2)}
+        .ab-sm{padding:4px 10px;font-size:11px}
+
+        /* ── Table ── */
+        .tbl-wrap{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;overflow:hidden}
+        .tbl{width:100%;border-collapse:collapse}
+        .tbl th{background:var(--bg2);color:var(--tx2);padding:11px 14px;text-align:left;font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--ln)}
+        .tbl td{padding:10px 14px;border-bottom:1px solid var(--ln);color:var(--tx);font-size:12px}
+        .tbl tr:last-child td{border-bottom:none}
+        .tbl tr:hover td{background:rgba(255,255,255,.02)}
+
+        /* ── Badges ── */
+        .badge{padding:3px 9px;border-radius:10px;font-size:10px;font-weight:600;display:inline-block}
+        .bg-active{background:rgba(52,211,153,.12);color:var(--a3);border:1px solid rgba(52,211,153,.25)}
+        .bg-disabled{background:rgba(107,127,160,.12);color:var(--tx2);border:1px solid rgba(107,127,160,.25)}
+        .bg-admin{background:rgba(167,139,250,.12);color:var(--a2);border:1px solid rgba(167,139,250,.25)}
+        .bg-user{background:rgba(56,189,248,.12);color:var(--a);border:1px solid rgba(56,189,248,.25)}
+
+        /* ── Modal (与主页一致) ── */
+        .modal-bg{position:fixed;inset:0;background:rgba(11,15,24,.88);display:none;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(4px)}
+        .modal-bg.open{display:flex}
+        .modal{background:var(--bg1);border:1px solid var(--ln2);border-radius:8px;width:440px;max-width:96vw;box-shadow:0 20px 60px rgba(0,0,0,.7);animation:mi .2s ease}
+        @keyframes mi{from{transform:translateY(-10px);opacity:0}to{transform:translateY(0);opacity:1}}
+        .mhd{padding:15px 18px 12px;border-bottom:1px solid var(--ln);display:flex;align-items:center;justify-content:space-between}
+        .m-tt{font-family:var(--sans);font-size:14px;font-weight:700;color:var(--tx)}
+        .m-cl{background:none;border:none;color:var(--tx2);cursor:pointer;font-size:16px}.m-cl:hover{color:var(--tx)}
+        .mbd{padding:18px}
+        .mft{padding:12px 18px;border-top:1px solid var(--ln);display:flex;gap:8px;justify-content:flex-end}
+
+        /* ── Form ── */
+        .fg{margin-bottom:14px}
+        .fl{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;display:block}
+        .fi,.fs{width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-family:var(--mono);font-size:12px;outline:none;transition:border-color.15s}
+        .fi:focus,.fs:focus{border-color:var(--a)}.fi::placeholder{color:var(--tx3)}
+
+        /* ── Cluster assignment ── */
+        .cluster-sec{background:var(--bg2);border-radius:6px;padding:12px;margin-bottom:10px;border:1px solid var(--ln)}
+        .cluster-sec h3{font-size:11px;color:var(--a);margin:0 0 8px;font-weight:600;text-transform:uppercase;letter-spacing:.8px}
+        .cluster-list{max-height:200px;overflow-y:auto;border:1px solid var(--ln);border-radius:4px;background:var(--bg3);padding:6px}
+        .cluster-item{display:flex;align-items:center;padding:7px 10px;background:var(--bg2);border-radius:4px;margin-bottom:4px;font-size:12px;cursor:pointer;transition:background.15s}
+        .cluster-item:hover{background:rgba(255,255,255,.04)}
+        .cluster-item:last-child{margin-bottom:0}
+        .cluster-item label{display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;color:var(--tx)}
+        .cluster-item input[type=checkbox]{accent-color:var(--a)}
+
+        .empty-msg{text-align:center;padding:40px;color:var(--tx3);font-size:12px}
+        .err-box{color:var(--a5);background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.25);border-radius:6px;padding:10px 14px;font-size:11px;display:none;margin-top:8px}
+        .err-box.show{display:block}
+    </style>
+</head>
+<body>
+    <div class="admin-page">
+        <!-- Topbar -->
+        <div class="topbar">
+            <div class="tb-logo"><div class="tb-hex"></div><span class="tb-title">Arthas <em>K8s</em></span></div>
+            <div class="tb-links">
+                <a class="tb-lnk" href="/">← 返回主页</a>
+                <a class="tb-lnk" href="audit-logs.html">审计日志</a>
+            </div>
+            <div class="tb-right">
+                <div class="tb-srv"><span id="currentUser">—</span></div>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div class="admin-content">
+            <div class="admin-header">
+                <h1>👥 <span>用户管理</span></h1>
+                <div class="btn-row">
+                    <button class="ab ab-g" onclick="loadUsers()">↻ 刷新</button>
+                    <button class="ab ab-p" onclick="showCreateUserModal()">＋ 创建用户</button>
+                </div>
+            </div>
+
+            <div class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                        <tr>
+                            <th>用户名</th>
+                            <th>角色</th>
+                            <th>状态</th>
+                            <th>创建时间</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="userTableBody">
+                        <tr><td colspan="5" class="empty-msg">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 创建用户模态框 -->
+    <div class="modal-bg" id="createUserModal">
+        <div class="modal">
+            <div class="mhd"><span class="m-tt">创建新用户</span><button class="m-cl" onclick="closeModal('createUserModal')">✕</button></div>
+            <div class="mbd">
+                <div class="fg"><label class="fl">用户名 *</label><input class="fi" id="newUsername" placeholder="输入用户名" required></div>
+                <div class="fg"><label class="fl">密码 *</label><input class="fi" type="password" id="newPassword" placeholder="输入密码（至少6位）" required></div>
+                <div class="fg"><label class="fl">角色</label><select class="fs" id="newRole"><option value="user">普通用户</option><option value="admin">管理员</option></select></div>
+                <div class="fg"><label class="fl">状态</label><select class="fs" id="newStatus"><option value="active">启用</option><option value="disabled">停用</option></select></div>
+                <div class="err-box" id="createUserError"></div>
+            </div>
+            <div class="mft">
+                <button class="ab ab-g" onclick="closeModal('createUserModal')">取消</button>
+                <button class="ab ab-p" onclick="createUser()">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 集群分配模态框 -->
+    <div class="modal-bg" id="clusterModal">
+        <div class="modal">
+            <div class="mhd"><span class="m-tt">集群分配 — <span id="clusterModalUser"></span></span><button class="m-cl" onclick="closeModal('clusterModal')">✕</button></div>
+            <div class="mbd">
+                <div class="cluster-sec">
+                    <h3>可用集群</h3>
+                    <div id="availableClusters" class="cluster-list">加载中...</div>
+                </div>
+                <div class="cluster-sec">
+                    <h3>已分配集群</h3>
+                    <div id="assignedClusters" class="cluster-list">加载中...</div>
+                </div>
+                <div class="err-box" id="clusterError"></div>
+            </div>
+            <div class="mft">
+                <button class="ab ab-g" onclick="closeModal('clusterModal')">取消</button>
+                <button class="ab ab-p" onclick="saveClusterAssignment()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/user-management.js"></script>
+    <script>
+    (async function() {
+      try {
+        const resp = await fetch('api/auth/current').then(r => r.json());
+        if (!resp || !resp.authenticated) {
+          window.location.href = '/login.html';
+          return;
+        }
+        if (!resp.user.is_admin) {
+          alert('只有管理员可以访问此页面');
+          window.location.href = '/';
+          return;
+        }
+        const el = document.getElementById('currentUser');
+        if (el) el.textContent = '👤 ' + (resp.user.username || '—');
+      } catch (e) {
+        window.location.href = '/login.html';
+      }
+    })();
+    </script>
+</body>
+</html>

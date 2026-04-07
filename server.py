@@ -1,893 +1,1325 @@
 #!/usr/bin/env python3
 """
-K8s Arthas Tool — Flask API Server
+K8s Arthas Tool — Flask API Server (重构后)
 REST endpoints:
-  /api/health
-  /api/clusters          CRUD + test + namespaces/pods/contexts
-  /api/check             Pod liveness + Java PID detection
-  /api/arthas/*          Connect / disconnect / exec / session
-  /api/profile/*         JProfiler async task management
-  /api/monitor/*         Pod snapshot / metrics polling / logs / events
-  /api/pod/files/*       Pod file browser + download
-  /api/files/*           Local output file download
+  /api/auth/*        - 认证 (login/logout/current/change-password)
+  /api/users/*       - 用户管理 (CRUD, 集群分配)
+  /api/clusters/*   - 集群管理 (CRUD, test, namespaces, pods)
+  /api/audit-logs   - 审计日志查询
+  /api/health       - 健康检查
+  /api/check        - Pod 检测 + Java PID
+  /api/arthas/*     - Arthas 连接/执行/会话
+  /api/profile/*    - 性能分析任务
+  /api/monitor/*    - Pod 监控/指标
+  /api/pod/files/*  - Pod 文件浏览
+  /api/files/*      - 本地文件下载
 """
-import json, os, threading, uuid, time, tempfile, shutil, shlex, sqlite3
+import os
+import json
+import re
+import uuid
+import time
+import tempfile
+import shutil
+import shlex
+import threading
+import logging
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional, Dict, Tuple
+from typing import Optional, List, Dict
 
-from flask import Flask, request, jsonify, send_file
+log = logging.getLogger(__name__)
+
+from flask import Flask, request, jsonify, send_file, redirect
 from flask_cors import CORS
+from flask_login import LoginManager, login_required, current_user
 
-from profiler_backend import (
+# 导入配置和模型
+from backend import Config
+from models import db, User
+from api import register_blueprints
+
+# 导入后端模块
+from backend import (
     ClusterConfig, PodTarget, KubectlExecutor,
     ArthasAgentManager, ArthasConnection, ProfilerWorkflow,
     ARTHAS_DEFAULT_JAR,
-)
-from pod_monitor import (
-    KubectlRunner, collect_pod_snapshot,
+    collect_pod_snapshot,
     get_metrics_history, start_metrics_polling, stop_metrics_polling,
 )
 
-# ─────────────────────────────────────────────────────────────────────────────
-SERVER_VERSION = "2026.03.23"  # 部署版本标识
+# ═══════════════════════════════════════════════════════════════════════════════
+# 应用初始化
+# ═══════════════════════════════════════════════════════════════════════════════
 
 app = Flask(__name__,
-    static_folder='static',
-    static_url_path='/static',
+    static_folder=Config.STATIC_FOLDER,
+    static_url_path=Config.STATIC_URL_PATH,
 )
-CORS(app)
+app.secret_key = Config.SECRET_KEY
+CORS(app, supports_credentials=True, resources={r"/api/*": {
+    "origins": os.environ.get('CORS_ORIGINS', 'http://127.0.0.1:5001,http://localhost:5001').split(','),
+    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+}})
 
-@app.errorhandler(Exception)
-def handle_exception(e):
-    """全局异常处理 - 确保任何未捕获异常都返回 JSON 而不是关闭连接"""
-    import traceback
-    traceback.print_exc()
-    return jsonify({"error": str(e), "type": type(e).__name__}), 500
+# Flask-Login 配置
+login_manager = LoginManager(app)
+login_manager.login_view = 'login_page'
 
-# ── 路径初始化（基于 server.py 文件位置，不依赖启动时工作目录）─────────────────
-_BASE_DIR     = Path(__file__).parent
-OUTPUT_DIR    = _BASE_DIR / "profiler_output"
-CLUSTERS_FILE = _BASE_DIR / "clusters.json"
-DB_FILE       = _BASE_DIR / "arthas.db"
+
+@login_manager.unauthorized_handler
+def unauthorized():
+    """未登录时：API 请求返回 JSON 401，页面请求重定向到登录页"""
+    if request.path.startswith('/api/'):
+        return jsonify({"error": "未登录或会话已过期，请重新登录"}), 401
+    return redirect('/login.html')
+
+
+@login_manager.user_loader
+def load_user(user_id: int):
+    """Flask-Login user_loader 回调函数"""
+    return User.get_by_id(user_id)
+
+
+# 注册 API 蓝图
+register_blueprints(app)
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 辅助函数
+# ═══════════════════════════════════════════════════════════════════════════════
+
+OUTPUT_DIR = Path(Config.OUTPUT_DIR)
 OUTPUT_DIR.mkdir(exist_ok=True)
 
-# ── 前端静态文件服务（K8s / Docker 部署时通过 HTTP 访问）──────────────────────
-@app.get('/')
-@app.get('/index.html')
-def serve_index():
-    return send_file(str(_BASE_DIR / 'index.html'))
 
-@app.get('/login.html')
-def serve_login():
-    return send_file(str(_BASE_DIR / 'login.html'))
-
-# ── In-memory state ───────────────────────────────────────────────────────────
-_clusters = {}    # type: Dict[str, ClusterConfig]  # noqa
-_connections = {}   # type: Dict[str, ArthasConnection]  # noqa
-_tasks = {}        # type: Dict[str, Dict]  # noqa
-_lock = threading.Lock()
+def _load_clusters() -> List[Dict]:
+    """加载集群配置（委托给 api/clusters.py 统一实现）"""
+    from api.clusters import _load_clusters as _load
+    return _load()
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Database - SQLite
-# ═════════════════════════════════════════════════════════════════════════════
+def _sync_clusters_to_db():
+    """启动时将 clusters.json 中的集群同步到数据库（仅补充缺失的记录）"""
+    try:
+        clusters = _load_clusters()
+        for c in clusters:
+            if not db.exists('clusters', 'id = ?', (c.get('id', ''),)):
+                db.insert('clusters', {
+                    'id': c.get('id', ''),
+                    'name': c.get('name', ''),
+                    'kubeconfig': c.get('kubeconfig', ''),
+                    'context': c.get('context', ''),
+                })
+    except Exception as e:
+        log.warning("同步 clusters 到数据库失败: %s", e)
 
-def _init_db():
-    """初始化 SQLite 数据库"""
-    conn = sqlite3.connect(str(DB_FILE))
-    cursor = conn.cursor()
 
-    # 连接记录表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS connections (
-            id TEXT PRIMARY KEY,
-            cluster_name TEXT NOT NULL,
-            namespace TEXT NOT NULL,
-            pod_name TEXT NOT NULL,
-            local_port INTEGER,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+def _make_runner(cluster_name: str) -> tuple:
+    """创建 KubectlExecutor"""
+    clusters = _load_clusters()
+    cluster = next((c for c in clusters if c.get('name') == cluster_name), None)
+    if not cluster:
+        return None, "集群不存在"
+    
+    # 非 admin 检查集群访问权限
+    if not current_user.is_admin:
+        user_clusters = db.fetch_all(
+            'SELECT cluster_id FROM user_clusters WHERE user_id = ?',
+            (current_user.id,)
         )
-    ''')
+        allowed = {r['cluster_id'] for r in user_clusters}
+        if cluster.get('id') not in allowed:
+            return None, "无权访问此集群"
+    
+    kubeconfig = cluster.get('kubeconfig', '')
+    context = cluster.get('context', '')
+    return KubectlExecutor(kubeconfig=kubeconfig, context=context), None
 
-    # Arthas 命令历史表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS arthas_commands (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            connection_id TEXT NOT NULL,
-            command TEXT NOT NULL,
-            output TEXT,
-            error TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 页面路由
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/')
+@app.route('/index.html')
+@app.route('/index')
+def index():
+    """根路径 - 未登录重定向到登录页"""
+    if not current_user.is_authenticated:
+        return redirect('/login.html')
+    return app.send_static_file('index.html')
+
+
+@app.route('/login.html')
+@app.route('/login')
+def login_page():
+    """登录页面"""
+    return app.send_static_file('login.html')
+
+
+@app.route('/user-management.html')
+@login_required
+def user_management_page():
+    """用户管理页面（仅管理员）"""
+    return app.send_static_file('user-management.html')
+
+
+@app.route('/audit-logs.html')
+@login_required
+def audit_logs_page():
+    """审计日志页面（仅管理员）"""
+    return app.send_static_file('audit-logs.html')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 保留的后端 API (待迁移的部分)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    """健康检查"""
+    return jsonify({"ok": True, "version": "2026.03.23"})
+
+
+@app.route('/api/contexts', methods=['POST'])
+@login_required
+def get_kube_contexts():
+    """获取 kubeconfig 中的 contexts"""
+    from backend.core.kubectl import KubectlExecutor
+    
+    d = request.json or {}
+    kubeconfig = d.get('kubeconfig', '')
+    
+    if not kubeconfig:
+        return jsonify({"error": "请提供 kubeconfig 路径"}), 400
+    
+    try:
+        runner = KubectlExecutor(kubeconfig=kubeconfig)
+        contexts = runner.get_contexts()
+        current = runner.get_current_context()
+        return jsonify({"contexts": contexts, "current": current})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 集群管理 API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 集群管理端点已移至 api/clusters.py 蓝图
+
+
+@app.route('/api/check', methods=['POST'])
+@login_required
+def check_pod():
+    """检测 Pod 内 Java 进程，返回详细列表供用户选择"""
+    d = request.json or {}
+    runner, err = _make_runner(d.get('cluster_name', ''))
+    if err:
+        return jsonify({"error": err, "java_pid": None}), 400
+    
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    container = d.get('container', '')
+    
+    # 检测 Java 进程 (使用 jps -l 获取进程名)
+    rc, out, _ = runner.exec_pod(ns, pod, container, 
+        "jps -l 2>/dev/null || ps -ef 2>/dev/null | grep java | grep -v grep", timeout=10)
+    
+    java_processes = []
+    arthas_keywords = ['arthas', 'arthas-boot', 'as-boot', 'arthas.jar', 'jps', 'sun.tools.jps']
+    
+    for line in out.strip().splitlines():
+        line_lower = line.lower()
+        # 过滤 arthas/jps 相关进程
+        if any(kw in line_lower for kw in arthas_keywords):
+            continue
+        parts = line.strip().split(None, 1)
+        if parts and parts[0].isdigit():
+            pid = parts[0]
+            desc = parts[1] if len(parts) > 1 else "java"
+            java_processes.append({
+                "pid": pid,
+                "description": desc.strip()
+            })
+    
+    # 默认选择第一个进程
+    default_pid = java_processes[0]["pid"] if java_processes else None
+    
+    return jsonify({
+        "cluster_name": d.get('cluster_name'),
+        "namespace": ns,
+        "pod_name": pod,
+        "container": container,
+        "java_pid": default_pid,
+        "java_pids": [p["pid"] for p in java_processes],
+        "java_processes": java_processes,  # 新增：完整进程列表
+        "has_multiple_jvms": len(java_processes) > 1,  # 新增：是否有多个 JVM
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Arthas 连接管理
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 连接状态缓存 (待迁移到数据库)
+# 格式: {conn_id: {"conn": ArthasConnection, "user_id": int}}
+_connections: Dict[str, dict] = {}
+_connections_lock = threading.Lock()
+
+
+def _check_conn_owner(conn_id: str) -> bool:
+    """检查当前用户是否是连接的拥有者（admin 拥有所有权限）"""
+    if current_user.is_admin:
+        return True
+    entry = _connections.get(conn_id)
+    return entry and entry.get('user_id') == current_user.id
+
+
+def _get_conn(conn_id: str):
+    """获取连接对象"""
+    entry = _connections.get(conn_id)
+    return entry.get('conn') if entry else None
+
+
+@app.route('/api/arthas/connect', methods=['POST'])
+@login_required
+def arthas_connect():
+    """创建 Arthas 连接，支持指定 Java PID"""
+    d = request.json or {}
+    cluster_name = d.get('cluster_name', '')
+    namespace = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    container = d.get('container', '')
+    java_pid = d.get('java_pid')  # 新增：用户指定的 Java PID（可选）
+    
+    runner, err = _make_runner(cluster_name)
+    if err:
+        return jsonify({"error": err}), 400
+    
+    conn_id = f"{cluster_name}/{namespace}/{pod}"
+    # 非 admin 的连接 ID 带上 user_id，避免与 admin 或其他用户的连接冲突
+    if not current_user.is_admin:
+        conn_id = f"{cluster_name}/{namespace}/{pod}@u{current_user.id}"
+    
+    # 创建连接
+    target = PodTarget(cluster_name=cluster_name, namespace=namespace, pod_name=pod, container=container)
+    conn = ArthasConnection(runner, target)
+    
+    # 如果用户指定了 PID，设置到 agent manager 中
+    if java_pid:
+        conn.agent_mgr._pid = int(java_pid)
+    
+    try:
+        ok, msg = conn.connect()
+        if not ok:
+            return jsonify({"ok": False, "error": msg}), 400
+        
+        with _connections_lock:
+            _connections[conn_id] = {"conn": conn, "user_id": current_user.id}
+        
+        # 持久化连接到数据库（UPSERT）
+        now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if db.exists('connections', 'id = ?', (conn_id,)):
+            db.update('connections', {
+                'local_port': conn.local_port,
+                'user_id': current_user.id,
+                'updated_at': now_ts,
+            }, 'id = ?', (conn_id,))
+        else:
+            db.insert('connections', {
+                'id': conn_id,
+                'cluster_name': cluster_name,
+                'namespace': namespace,
+                'pod_name': pod,
+                'local_port': conn.local_port,
+                'user_id': current_user.id,
+                'updated_at': now_ts,
+            })
+        
+        from services.audit_service import AuditService
+        AuditService.log_connection_created(current_user.id, conn_id, pod, namespace)
+        
+        return jsonify({
+            "ok": True,
+            "conn_id": conn_id,  # DEPRECATED: use connection_id instead (remove in v2.0)
+            "connection_id": conn_id,
+            "local_port": conn.local_port,
+            "java_pid": conn.java_pid,  # 返回实际连接的 PID
+            "http_url": f"http://localhost:{conn.local_port}",
+            "message": msg
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/arthas/disconnect', methods=['POST'])
+@login_required
+def arthas_disconnect():
+    """断开 Arthas 连接"""
+    d = request.json or {}
+    conn_id = d.get('conn_id', '')
+    
+    if conn_id in _connections:
+        if not _check_conn_owner(conn_id):
+            return jsonify({"state": "FAILED", "message": "无权操作此连接"}), 403
+        with _connections_lock:
+            entry = _connections.pop(conn_id, None)
+        conn = entry.get('conn') if entry else None
+        if conn:
+            conn.disconnect()
+        
+        # 从数据库删除连接记录
+        db.delete('connections', 'id = ?', (conn_id,))
+        
+        # 解析 conn_id
+        parts = conn_id.split('/')
+        if len(parts) >= 3:
+            pod = parts[2]
+            namespace = parts[1]
+            from services.audit_service import AuditService
+            AuditService.log_connection_deleted(current_user.id, conn_id, pod, namespace)
+        
+        return jsonify({"ok": True})
+    
+    return jsonify({"error": "连接不存在"}), 404
+
+
+def _ensure_connection(conn_id: str, d: dict):
+    """确保连接存在，若内存中不存在则自动重建（线程安全）"""
+    with _connections_lock:
+        if conn_id and conn_id in _connections:
+            # 检查连接所有者
+            if not _check_conn_owner(conn_id):
+                return None, "无权操作此连接"
+            return _connections[conn_id].get('conn'), None
+
+    # 从请求参数中提取连接信息并自动重建
+    cluster_name = d.get('cluster_name', '')
+    namespace = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    container = d.get('container', '')
+
+    if not conn_id:
+        conn_id = f"{cluster_name}/{namespace}/{pod}"
+        # 非 admin 的连接 ID 带上 user_id，避免与 admin 或其他用户的连接冲突
+        if not current_user.is_admin:
+            conn_id = f"{cluster_name}/{namespace}/{pod}@u{current_user.id}"
+
+    if not cluster_name or not pod:
+        return None, "连接不存在且缺少连接参数，请重新连接"
+
+    # 检查用户是否有权访问该集群（非 admin 只能连接分配给自己的集群）
+    if not current_user.is_admin:
+        user_clusters = db.fetch_all(
+            'SELECT cluster_id FROM user_clusters WHERE user_id = ?',
+            (current_user.id,)
         )
-    ''')
+        allowed_cluster_ids = {r['cluster_id'] for r in user_clusters}
+        clusters = _load_clusters()
+        target_cluster = next((c for c in clusters if c.get('name') == cluster_name), None)
+        if not target_cluster or target_cluster.get('id') not in allowed_cluster_ids:
+            return None, "无权访问此集群"
 
-    # 采样任务历史表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS profiler_tasks (
-            id TEXT PRIMARY KEY,
-            connection_id TEXT NOT NULL,
-            mode TEXT NOT NULL,
-            event TEXT,
-            duration INTEGER,
-            status TEXT,
-            output_path TEXT,
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
-        )
-    ''')
+    # 尝试自动重建连接
+    runner, err = _make_runner(cluster_name)
+    if err:
+        return None, f"连接已丢失，自动重连失败: {err}"
 
-    # 采样日志表
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS profiler_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            connection_id TEXT NOT NULL,
-            message TEXT NOT NULL,
-            level TEXT DEFAULT 'info',
-            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
-        )
-    ''')
+    target = PodTarget(cluster_name=cluster_name, namespace=namespace, pod_name=pod, container=container)
+    conn = ArthasConnection(runner, target)
+    ok, msg = conn.connect()
+    if not ok:
+        return None, f"连接已丢失，自动重连失败: {msg}"
 
-    conn.commit()
-    conn.close()
+    with _connections_lock:
+        # 双重检查：防止并发时其他线程已经创建
+        if conn_id not in _connections:
+            _connections[conn_id] = {"conn": conn, "user_id": current_user.id}
+            # 持久化到数据库
+            now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            if db.exists('connections', 'id = ?', (conn_id,)):
+                db.update('connections', {
+                    'local_port': conn.local_port,
+                    'user_id': current_user.id,
+                    'updated_at': now_ts,
+                }, 'id = ?', (conn_id,))
+            else:
+                db.insert('connections', {
+                    'id': conn_id,
+                    'cluster_name': cluster_name,
+                    'namespace': namespace,
+                    'pod_name': pod,
+                    'local_port': conn.local_port,
+                    'user_id': current_user.id,
+                    'updated_at': now_ts,
+                })
+        else:
+            # 其他线程已创建，关闭我们新建的连接
+            conn.disconnect()
+            conn = _connections[conn_id].get('conn')
+    log.info("Auto-reconnected: %s", conn_id)
+    return conn, None
 
-def _get_db():
-    """获取数据库连接"""
-    conn = sqlite3.connect(str(DB_FILE), timeout=10)
-    conn.row_factory = sqlite3.Row  # 返回字典格式
-    return conn
 
-def _save_connection(conn_id: str, cluster_name: str, namespace: str, pod_name: str, local_port: int):
-    """保存或更新连接记录"""
-    conn = _get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO connections (id, cluster_name, namespace, pod_name, local_port, updated_at)
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    ''', (conn_id, cluster_name, namespace, pod_name, local_port))
-    conn.commit()
-    conn.close()
+@app.route('/api/arthas/exec', methods=['POST'])
+@login_required
+def arthas_exec():
+    """执行 Arthas 命令"""
+    d = request.json or {}
+    # DEPRECATED: conn_id parameter support (remove in v2.0)
+    conn_id = d.get('conn_id') or d.get('connection_id') or ''
+    command = d.get('command', '').strip()
 
-def _get_connection(conn_id: str) -> Optional[dict]:
-    """获取连接信息"""
-    conn = _get_db()
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM connections WHERE id = ?', (conn_id,))
-    row = cursor.fetchone()
-    conn.close()
-    return dict(row) if row else None
+    conn, err = _ensure_connection(conn_id, d)
+    if err:
+        return jsonify({"state": "FAILED", "message": err}), 404
+
+    try:
+        result = conn.http_client.exec_once(command)
+        
+        # 保存命令历史
+        _save_arthas_command(conn_id, command, json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else str(result), '')
+        
+        # 直接透传 Arthas HTTP API 原始响应，前端 renderRes 依赖 state/body 结构
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"state": "FAILED", "message": str(e)}), 500
+
 
 def _save_arthas_command(conn_id: str, command: str, output: str = None, error: str = None):
     """保存 Arthas 命令历史"""
-    conn = _get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO arthas_commands (connection_id, command, output, error)
-        VALUES (?, ?, ?, ?)
-    ''', (conn_id, command, output, error))
-    conn.commit()
-    conn.close()
-
-def _get_arthas_commands(conn_id: str, limit: int = 100) -> List[Dict]:
-    """获取连接的命令历史"""
-    conn = _get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT command, output, error, timestamp
-        FROM arthas_commands
-        WHERE connection_id = ?
-        ORDER BY timestamp DESC
-        LIMIT ?
-    ''', (conn_id, limit))
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-def _save_profiler_log(conn_id: str, message: str, level: str = 'info'):
-    """保存采样日志"""
-    conn = _get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        INSERT INTO profiler_logs (connection_id, message, level)
-        VALUES (?, ?, ?)
-    ''', (conn_id, message, level))
-    conn.commit()
-    conn.close()
-
-def _get_profiler_logs(conn_id: str, limit: int = 1000) -> List[Dict]:
-    """获取连接的采样日志"""
-    conn = _get_db()
-    cursor = conn.cursor()
-    cursor.execute('''
-        SELECT id, message, level, timestamp
-        FROM profiler_logs
-        WHERE connection_id = ?
-        ORDER BY timestamp ASC
-        LIMIT ?
-    ''', (conn_id, limit))
-    rows = cursor.fetchall()
-    conn.close()
-    return [dict(row) for row in rows]
-
-def _clear_profiler_logs(conn_id: str):
-    """清空连接的采样日志"""
-    conn = _get_db()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM profiler_logs WHERE connection_id = ?', (conn_id,))
-    conn.commit()
-    conn.close()
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Helpers
-# ═════════════════════════════════════════════════════════════════════════════
-
-def _conn_key(cluster: str, ns: str, pod: str) -> str:
-    return f"{cluster}/{ns}/{pod}"
-
-def _load_clusters():
-    if CLUSTERS_FILE.exists():
-        try:
-            for item in json.loads(CLUSTERS_FILE.read_text(encoding='utf-8')):
-                c = ClusterConfig(**item)
-                # 清理旧版本遗留的 __tmp__ 临时集群记录
-                if c.name == '__tmp__':
-                    continue
-                _clusters[c.name] = c
-        except Exception:
-            pass
-
-def _save_clusters():
-    """Save clusters config - atomic write to avoid corruption on Linux."""
-    data = [{"name": c.name, "kubeconfig": c.kubeconfig, "context": c.context}
-            for c in _clusters.values()]
-    content_str = json.dumps(data, ensure_ascii=False, indent=2)
-    # Atomic write: write to temp file then rename (safe on Linux)
-    tmp = CLUSTERS_FILE.with_suffix('.tmp')
-    tmp.write_text(content_str, encoding='utf-8')
-    tmp.replace(CLUSTERS_FILE)
-
-def _make_executor(cluster_name: str):
-    """Return (KubectlExecutor, error_str)"""
-    c = _clusters.get(cluster_name)
-    if not c:
-        return None, f"集群 '{cluster_name}' 不存在"
-    return KubectlExecutor(c.kubeconfig, c.context), ""
-
-def _make_runner(cluster_name: str):
-    """Return (KubectlRunner, error_str) — used by pod_monitor"""
-    c = _clusters.get(cluster_name)
-    if not c:
-        return None, f"集群 '{cluster_name}' 不存在"
-    return KubectlRunner(c.kubeconfig, c.context), ""
-
-def _get_or_create_connection(d: dict):
-    """Parse request body → return (ArthasConnection, error_str)"""
-    cluster_name = d.get("cluster_name", "")
-    c = _clusters.get(cluster_name)
-    if not c:
-        return None, f"集群 '{cluster_name}' 不存在"
-    ns  = d.get("namespace", "default")
-    pod = d.get("pod_name", "")
-    if not pod:
-        return None, "pod_name 必填"
-
-    key = _conn_key(cluster_name, ns, pod)
-    with _lock:
-        if key not in _connections:
-            target = PodTarget(
-                cluster_name = cluster_name,
-                namespace    = ns,
-                pod_name     = pod,
-                container    = d.get("container", ""),
-                arthas_jar   = d.get("arthas_jar", ARTHAS_DEFAULT_JAR),
-                arthas_http_port   = int(d.get("arthas_http_port", 8563)),
-                arthas_telnet_port = int(d.get("arthas_telnet_port", 3658)),
-            )
-            executor = KubectlExecutor(c.kubeconfig, c.context)
-            _connections[key] = ArthasConnection(executor, target)
-    return _connections[key], ""
-
-_load_clusters()
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Health
-# ═════════════════════════════════════════════════════════════════════════════
-
-@app.get("/api/health")
-def health():
-    return jsonify({
-        "ok": True,
-        "version": globals().get("SERVER_VERSION", "unknown"),
-        "time": datetime.now().isoformat(),
-        "clusters": list(_clusters.keys()),
-        "clusters_file": str(CLUSTERS_FILE),
+    user_id = current_user.id if current_user.is_authenticated else None
+    db.insert('arthas_commands', {
+        'connection_id': conn_id,
+        'user_id': user_id,
+        'command': command,
+        'output': output,
+        'error': error
     })
 
-@app.post("/api/debug/put_test")
-def debug_put_test():
-    """调试接口：测试 PUT 请求体解析，帮助排查 ERR_EMPTY_RESPONSE"""
-    try:
-        raw = request.get_data(as_text=False)
-        d = json.loads(raw.decode("utf-8")) if raw else {}
-        return jsonify({"ok": True, "received": d, "raw_len": len(raw)})
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Cluster management
-# ═════════════════════════════════════════════════════════════════════════════
-
-@app.get("/api/clusters")
-def list_clusters():
-    return jsonify([
-        {"name": c.name, "kubeconfig": c.kubeconfig, "context": c.context}
-        for c in _clusters.values()
-    ])
-
-@app.post("/api/clusters")
-def add_cluster():
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    try:
-        # 优先使用 request.get_json()，它不会消费请求流
-        d = {}
-        try:
-            d = request.get_json(force=True, silent=True) or {}
-            logger.info(f"[add_cluster] parsed JSON: {d}")
-        except Exception as e:
-            logger.error(f"[add_cluster] JSON parse error: {e}")
-            raw = request.get_data(as_text=False)
-            if raw:
-                d = json.loads(raw.decode("utf-8"))
-        
-        name = str(d.get("name", "")).strip()
-        kc   = str(d.get("kubeconfig", "")).strip()
-        ctx  = str(d.get("context", "")).strip()
-        logger.info(f"[add_cluster] name={name}, kc={kc}, ctx={ctx}")
-        if not name or not kc:
-            return jsonify({"error": "name 和 kubeconfig 必填"}), 400
-        if not os.path.exists(kc):
-            # 提供更详细的错误信息
-            import platform
-            system = platform.system()
-            hint = ""
-            if system == "Linux" and (kc.startswith("C:") or kc.startswith("D:") or "\\" in kc):
-                hint = " (看起来是 Windows 路径，请使用 Linux 路径如 /root/.kube/config)"
-            elif system == "Windows" and kc.startswith("/"):
-                hint = " (看起来是 Linux 路径，请使用 Windows 路径如 C:\\Users\\...)"
-            return jsonify({"error": f"kubeconfig 文件不存在: {kc}{hint}"}), 400
-        _clusters[name] = ClusterConfig(name=name, kubeconfig=kc, context=ctx)
-        if name != '__tmp__':
-            _save_clusters()
-        return jsonify({"ok": True})
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({"error": f"添加失败: {str(e)}"}), 500
-
-@app.get("/api/clusters/<path:name>")
-def get_cluster(name: str):
-    """获取单个集群详情"""
-    # Flask 3.x 会自动解码 path 参数，不需要再调用 unquote
-    c = _clusters.get(name)
-    if not c:
-        return jsonify({"error": f"集群 '{name}' 不存在"}), 404
-    return jsonify({"name": c.name, "kubeconfig": c.kubeconfig, "context": c.context})
-
-@app.route("/api/clusters/<path:name>", methods=["PUT", "POST"])
-def update_cluster(name: str):
-    """Update cluster config (context switch, rename, etc.)
-    同时支持 PUT 和 POST，避免某些代理/防火墙拦截 PUT 请求
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-    
-    logger.info(f"[update_cluster] method={request.method}, URL name={name}, repr={repr(name)}")
-    logger.info(f"[update_cluster] _clusters keys={[repr(k) for k in _clusters.keys()]}")
-    logger.info(f"[update_cluster] request headers: {dict(request.headers)}")
-    
-    try:
-        # 解析请求体
-        d = request.get_json(force=True, silent=True) or {}
-        logger.info(f"[update_cluster] request JSON: {d}")
-        
-        if not d:
-            return jsonify({"error": "请求体为空"}), 400
-
-        # 查找集群 - 尝试多种匹配方式
-        old = _clusters.get(name)
-        
-        # 如果没找到，尝试其他方式匹配
-        if not old:
-            for key in _clusters.keys():
-                if key.strip() == name.strip():
-                    old = _clusters[key]
-                    logger.info(f"[update_cluster] matched by strip: '{key}'")
-                    break
-        
-        if not old:
-            logger.error(f"[update_cluster] Cluster '{name}' not found")
-            return jsonify({"error": f"集群 '{name}' 不存在", "available": list(_clusters.keys())}), 404
-
-        new_name = str(d.get("name", old.name)).strip()
-        new_kc   = str(d.get("kubeconfig", old.kubeconfig)).strip()
-        new_ctx  = str(d.get("context",   old.context)).strip()
-
-        if not new_name or not new_kc:
-            return jsonify({"error": "名称和 kubeconfig 路径不能为空"}), 400
-
-        # 检查 kubeconfig 文件是否存在（始终检查，避免 Windows 路径在 Linux 上导致问题）
-        if not os.path.exists(new_kc):
-            # 提供更详细的错误信息
-            import platform
-            system = platform.system()
-            hint = ""
-            if system == "Linux" and (new_kc.startswith("C:") or new_kc.startswith("D:") or "\\" in new_kc):
-                hint = " (看起来是 Windows 路径，请使用 Linux 路径如 /root/.kube/config)"
-            elif system == "Windows" and new_kc.startswith("/"):
-                hint = " (看起来是 Linux 路径，请使用 Windows 路径如 C:\\Users\\...)"
-            return jsonify({"error": f"kubeconfig 文件不存在: {new_kc}{hint}"}), 400
-
-        if new_name != name:
-            _clusters.pop(name, None)
-        _clusters[new_name] = ClusterConfig(name=new_name, kubeconfig=new_kc, context=new_ctx)
-        _save_clusters()
-        return jsonify({"ok": True, "name": new_name})
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({"error": f"保存失败: {str(e)}"}), 500
-
-@app.route("/api/clusters/<path:name>", methods=["DELETE"])
-def del_cluster(name: str):
-    # Flask 3.x 会自动解码 path 参数
-    try:
-        _clusters.pop(name, None)
-        _save_clusters()
-        return jsonify({"ok": True})
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({"error": str(e)}), 500
-
-@app.post("/api/clusters/<path:name>/test")
-def test_cluster(name: str):
-    # Flask 3.x 会自动解码 path 参数
-    try:
-        ex, err = _make_executor(name)
-        if not ex:
-            return jsonify({"ok": False, "error": err}), 404
-        ok, info    = ex.cluster_info()
-        contexts    = ex.get_contexts()
-        current_ctx = ex.get_current_context()
-        return jsonify({
-            "ok": ok, "info": info,
-            "contexts": contexts,
-            "current_context": current_ctx,
-        })
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-@app.get("/api/clusters/<path:name>/namespaces")
-def get_namespaces(name: str):
-    # Flask 3.x 会自动解码 path 参数
-    ex, err = _make_executor(name)
-    if not ex:
-        return jsonify({"namespaces": [], "error": err})
-    return jsonify({"namespaces": ex.get_namespaces()})
-
-@app.get("/api/clusters/<path:name>/pods")
-def get_pods(name: str):
-    # Flask 3.x 会自动解码 path 参数
-    ex, err = _make_executor(name)
-    ns = request.args.get("namespace", "default")
-    if not ex:
-        return jsonify({"pods": [], "error": err})
-    return jsonify({"pods": ex.get_pods(ns)})
-
-@app.get("/api/clusters/<path:name>/contexts")
-def get_contexts_api(name: str):
-    # Flask 3.x 会自动解码 path 参数
-    ex, err = _make_executor(name)
-    if not ex:
-        return jsonify({"contexts": [], "current": "", "error": err})
-    return jsonify({
-        "contexts": ex.get_contexts(),
-        "current":  ex.get_current_context(),
-    })
-
-@app.post("/api/contexts")
-def get_contexts_by_kubeconfig():
-    """
-    根据 kubeconfig 路径直接返回 contexts，不创建/保存任何集群配置。
-    替代旧的 __tmp__ 临时集群方案，避免 ERR_EMPTY_RESPONSE。
-    """
-    d  = request.json or {}
-    kc = d.get("kubeconfig", "").strip()
-    if not kc:
-        return jsonify({"error": "kubeconfig 必填"}), 400
-    if not os.path.exists(kc):
-        return jsonify({"error": f"kubeconfig 文件不存在: {kc}"}), 400
-    try:
-        ex = KubectlExecutor(kc, "")
-        return jsonify({
-            "contexts": ex.get_contexts(),
-            "current":  ex.get_current_context(),
-        })
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Pod quick-check (no Arthas needed)
-# ═════════════════════════════════════════════════════════════════════════════
-
-@app.post("/api/check")
-def check_pod():
-    d   = request.json
-    ex, err = _make_executor(d.get("cluster_name", ""))
-    if not ex:
-        return jsonify({"ok": False, "error": err}), 400
-
-    ns  = d.get("namespace", "default")
-    pod = d.get("pod_name", "")
-    phase = ex.get_pod_phase(ns, pod)
-    ok    = phase == "Running"
-
-    # Also find Java PID without starting Arthas
-    java_pid = None
-    if ok:
-        mgr = ArthasAgentManager(ex, PodTarget(
-            cluster_name = d.get("cluster_name", ""),
-            namespace    = ns,
-            pod_name     = pod,
-            container    = d.get("container", ""),
-            arthas_jar   = d.get("arthas_jar", ARTHAS_DEFAULT_JAR),
-        ))
-        java_pid = mgr.find_java_pid()
-
-    return jsonify({
-        "ok":      ok,
-        "phase":   phase or "Unknown",
-        "java_pid": java_pid,
-        "message": f"Pod {phase or 'Unknown'}" + (f"  Java PID={java_pid}" if java_pid else "  未找到 Java 进程"),
-    })
-
-# needed by ArthasAgentManager in /api/check
-from profiler_backend import ArthasAgentManager
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Arthas connection
-# ═════════════════════════════════════════════════════════════════════════════
-
-@app.post("/api/arthas/connect")
-def arthas_connect():
-    d    = request.json
-    conn, err = _get_or_create_connection(d)
-    if not conn:
-        return jsonify({"ok": False, "error": err}), 400
-
-    # Update target fields in case caller passes new values
-    conn.target.container  = d.get("container",  conn.target.container)
-    conn.target.arthas_jar = d.get("arthas_jar", conn.target.arthas_jar)
-
-    # Already alive?
-    if conn.is_alive():
-        # 保存连接信息到数据库
-        conn_id = d.get("connection_id", str(int(time.time() * 1000)))
-        _save_connection(conn_id, d["cluster_name"], d["namespace"], d["pod_name"], conn.local_port)
-        return jsonify({
-            "ok": True,
-            "message": "已连接",
-            "local_port": conn.local_port,
-            "connection_id": conn_id
-        })
-
-    ok, msg = conn.connect()
-    if ok:
-        # 保存连接信息到数据库
-        conn_id = d.get("connection_id", str(int(time.time() * 1000)))
-        _save_connection(conn_id, d["cluster_name"], d["namespace"], d["pod_name"], conn.local_port)
-        return jsonify({
-            "ok": True, "message": msg,
-            "local_port": conn.local_port,
-            "connection_id": conn_id
-        })
-    return jsonify({
-        "ok": False, "message": msg,
-        "local_port": 0,
-    })
-
-@app.post("/api/arthas/disconnect")
-def arthas_disconnect():
-    d = request.json
-    key = _conn_key(d.get("cluster_name",""), d.get("namespace","default"), d.get("pod_name",""))
-    with _lock:
-        conn = _connections.pop(key, None)
-    if conn:
-        conn.disconnect()
-    return jsonify({"ok": True})
-
-@app.post("/api/arthas/status")
+@app.route('/api/arthas/status', methods=['POST'])
+@login_required
 def arthas_status():
-    d   = request.json
-    key = _conn_key(d.get("cluster_name",""), d.get("namespace","default"), d.get("pod_name",""))
-    with _lock:
-        conn = _connections.get(key)
+    """获取 Arthas 连接状态"""
+    d = request.json or {}
+    conn_id = d.get('conn_id') or d.get('connection_id') or ''
+    
+    conn = _get_conn(conn_id)
     if not conn:
         return jsonify({"connected": False})
+    
+    if not _check_conn_owner(conn_id):
+        return jsonify({"connected": False, "message": "无权访问此连接"})
+    
     return jsonify({
-        "connected":  conn.is_alive(),
-        "local_port": conn.local_port,
-        "java_pid":   conn.java_pid,
+        "connected": conn.is_alive() if hasattr(conn, 'is_alive') else True,
+        "local_port": conn.local_port if hasattr(conn, 'local_port') else 0,
+        "java_pid": conn.java_pid if hasattr(conn, 'java_pid') else None,
     })
 
-# ── One-shot command ──────────────────────────────────────────────────────────
 
-@app.post("/api/arthas/exec")
-def arthas_exec():
-    d    = request.json
-    conn, err = _get_or_create_connection(d)
-    if not conn:
-        return jsonify({"state": "FAILED", "message": err}), 400
-    if not conn.client:
-        return jsonify({"state": "FAILED", "message": "未连接，请先调用 /api/arthas/connect"}), 400
-
-    conn_id = d.get("connection_id", "")
-    command = d.get("command", "")
-
-    try:
-        resp = conn.client.exec_once(command, int(d.get("timeout_ms", 30000)))
-
-        # 保存命令历史到数据库
-        if conn_id and command:
-            output = resp.get("response", "")
-            error = resp.get("message", "") if resp.get("state") == "FAILED" else None
-            _save_arthas_command(conn_id, command, output, error)
-
-        return jsonify(resp)
-    except Exception as e:
-        if conn_id and command:
-            _save_arthas_command(conn_id, command, None, str(e))
-        return jsonify({"state": "FAILED", "message": str(e)}), 500
-
-# ── Session commands ──────────────────────────────────────────────────────────
-
-@app.post("/api/arthas/session/create")
-def session_create():
-    d = request.json
-    conn, err = _get_or_create_connection(d)
-    if not conn:
-        return jsonify({"state": "FAILED", "message": err}), 400
-    if not conn.client:
-        return jsonify({"state": "FAILED", "message": "未连接"}), 400
-    try:
-        return jsonify(conn.client.init_session())
-    except Exception as e:
-        return jsonify({"state": "FAILED", "message": str(e)}), 500
-
-@app.post("/api/arthas/session/exec")
-def session_exec():
-    d = request.json
-    conn, err = _get_or_create_connection(d)
-    if not conn or not conn.client:
-        return jsonify({"state": "FAILED", "message": err or "未连接"}), 400
-    try:
-        return jsonify(conn.client.exec_async(d.get("session_id",""), d.get("command","")))
-    except Exception as e:
-        return jsonify({"state": "FAILED", "message": str(e)}), 500
-
-@app.post("/api/arthas/session/pull")
-def session_pull():
-    d = request.json
-    conn, err = _get_or_create_connection(d)
-    if not conn or not conn.client:
-        return jsonify({"state": "FAILED", "message": err or "未连接"}), 400
-    try:
-        return jsonify(conn.client.pull_results(d.get("session_id",""), d.get("consumer_id","")))
-    except Exception as e:
-        return jsonify({"state": "FAILED", "message": str(e)}), 500
-
-@app.post("/api/arthas/session/interrupt")
-def session_interrupt():
-    d = request.json
-    conn, err = _get_or_create_connection(d)
-    if not conn or not conn.client:
-        return jsonify({"state": "FAILED", "message": err or "未连接"}), 400
-    try:
-        return jsonify(conn.client.interrupt_job(d.get("session_id","")))
-    except Exception as e:
-        return jsonify({"state": "FAILED", "message": str(e)}), 500
-
-@app.post("/api/arthas/session/close")
-def session_close():
-    d = request.json
-    conn, err = _get_or_create_connection(d)
-    if not conn or not conn.client:
-        return jsonify({"state": "FAILED", "message": err or "未连接"}), 400
-    try:
-        return jsonify(conn.client.close_session(d.get("session_id","")))
-    except Exception as e:
-        return jsonify({"state": "FAILED", "message": str(e)}), 500
+@app.route('/api/arthas/connections/check', methods=['POST'])
+@login_required
+def check_connections_health():
+    """批量检查连接列表的健康状态，检测 Pod 是否存在、Arthas 是否存活"""
+    d = request.json or {}
+    conn_list = d.get('connections', [])  # [{id, cluster_name, namespace, pod_name}, ...]
+    
+    results = {}
+    for c in conn_list:
+        conn_id = c.get('id', '')
+        cluster_name = c.get('cluster_name', '')
+        namespace = c.get('namespace', '')
+        pod_name = c.get('pod_name', '')
+        
+        status = {'alive': False, 'pod_exists': None, 'reason': ''}
+        
+        # 1. 检查后端内存中的连接是否存活
+        conn = _get_conn(conn_id)
+        if conn:
+            try:
+                status['alive'] = conn.is_alive() if hasattr(conn, 'is_alive') else True
+            except Exception:
+                status['alive'] = False
+            if not status['alive']:
+                status['reason'] = 'arthas_unreachable'
+        
+        # 2. 检查 Pod 是否存在（kubectl get pod）
+        if cluster_name and namespace and pod_name:
+            try:
+                runner, err = _make_runner(cluster_name)
+                if not err:
+                    rc, out, _ = runner._run(
+                        ["get", "pod", pod_name, "-n", namespace,
+                         "-o", "jsonpath={.status.phase}"],
+                        timeout=8
+                    )
+                    if rc == 0 and out.strip():
+                        phase = out.strip()
+                        status['pod_exists'] = True
+                        status['pod_phase'] = phase
+                        if phase not in ('Running',):
+                            status['reason'] = f'pod_{phase.lower()}'
+                    else:
+                        status['pod_exists'] = False
+                        status['reason'] = 'pod_not_found'
+                else:
+                    status['pod_exists'] = None
+                    status['reason'] = 'cluster_unavailable'
+            except Exception as e:
+                status['pod_exists'] = None
+                status['reason'] = f'check_error: {str(e)[:80]}'
+        
+        results[conn_id] = status
+    
+    return jsonify({'results': results})
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# JProfiler async tasks
-# ═════════════════════════════════════════════════════════════════════════════
-
-@app.post("/api/profile/start")
-def profile_start():
-    d    = request.json
-    import logging as _lg
-    _lg.getLogger(__name__).info(
-        "profile/start: mode=%s event=%s fmt=%s dur=%s jfr_name=%s",
-        d.get("mode"), d.get("event"), d.get("format"),
-        d.get("duration"), d.get("jfr_name"),
-    )
-
-    conn, err = _get_or_create_connection(d)
-    if not conn:
-        return jsonify({"error": err}), 400
-
-    mode     = (d.get("mode") or "profiler").strip()
-    event    = (d.get("event") or "cpu").strip()
-    fmt      = (d.get("format") or "html").strip()
-    duration = int(d.get("duration") or 60)
-
-    task_id = f"task_{datetime.now().strftime('%H%M%S')}_{uuid.uuid4().hex[:6]}"
-    wf      = ProfilerWorkflow(conn)
-
-    with _lock:
-        _tasks[task_id] = {
-            "id":         task_id,
-            "wf":         wf,
-            "status":     "starting",
-            "created_at": datetime.now().isoformat(),
-            "config": {
-                "cluster":   d.get("cluster_name"),
-                "pod":       d.get("pod_name"),
-                "namespace": d.get("namespace", "default"),
-                "duration":  duration,
-                "format":    fmt,
-                "mode":      mode,
-                "event":     event,
-            },
-        }
-
-    def _run():
-        result = wf.run(
-            duration     = duration,
-            fmt          = fmt,
-            output_dir   = str(OUTPUT_DIR),
-            mode         = mode,
-            event        = event,
-            jfr_name     = d.get("jfr_name", "arthas-jfr"),
-            jfr_settings = d.get("jfr_settings", "default"),
-            jfr_file     = d.get("jfr_file", ""),
-            heap_file    = d.get("heap_file", "/tmp/heap.hprof"),
-            heap_live    = d.get("heap_live", True),
-        )
-        with _lock:
-            _tasks[task_id]["status"] = result.get("status", "failed")
-
-    threading.Thread(target=_run, daemon=True).start()
-    return jsonify({"task_id": task_id})
-
-@app.get("/api/arthas/commands")
+@app.route('/api/arthas/commands', methods=['GET'])
+@login_required
 def get_arthas_commands():
-    """获取连接的 Arthas 命令历史"""
-    conn_id = request.args.get("connection_id")
-    limit = int(request.args.get("limit", 100))
+    """获取 Arthas 命令历史"""
+    conn_id = request.args.get('connection_id', '')
+    limit = int(request.args.get('limit', 100))
+    
     if not conn_id:
-        return jsonify({"error": "Missing connection_id"}), 400
+        return jsonify({"error": "connection_id 必填"}), 400
+    
+    # 非 admin 只能查看自己的命令历史
+    if current_user.is_admin:
+        commands = db.fetch_all(
+            'SELECT command, output, error, timestamp FROM arthas_commands WHERE connection_id = ? ORDER BY timestamp DESC LIMIT ?',
+            (conn_id, limit)
+        )
+    else:
+        commands = db.fetch_all(
+            'SELECT command, output, error, timestamp FROM arthas_commands WHERE connection_id = ? AND user_id = ? ORDER BY timestamp DESC LIMIT ?',
+            (conn_id, current_user.id, limit)
+        )
+    return jsonify({"ok": True, "commands": [dict(c) for c in (commands or [])]})
+
+
+# ── Arthas Session 命令 ─────────────────────────────────────────────────────────
+
+@app.route('/api/arthas/session/create', methods=['POST'])
+@login_required
+def arthas_session_create():
+    """创建 Arthas 会话"""
+    d = request.json or {}
+    conn_id = d.get('conn_id') or d.get('connection_id') or ''
+    
+    conn, err = _ensure_connection(conn_id, d)
+    if err:
+        return jsonify({"state": "FAILED", "message": err}), 400
+    
+    if not conn or not hasattr(conn, 'http_client') or not conn.http_client:
+        return jsonify({"state": "FAILED", "message": "未连接"}), 400
+    
     try:
-        commands = _get_arthas_commands(conn_id, limit)
-        return jsonify({"ok": True, "commands": commands})
+        result = conn.http_client.init_session() if hasattr(conn.http_client, 'init_session') else {"state": "FAILED", "message": "不支持会话模式"}
+        return jsonify(result)
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"state": "FAILED", "message": str(e)}), 500
 
-@app.get("/api/profile")
-def list_profiles():
-    with _lock:
-        tasks = list(_tasks.values())
-    return jsonify([{
-        "id":         t["id"],
-        "config":     t["config"],
-        "status":     t["wf"].result.get("status", "?"),
-        "created_at": t["created_at"],
-        "has_file":   bool(t["wf"].result.get("local_file")),
-        "file_name":  os.path.basename(t["wf"].result.get("local_file", "")) if t["wf"].result.get("local_file") else None,
-    } for t in reversed(tasks)])
 
-@app.get("/api/profile/<task_id>")
-def profile_status(task_id: str):
-    with _lock:
-        t = _tasks.get(task_id)
-    if not t:
-        return jsonify({"error": "不存在"}), 404
-    return jsonify({"id": task_id, "config": t["config"],
-                    "created_at": t["created_at"], **t["wf"].snapshot()})
+@app.route('/api/arthas/session/exec', methods=['POST'])
+@login_required
+def arthas_session_exec():
+    """在会话中执行命令"""
+    d = request.json or {}
+    conn_id = d.get('conn_id') or d.get('connection_id') or ''
+    session_id = d.get('session_id', '')
+    command = d.get('command', '')
+    
+    conn, err = _ensure_connection(conn_id, d)
+    if err or not conn or not hasattr(conn, 'http_client'):
+        return jsonify({"state": "FAILED", "message": err or "未连接"}), 400
+    
+    try:
+        result = conn.http_client.exec_async(session_id, command) if hasattr(conn.http_client, 'exec_async') else {"state": "FAILED", "message": "不支持会话模式"}
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"state": "FAILED", "message": str(e)}), 500
 
-@app.post("/api/profile/<task_id>/cancel")
-def profile_cancel(task_id: str):
-    with _lock:
-        t = _tasks.get(task_id)
-    if t:
-        t["wf"].cancel()
-    return jsonify({"ok": True})
 
-@app.get("/api/profile/<task_id>/download")
-def profile_download(task_id: str):
-    with _lock:
-        t = _tasks.get(task_id)
-    if not t:
-        return jsonify({"error": "不存在"}), 404
-    lf = t["wf"].result.get("local_file", "")
-    if not lf or not os.path.exists(lf):
-        return jsonify({"error": "文件不存在"}), 404
-    return send_file(lf, as_attachment=True, download_name=os.path.basename(lf))
+@app.route('/api/arthas/session/pull', methods=['POST'])
+@login_required
+def arthas_session_pull():
+    """拉取会话输出"""
+    d = request.json or {}
+    conn_id = d.get('conn_id') or d.get('connection_id') or ''
+    session_id = d.get('session_id', '')
+    consumer_id = d.get('consumer_id', '')
+    
+    conn, err = _ensure_connection(conn_id, d)
+    if err or not conn or not hasattr(conn, 'http_client'):
+        return jsonify({"state": "FAILED", "message": err or "未连接"}), 400
+    
+    try:
+        result = conn.http_client.pull_results(session_id, consumer_id) if hasattr(conn.http_client, 'pull_results') else {"state": "FAILED", "message": "不支持会话模式"}
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"state": "FAILED", "message": str(e)}), 500
 
-# ── 采样日志 API ────────────────────────────────────────────────────────────────
-@app.post("/api/profile/logs")
+
+@app.route('/api/arthas/session/interrupt', methods=['POST'])
+@login_required
+def arthas_session_interrupt():
+    """中断会话命令"""
+    d = request.json or {}
+    conn_id = d.get('conn_id') or d.get('connection_id') or ''
+    session_id = d.get('session_id', '')
+    
+    conn, err = _ensure_connection(conn_id, d)
+    if err or not conn or not hasattr(conn, 'http_client'):
+        return jsonify({"state": "FAILED", "message": err or "未连接"}), 400
+    
+    try:
+        result = conn.http_client.interrupt_job(session_id) if hasattr(conn.http_client, 'interrupt_job') else {"state": "FAILED", "message": "不支持会话模式"}
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"state": "FAILED", "message": str(e)}), 500
+
+
+@app.route('/api/arthas/session/close', methods=['POST'])
+@login_required
+def arthas_session_close():
+    """关闭会话"""
+    d = request.json or {}
+    conn_id = d.get('conn_id') or d.get('connection_id') or ''
+    session_id = d.get('session_id', '')
+    
+    conn, err = _ensure_connection(conn_id, d)
+    if err or not conn or not hasattr(conn, 'http_client'):
+        return jsonify({"state": "FAILED", "message": err or "未连接"}), 400
+    
+    try:
+        result = conn.http_client.close_session(session_id) if hasattr(conn.http_client, 'close_session') else {"state": "FAILED", "message": "不支持会话模式"}
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"state": "FAILED", "message": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 性能分析任务
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/profile/start', methods=['POST'])
+@login_required
+def start_profiler():
+    """启动性能分析任务"""
+    d = request.json or {}
+    # DEPRECATED: conn_id parameter support (remove in v2.0)
+    conn_id = d.get('conn_id') or d.get('connection_id') or ''
+    task_type = d.get('type', 'profiler')  # profiler/jfr/threaddump/heapdump
+    duration = int(d.get('duration', 60))
+    fmt = d.get('format', 'html')  # html/collapsed/jfr
+    event = d.get('event', 'cpu')
+    
+    conn, err = _ensure_connection(conn_id, d)
+    if err:
+        return jsonify({"state": "FAILED", "message": err}), 404
+
+    conn_id = conn_id or f"{d.get('cluster_name','')}/{d.get('namespace','default')}/{d.get('pod_name','')}"
+    
+    # 检查同一连接是否已有运行中的任务（防止重复提交）
+    running_task = db.fetch_one(
+        'SELECT id, type, event, created_at FROM profiler_tasks WHERE connection_id = ? AND status IN (?, ?) LIMIT 1',
+        (conn_id, 'running', 'starting')
+    )
+    if running_task:
+        return jsonify({
+            "state": "FAILED", 
+            "message": f"该连接已有运行中的任务 (ID: {running_task['id']}, 类型: {running_task['type']}/{running_task['event']}, 启动于: {running_task['created_at']})，请等待完成后再试"
+        }), 409
+    
+    task_id = str(uuid.uuid4())[:8]
+    
+    # 保存任务到数据库
+    user_id = current_user.id if current_user.is_authenticated else None
+    now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    db.insert('profiler_tasks', {
+        'id': task_id,
+        'connection_id': conn_id,
+        'user_id': user_id,
+        'type': task_type,
+        'status': 'running',
+        'cluster_name': d.get('cluster_name', ''),
+        'namespace': d.get('namespace', 'default'),
+        'pod_name': d.get('pod_name', ''),
+        'mode': task_type,
+        'event': event,
+        'duration': duration,
+        'format': fmt,
+        'progress': 0,
+        'created_at': now_ts,
+        'updated_at': now_ts,
+    })
+    
+    from services.audit_service import AuditService
+    AuditService.log_task_created(user_id, task_id, task_type)
+    
+    # 后台执行任务
+    def run_task():
+        workflow = ProfilerWorkflow(conn)
+        try:
+            result = workflow.run(duration=duration, fmt=fmt, mode=task_type, event=event, 
+                                   output_dir=str(OUTPUT_DIR))
+            output_path = (result.get('local_file', '') or result.get('output_path', '')) if isinstance(result, dict) else ''
+            db.update('profiler_tasks', {
+                'status': 'completed',
+                'progress': 100,
+                'output_path': output_path,
+                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }, 'id = ?', (task_id,))
+        except Exception as e:
+            db.update('profiler_tasks', {
+                'status': 'failed',
+                'message': str(e),
+                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            }, 'id = ?', (task_id,))
+    
+    import threading
+    threading.Thread(target=run_task, daemon=True).start()
+    
+    return jsonify({"ok": True, "task_id": task_id})
+
+
+# ── 任务状态轮询（前端 pfPoll 使用）───
+@app.route('/api/profile/<task_id>', methods=['GET'])
+@login_required
+def get_profile_status(task_id: str):
+    """获取任务状态 + 关联日志（供前端轮询使用）"""
+    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
+    if not task:
+        return jsonify({"error": "任务不存在", "status": "failed"}), 404
+    
+    # 直接从 task 获取消息，不再使用 profiler_logs 表
+    logs = []
+    if task.get('message'):
+        logs = [{"message": task['message'], "timestamp": task['updated_at']}]
+    
+    # 提取输出文件名（从 output_path 中获取文件名）
+    output_file = None
+    if task.get('output_path'):
+        output_file = Path(task['output_path']).name or task['output_path']
+    
+    return jsonify({
+        "status": task['status'],
+        "type": task['type'],
+        "event": task.get('event', ''),
+        "duration": task.get('duration', 60),
+        "progress": task.get('progress', _calc_progress(task)),
+        "output_file": output_file,
+        "logs": logs,
+        "created_at": task.get('created_at', ''),  # 添加创建时间，供前端恢复进度计算
+    })
+
+
+# ── 任务状态查询（profiler.js 组件兼容）───
+@app.route('/api/profile/status', methods=['POST'])
+@login_required
+def profile_status():
+    """查询采样任务状态（profiler.js 组件使用）"""
+    d = request.json or {}
+    task_id = d.get('task_id', '')
+    
+    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
+    if not task:
+        return jsonify({"status": "not_found", "error": "任务不存在"}), 404
+    
+    # 直接从 task 获取消息
+    logs = []
+    if task.get('message'):
+        logs = [task['message']]
+    
+    return jsonify({
+        "status": task['status'],
+        "logs": logs,
+        "progress": task.get('progress', _calc_progress(task)),
+    })
+
+
+# ── 停止任务（profiler.js 组件使用）───
+@app.route('/api/profile/stop', methods=['POST'])
+@login_required
+def stop_profiler():
+    """停止正在运行的采样任务"""
+    d = request.json or {}
+    task_id = d.get('task_id', '')
+    
+    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
+    if not task:
+        return jsonify({"error": "任务不存在"}), 404
+    
+    if task['status'] not in ('running', 'pending'):
+        return jsonify({"ok": False, "msg": f"当前状态 {task['status']}，无法停止"})
+    
+    db.update('profiler_tasks', {'status': 'stopped', 'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')},
+             'id = ?', (task_id,))
+    return jsonify({"ok": True, "status": "stopped"})
+
+
+# ── 采样日志 CRUD ──
+@app.route('/api/profile/logs', methods=['POST'])
+@login_required
 def save_profiler_log():
-    """保存采样日志"""
-    data = request.json
-    conn_id = data.get("connection_id")
-    message = data.get("message")
-    level = data.get("level", "info")
-    if not conn_id or not message:
-        return jsonify({"error": "connection_id 和 message 必填"}), 400
-    _save_profiler_log(conn_id, message, level)
-    return jsonify({"ok": True})
-
-@app.get("/api/profile/logs/<conn_id>")
-def get_profiler_logs(conn_id: str):
-    """获取连接的采样日志"""
-    logs = _get_profiler_logs(conn_id)
-    return jsonify({"logs": logs})
-
-@app.delete("/api/profile/logs/<conn_id>")
-def clear_profiler_logs(conn_id: str):
-    """清空连接的采样日志"""
-    _clear_profiler_logs(conn_id)
+    """更新任务进度消息"""
+    d = request.json or {}
+    task_id = d.get('task_id', '') or d.get('connection_id', '')
+    message = d.get('message', '')
+    progress = d.get('progress')  # 可选
+    
+    if not task_id:
+        return jsonify({"error": "task_id 必填"}), 400
+    
+    update_data = {'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+    if message:
+        update_data['message'] = message
+    if progress is not None:
+        update_data['progress'] = int(progress)
+    
+    db.update('profiler_tasks', update_data, 'id = ?', (task_id,))
     return jsonify({"ok": True})
 
 
+@app.route('/api/profile/logs/<path:connection_id>', methods=['GET'])
+@login_required
+def get_profiler_logs(connection_id):
+    """获取连接的采样任务日志"""
+    # 获取该连接的所有任务
+    tasks = db.fetch_all(
+        'SELECT id, status, message, progress, created_at, updated_at FROM profiler_tasks WHERE connection_id = ? ORDER BY created_at DESC LIMIT 20',
+        (connection_id,)
+    )
+    return jsonify({
+        "tasks": tasks or [],
+        "count": len(tasks) if tasks else 0,
+    })
 
-# ═════════════════════════════════════════════════════════════════════════════
-# GC Log — 获取 GC 日志路径及内容
-# ═════════════════════════════════════════════════════════════════════════════
 
-@app.post("/api/gc/info")
-def gc_info():
-    """
-    探测 JVM GC 日志配置。
-    只需 kubectl exec，不需要 Arthas 连接。
-    通过读取 /proc/PID/cmdline 获取完整 JVM 启动参数并解析 GC 日志配置。
-    """
-    d = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
-    if not runner:
+@app.route('/api/profile/logs/<path:connection_id>', methods=['DELETE'])
+@login_required
+def clear_profiler_logs(connection_id):
+    """清除连接的采样日志记录（保留任务记录）"""
+    try:
+        # 只删除日志，保留任务记录（profiler_tasks）以便历史查询
+        db.delete('profiler_logs', 'task_id IN (SELECT id FROM profiler_tasks WHERE connection_id = ?)', (connection_id,))
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+def _calc_progress(task):
+    """根据任务状态和时间估算进度百分比"""
+    if task['status'] == 'completed':
+        return 100
+    if task['status'] in ('failed', 'stopped'):
+        return 0
+    created = task.get('created_at', '')
+    if not created:
+        return 10
+    try:
+        t = datetime.strptime(created[:19], '%Y-%m-%d %H:%M:%S')
+        elapsed = (datetime.now() - t).total_seconds()
+        return min(90, max(5, int(elapsed / 2)))
+    except:
+        return 50
+
+
+@app.route('/api/profile/tasks', methods=['GET'])
+@login_required
+def list_profiler_tasks():
+    """获取性能分析任务列表"""
+    conn_id = request.args.get('conn_id', '')
+    
+    # 尝试从数据库获取，表不存在时返回空列表
+    try:
+        sql = '''SELECT pt.*, u.username 
+                 FROM profiler_tasks pt 
+                 LEFT JOIN users u ON pt.user_id = u.id 
+                 WHERE 1=1'''
+        params = []
+        
+        if conn_id:
+            sql += ' AND pt.connection_id = ?'
+            params.append(conn_id)
+        
+        # 非管理员只看到自己的任务
+        if current_user.is_authenticated and not current_user.is_admin:
+            sql += ' AND pt.user_id = ?'
+            params.append(current_user.id)
+        
+        sql += ' ORDER BY pt.created_at DESC LIMIT 50'
+        
+        raw_tasks = db.fetch_all(sql, tuple(params))
+    except Exception:
+        raw_tasks = []
+    
+    # 格式化输出，兼容前端期望的格式
+    tasks = []
+    for t in (raw_tasks or []):
+        # 检查是否有输出文件
+        output_path = t.get('output_path', '')
+        has_file = bool(output_path) and Path(output_path).exists() if output_path else False
+        file_name = Path(output_path).name if has_file else ''
+        
+        tasks.append({
+            'id': t.get('id', ''),
+            'status': t.get('status', 'pending'),
+            'progress': t.get('progress', 0),
+            'message': t.get('message', ''),
+            'created_at': t.get('created_at', ''),
+            'updated_at': t.get('updated_at', ''),
+            'has_file': has_file,
+            'file_name': file_name,
+            'username': t.get('username', '-'),
+            # 兼容前端 config 格式
+            'config': {
+                'cluster': t.get('cluster_name', ''),
+                'namespace': t.get('namespace', ''),
+                'pod': t.get('pod_name', ''),
+                'mode': t.get('mode', t.get('type', 'profiler')),
+                'type': t.get('type', 'profiler'),
+                'event': t.get('event', ''),
+                'duration': t.get('duration', 60),
+                'format': t.get('format', 'html'),
+            }
+        })
+    
+    return jsonify(tasks)
+
+
+@app.route('/api/profile/tasks/<task_id>', methods=['GET'])
+@login_required
+def get_profiler_task(task_id: str):
+    """获取任务详情"""
+    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
+    if not task:
+        return jsonify({"error": "任务不存在"}), 404
+    
+    # 检查权限
+    if not current_user.is_admin and task.get('user_id') != current_user.id:
+        return jsonify({"error": "无权限"}), 403
+    
+    # 格式化输出
+    result = dict(task)
+    result['config'] = {
+        'cluster': task.get('cluster_name', ''),
+        'namespace': task.get('namespace', ''),
+        'pod': task.get('pod_name', ''),
+        'mode': task.get('mode', task.get('type', 'profiler')),
+        'type': task.get('type', 'profiler'),
+        'event': task.get('event', ''),
+        'duration': task.get('duration', 60),
+        'format': task.get('format', 'html'),
+    }
+    
+    return jsonify({"task": result})
+
+
+@app.route('/api/profile', methods=['GET'])
+@login_required
+def list_profiles():
+    """获取采样任务列表（兼容旧接口）"""
+    return list_profiler_tasks()
+
+
+@app.route('/api/profile/<task_id>/cancel', methods=['POST'])
+@login_required
+def cancel_profiler_task(task_id: str):
+    """取消采样任务"""
+    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
+    if not task:
+        return jsonify({"error": "任务不存在"}), 404
+    
+    if task['status'] not in ('running', 'pending'):
+        return jsonify({"ok": False, "msg": f"当前状态 {task['status']}，无法取消"})
+    
+    db.update('profiler_tasks', {'status': 'cancelled', 'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')},
+             'id = ?', (task_id,))
+    return jsonify({"ok": True, "status": "cancelled"})
+
+
+@app.route('/api/profile/<task_id>/download', methods=['GET'])
+@login_required
+def download_profiler_result(task_id: str):
+    """下载采样结果文件"""
+    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
+    if not task:
+        return jsonify({"error": "任务不存在"}), 404
+    
+    # 非管理员检查任务归属
+    if not current_user.is_admin and task.get('user_id') != current_user.id:
+        return jsonify({"error": "无权限"}), 403
+    
+    if task['status'] != 'completed':
+        return jsonify({"error": "任务未完成"}), 400
+    
+    # 从 output_path 字段获取文件路径
+    output_path = task.get('output_path', '')
+    if output_path and Path(output_path).exists():
+        return send_file(str(output_path), as_attachment=True, download_name=Path(output_path).name)
+    
+    # output_path 为空或文件不存在，尝试多种方式查找
+    # 1. 按 task_id 匹配文件名
+    for f in OUTPUT_DIR.glob(f"*{task_id}*"):
+        if f.is_file():
+            return send_file(str(f), as_attachment=True, download_name=f.name)
+    
+    # 2. 按 pod_name + mode + 创建时间匹配
+    pod_name = task.get('pod_name', '')
+    mode = task.get('mode', 'profiler')
+    created_at = task.get('created_at', '')
+    
+    if pod_name and created_at:
+        # 根据 mode 确定扩展名
+        ext_map = {'jfr': 'jfr', 'heapdump': 'hprof', 'threaddump': 'html'}
+        ext = ext_map.get(mode, 'html')
+        
+        # 从创建时间提取时间段（前后 5 分钟）
+        try:
+            task_time = datetime.strptime(created_at[:19], '%Y-%m-%d %H:%M:%S')
+            from datetime import timedelta
+            time_min = task_time - timedelta(minutes=5)
+            time_max = task_time + timedelta(minutes=10)
+        except Exception:
+            time_min = time_max = None
+        
+        candidates = []
+        for f in OUTPUT_DIR.glob(f"*.{ext}"):
+            if f.is_file() and pod_name in f.name:
+                if time_min and time_max:
+                    mtime = datetime.fromtimestamp(f.stat().st_mtime)
+                    if time_min <= mtime <= time_max:
+                        candidates.append(f)
+                else:
+                    candidates.append(f)
+        
+        # 选最新的候选文件
+        if candidates:
+            candidates.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+            best = candidates[0]
+            # 更新数据库中的 output_path
+            db.update('profiler_tasks', {'output_path': str(best)}, 'id = ?', (task_id,))
+            return send_file(str(best), as_attachment=True, download_name=best.name)
+    
+    return jsonify({"error": "采样结果文件不存在，可能文件已被清理或下载失败"}), 404
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pod 监控
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/monitor/snapshot', methods=['POST'])
+@login_required
+def pod_snapshot():
+    """获取 Pod 快照"""
+    d = request.json or {}
+    runner, err = _make_runner(d.get('cluster_name', ''))
+    if err:
         return jsonify({"error": err}), 400
+    
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    container = d.get('container', '')
+    
+    try:
+        result = collect_pod_snapshot(runner, ns, pod, container)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-    ns  = d.get("namespace", "default")
-    pod = d.get("pod_name", "")
-    ctr = d.get("container", "")
 
+# ── Pod 指标采集（monitor.js 组件使用）───
+@app.route('/api/monitor/pod', methods=['POST'])
+@login_required
+def monitor_pod():
+    """获取 Pod 实时指标（CPU/内存/网络/进程列表）"""
+    d = request.json or {}
+    cluster = d.get('cluster', '')
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod', '')
+    
+    if not cluster or not pod:
+        return jsonify({"error": "参数不全"}), 400
+    
+    # 使用已有的快照接口逻辑
+    runner, err = _make_runner(cluster)
+    if err:
+        return jsonify({"error": err}), 400
+    
+    container = d.get('container', '')
+    try:
+        result = collect_pod_snapshot(runner, ns, pod, container)
+        return jsonify({"metrics": result})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/monitor/logs', methods=['POST'])
+@login_required
+def get_pod_logs():
+    """获取容器日志（kubectl logs）"""
+    d = request.json or {}
+    cluster_name = d.get('cluster_name', '')
+    namespace = d.get('namespace', 'default')
+    pod_name = d.get('pod_name', '')
+    container = d.get('container', '')
+    tail = int(d.get('tail', 100))
+    since = d.get('since', '')
+    
+    runner, err = _make_runner(cluster_name)
+    if err:
+        return jsonify({"error": err}), 400
+    
+    try:
+        logs_text = runner.get_logs(namespace, pod_name, tail=tail, container=container, since=since)
+        
+        # 返回原始字符串，前端负责渲染
+        return jsonify({
+            "logs": logs_text or '',
+            "count": len(logs_text.strip().split('\n')) if logs_text else 0,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/monitor/metrics', methods=['GET'])
+@login_required
+def get_metrics():
+    """获取实时指标"""
+    cluster = request.args.get('cluster', '')
+    ns = request.args.get('namespace', '')
+    pod = request.args.get('pod', '')
+    
+    if not all([cluster, ns, pod]):
+        return jsonify({"error": "参数不全"}), 400
+    
+    history = get_metrics_history(cluster, ns, pod)
+    return jsonify({"metrics": history})
+
+
+@app.route('/api/monitor/start-polling', methods=['POST'])
+@login_required
+def start_polling():
+    """启动指标轮询"""
+    d = request.json or {}
+    runner, err = _make_runner(d.get('cluster_name', ''))
+    if err:
+        return jsonify({"error": err}), 400
+    
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    container = d.get('container', '')
+    
+    start_metrics_polling(runner, d.get('cluster_name', ''), ns, pod, container)
+    return jsonify({"ok": True})
+
+
+@app.route('/api/monitor/stop-polling', methods=['POST'])
+@login_required
+def stop_polling():
+    """停止指标轮询"""
+    d = request.json or {}
+    stop_metrics_polling(d.get('cluster', ''), d.get('namespace', ''), d.get('pod', ''))
+    return jsonify({"ok": True})
+
+
+@app.route('/api/monitor/history', methods=['POST'])
+@login_required
+def monitor_history():
+    """获取指标历史"""
+    d = request.json or {}
+    cluster = d.get('cluster_name', '')
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    
+    if not all([cluster, ns, pod]):
+        return jsonify({"error": "参数不全"}), 400
+    
+    history = get_metrics_history(cluster, ns, pod)
+    return jsonify(history or {})
+
+
+@app.route('/api/monitor/logs/download', methods=['POST'])
+@login_required
+def download_container_logs():
+    """下载容器日志文件"""
+    d = request.json or {}
+    cluster_name = d.get('cluster_name', '')
+    namespace = d.get('namespace', 'default')
+    pod_name = d.get('pod_name', '')
+    container = d.get('container', '')
+    tail = int(d.get('tail', 5000))
+    since = d.get('since', '')
+    
+    runner, err = _make_runner(cluster_name)
+    if err:
+        return jsonify({"error": err}), 400
+    
+    try:
+        logs_text = runner.get_logs(namespace, pod_name, tail=tail, container=container, since=since)
+        
+        # 创建临时文件
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"logs_{pod_name}_{container or 'default'}_{ts}.log"
+        tmp = Path(tempfile.mkdtemp()) / fname
+        tmp.write_text(logs_text or '', encoding='utf-8')
+        
+        return send_file(str(tmp), as_attachment=True, download_name=fname,
+                        mimetype="text/plain; charset=utf-8")
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/monitor/events', methods=['POST'])
+@login_required
+def monitor_events():
+    """获取 Pod 事件"""
+    d = request.json or {}
+    cluster_name = d.get('cluster_name', '')
+    namespace = d.get('namespace', 'default')
+    pod_name = d.get('pod_name', '')
+    
+    runner, err = _make_runner(cluster_name)
+    if err:
+        return jsonify({"error": err}), 400
+    
+    try:
+        events = runner.get_events(namespace, pod_name)
+        return jsonify({"events": events})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# GC 日志
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/gc/info', methods=['POST'])
+@login_required
+def gc_info():
+    """探测 JVM GC 日志配置"""
+    d = request.json or {}
+    runner, err = _make_runner(d.get('cluster_name', ''))
+    if err:
+        return jsonify({"error": err}), 400
+    
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    ctr = d.get('container', '')
+    
     if not pod:
         return jsonify({"error": "pod_name 必填"}), 400
-
-    # ── 1. 找 Java PID ────────────────────────────────────────────────────────
+    
+    # 找 Java PID
     rc, jps_out, _ = runner.exec_pod(ns, pod, ctr,
         "jps -l 2>/dev/null || ps -ef 2>/dev/null | grep java | grep -v grep",
         timeout=8)
-
+    
     pid = None
     skip = {"arthas", "jps", "sun.tools.jps"}
     if rc == 0:
@@ -898,29 +1330,29 @@ def gc_info():
                 if not any(k in desc for k in skip):
                     pid = parts[0]
                     break
-
+    
     if not pid:
-        return jsonify({"error": "未找到 Java 进程", "gc_flags": [], "log_path": ""}), 400
-
-    # ── 2. 读取 /proc/PID/cmdline ─────────────────────────────────────────────
+        return jsonify({"error": "未找到 Java 进程", "gc_flags": [], "log_paths": []}), 400
+    
+    # 读取 /proc/PID/cmdline
     _, cmdline, _ = runner.exec_pod(ns, pod, ctr,
         f"cat /proc/{pid}/cmdline 2>/dev/null | tr '\\0' ' '",
         timeout=5)
-
-    # ── 3. 解析 GC 日志参数 ───────────────────────────────────────────────────
+    
+    # 解析 GC 日志参数
     import re as _re
-    gc_flags  = []
+    gc_flags = []
     log_paths = []
     stdout_gc = False
-
+    
     patterns = [
-        (r'(-Xloggc:(\S+))',              2),   # JDK 8: path in group 2
-        (r'(-Xlog:[^:]*:file=([^:,\s]+))', 2),   # JDK 9+: path in group 2
-        (r'(-Xlog:[^:]*:(stdout|stderr))', 2),   # stdout/stderr
-        (r'(-XX:\+Print\w*GC\w*)',         None), # PrintGCDetails etc
-        (r'(-verbose:gc)',                 None), # verbose gc
+        (r'(-Xloggc:(\S+))', 2),
+        (r'(-Xlog:[^:]*:file=([^:,\s]+))', 2),
+        (r'(-Xlog:[^:]*:(stdout|stderr))', 2),
+        (r'(-XX:\+Print\w*GC\w*)', None),
+        (r'(-verbose:gc)', None),
     ]
-
+    
     for pattern, path_grp in patterns:
         for m in _re.finditer(pattern, cmdline):
             gc_flags.append(m.group(1).strip())
@@ -930,13 +1362,13 @@ def gc_info():
                     stdout_gc = True
                 elif '/' in val:
                     log_paths.append(val.strip())
-
-    # ── 4. 扫描常见路径 ───────────────────────────────────────────────────────
+    
+    # 扫描常见路径
     if not log_paths and not stdout_gc:
         scan_patterns = [
             '/app/logs/gc*.log', '/app/logs/gc.log',
-            '/logs/gc*.log',     '/var/log/gc.log',
-            '/tmp/gc*.log',      '/home/admin/logs/gc.log',
+            '/logs/gc*.log', '/var/log/gc.log',
+            '/tmp/gc*.log', '/home/admin/logs/gc.log',
         ]
         for p in scan_patterns:
             rc2, out2, _ = runner.exec_pod(ns, pod, ctr,
@@ -944,13 +1376,13 @@ def gc_info():
             if rc2 == 0 and out2.strip():
                 log_paths.extend(out2.strip().splitlines())
                 break
-
-    # ── 5. 读取日志内容 ───────────────────────────────────────────────────────
-    log_content   = ""
+    
+    # 读取日志内容
+    log_content = ""
     log_path_used = ""
-
+    
     if stdout_gc:
-        log_content   = "GC 输出到 stdout，请使用「Pod 监控 → 日志」标签查看容器日志"
+        log_content = "GC 输出到 stdout，请使用「Pod 监控 → 日志」标签查看容器日志"
         log_path_used = "stdout"
     elif log_paths:
         log_path_used = log_paths[0]
@@ -961,17 +1393,17 @@ def gc_info():
             log_content = content_out
         else:
             log_content = f"文件不可读: {log_path_used}"
-
+    
     gc_enabled = bool(gc_flags or log_paths or stdout_gc)
-
+    
     return jsonify({
-        "pid":           pid,
-        "gc_flags":      gc_flags,
-        "log_paths":     log_paths,
+        "pid": pid,
+        "gc_flags": gc_flags,
+        "log_paths": log_paths,
         "log_path_used": log_path_used,
-        "stdout_gc":     stdout_gc,
-        "gc_enabled":    gc_enabled,
-        "log_content":   log_content,
+        "stdout_gc": stdout_gc,
+        "gc_enabled": gc_enabled,
+        "log_content": log_content,
         "cmdline_snippet": cmdline.strip()[:500],
         "hint": "" if gc_enabled else (
             "未检测到 GC 日志配置。\n"
@@ -981,418 +1413,343 @@ def gc_info():
     })
 
 
-@app.post("/api/gc/download")
+@app.route('/api/gc/download', methods=['POST'])
+@login_required
 def gc_download():
-    """下载 GC 日志文件到本地。"""
-    d = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
-    if not runner:
+    """下载 GC 日志文件"""
+    d = request.json or {}
+    runner, err = _make_runner(d.get('cluster_name', ''))
+    if err:
         return jsonify({"error": err}), 400
-
-    log_path  = d.get("log_path", "")
+    
+    log_path = d.get('log_path', '')
     if not log_path:
         return jsonify({"error": "log_path 必填"}), 400
-
-    filename   = os.path.basename(log_path)
-    ts         = datetime.now().strftime("%Y%m%d%H%M%S")
-    # 命名规则: gc-{podName}-{ts}.log
-    pod_name   = d.get("pod_name", "pod")[:40]
-    local_name = f"gc-{pod_name}-{ts}{Path(filename).suffix or '.log'}"
-    tmp_dir    = Path(tempfile.mkdtemp(prefix="gc_dl_"))
+    
+    namespace = d.get('namespace', 'default')
+    pod_name = d.get('pod_name', '')
+    container = d.get('container', '')
+    
+    filename = os.path.basename(log_path)
+    ts = datetime.now().strftime("%Y%m%d%H%M%S")
+    pod_name_safe = pod_name[:40] if pod_name else "pod"
+    local_name = f"gc-{pod_name_safe}-{ts}{Path(filename).suffix or '.log'}"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="gc_dl_"))
     local_path = str(tmp_dir / local_name)
-
-    rc, out, err2 = runner.cp_from_pod(
-        d.get("namespace","default"), d.get("pod_name",""), d.get("container",""),
-        log_path, local_path,
-    )
+    
+    rc, out, err2 = runner.cp_from_pod(namespace, pod_name, container, log_path, local_path)
     if rc != 0 or not os.path.exists(local_path):
         shutil.rmtree(str(tmp_dir), ignore_errors=True)
         return jsonify({"error": f"下载失败: {err2 or out}"}), 500
-
+    
     resp = send_file(local_path, as_attachment=True, download_name=local_name,
-                     mimetype="text/plain; charset=utf-8")
+                    mimetype="text/plain; charset=utf-8")
     resp.call_on_close(lambda: shutil.rmtree(str(tmp_dir), ignore_errors=True))
     return resp
-# ═════════════════════════════════════════════════════════════════════════════
 
-@app.post("/api/monitor/snapshot")
-def monitor_snapshot():
-    d = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
-    if not runner:
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pod 文件操作
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@app.route('/api/pod/files', methods=['POST'])
+@login_required
+def list_pod_files():
+    """列出 Pod 内文件"""
+    d = request.json or {}
+    runner, err = _make_runner(d.get('cluster_name', ''))
+    if err:
         return jsonify({"error": err}), 400
-    pod = d.get("pod_name", "")
-    if not pod:
-        return jsonify({"error": "pod_name 必填"}), 400
-    snap = collect_pod_snapshot(runner, d.get("namespace","default"), pod, d.get("container",""))
-    return jsonify(snap)
-
-@app.post("/api/monitor/start-polling")
-def monitor_start_polling():
-    d = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
-    if not runner:
-        return jsonify({"error": err}), 400
-    start_metrics_polling(runner, d.get("cluster_name",""),
-                          d.get("namespace","default"), d.get("pod_name",""), d.get("container",""))
-    return jsonify({"ok": True})
-
-@app.post("/api/monitor/stop-polling")
-def monitor_stop_polling():
-    d = request.json
-    stop_metrics_polling(d.get("cluster_name",""), d.get("namespace","default"), d.get("pod_name",""))
-    return jsonify({"ok": True})
-
-@app.post("/api/monitor/history")
-def monitor_history():
-    d = request.json
-    return jsonify(get_metrics_history(
-        d.get("cluster_name",""), d.get("namespace","default"), d.get("pod_name","")))
-
-@app.post("/api/monitor/logs")
-def monitor_logs():
-    d = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
-    if not runner:
-        return jsonify({"error": err}), 400
-    logs = runner.get_logs(
-        ns        = d.get("namespace", "default"),
-        pod       = d.get("pod_name", ""),
-        container = d.get("container", ""),
-        tail      = int(d.get("tail", 200)),
-        since     = d.get("since", ""),
-    )
-    return jsonify({"logs": logs})
-
-@app.post("/api/monitor/logs/download")
-def download_logs():
-    d = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
-    if not runner:
-        return jsonify({"error": err}), 400
-    ns        = d.get("namespace", "default")
-    pod       = d.get("pod_name", "")
-    container = d.get("container", "")
-    tail      = int(d.get("tail", 5000))
-    since     = d.get("since", "")
-    logs      = runner.get_logs(ns=ns, pod=pod, container=container, tail=tail, since=since)
-    ts    = datetime.now().strftime("%Y%m%d_%H%M%S")
-    fname = f"logs_{pod}_{container or 'default'}_{ts}.log"
-    tmp   = Path(tempfile.mkdtemp()) / fname
-    tmp.write_text(logs, encoding="utf-8")
-    return send_file(str(tmp), as_attachment=True, download_name=fname,
-                     mimetype="text/plain; charset=utf-8")
-
-@app.post("/api/monitor/events")
-def monitor_events():
-    d = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
-    if not runner:
-        return jsonify({"error": err}), 400
-    events = runner.get_pod_events(d.get("namespace","default"), d.get("pod_name",""))
-    return jsonify({"events": events})
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Pod File Browser
-# ═════════════════════════════════════════════════════════════════════════════
-
-@app.post("/api/pod/files/list")
-def pod_files_list():
-    d = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
-    if not runner:
-        return jsonify({"error": err, "files": []}), 400
-
-    path = (d.get("path", "/tmp") or "/tmp").rstrip("/") or "/"
-    ns        = d.get("namespace", "default")
-    pod       = d.get("pod_name", "")
-    container = d.get("container", "")
-
-    # ── 兼容 BusyBox ls（不支持 --time-style / --full-time）──────────────────
-    # 策略：先尝试 GNU ls（支持 --full-time），失败则 fallback 到 BusyBox ls -l
-    # 再用 stat 补充精确时间（BusyBox stat 格式不同，做双重 fallback）
-    ls_cmd = (
-        # 优先：GNU coreutils ls（glibc 镜像）
-        f'ls -lAh --full-time "{path}" 2>/dev/null'
-        # 次选：BusyBox ls，时间列只有 Mon DD HH:MM 或 Mon DD  YYYY 格式
-        f' || ls -lA "{path}" 2>&1'
-    )
-    rc, out, err2 = runner.exec_pod(ns, pod, container, ls_cmd, timeout=10)
-    if rc != 0 or (not out.strip() and err2):
-        return jsonify({"error": f"ls 失败: {out or err2}", "files": []})
-
-    # ── 用 stat 批量获取精确 mtime（BusyBox stat: %y = modification time）──
-    # 格式: filename|||2024-01-15 10:30:45.000000000
-    stat_map = {}  # type: Dict[str, str]
-    stat_cmd = (
-        # GNU stat
-        f'stat -c "%n|||%y" "{path}"/* 2>/dev/null'
-        f' || stat -c "%n|||%y" "{path}"/.[!.]* 2>/dev/null'
-        f' || for f in "{path}"/*; do stat "$f" 2>/dev/null | '
-        f'awk -v n="$f" \'/Modify:/ {{print n"|||"$2" "$3}}\'; done'
-    )
-    rc_s, stat_out, _ = runner.exec_pod(ns, pod, container, stat_cmd, timeout=10)
-    if rc_s == 0 and stat_out.strip():
-        for sline in stat_out.strip().splitlines():
-            if "|||" in sline:
-                fname_full, mtime = sline.split("|||", 1)
-                fname = os.path.basename(fname_full.strip())
-                # 截取 "YYYY-MM-DD HH:MM:SS" 前19字符
-                stat_map[fname] = mtime.strip()[:19]
-
-    # ── 解析 ls 输出 ─────────────────────────────────────────────────────────
+    
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    container = d.get('container', '')
+    path = d.get('path', '/')
+    
+    rc, out, err = runner.exec_pod(ns, pod, container, f"ls -la {shlex.quote(path)} 2>/dev/null", timeout=10)
+    
+    if rc != 0:
+        return jsonify({"error": err or "无法列出文件"}), 400
+    
     files = []
-    for line in out.strip().splitlines():
-        line = line.strip()
-        if not line or line.startswith("total"):
-            continue
-
+    for line in out.splitlines()[1:]:
         parts = line.split()
-        if len(parts) < 5:
-            continue
-
-        perm = parts[0]
-        if not perm[0] in ("-", "d", "l", "p", "s", "c", "b"):
-            continue
-
-        # 文件大小
-        size = ""
-        name = ""
-
-        # GNU --full-time 格式:
-        # -rw-r--r-- 1 root root 1234 2024-01-15 10:30:45.123 filename
-        # BusyBox 格式:
-        # -rw-r--r-- 1 root root 1234 Jan 15 10:30 filename
-        # -rw-r--r-- 1 root root 1234 Jan 15  2024 filename
-        if len(parts) >= 9 and parts[5].count("-") == 2 and parts[5][4] == "-":
-            # GNU full-time: perm links user group size YYYY-MM-DD HH:MM:SS.ns name...
-            size = parts[4]
-            name = " ".join(parts[8:])
-        elif len(parts) >= 9:
-            # BusyBox: perm links user group size Mon DD HH:MM name...
-            size = parts[4]
-            name = " ".join(parts[8:])
-        elif len(parts) >= 5:
-            # 最简 fallback
-            size = parts[4] if parts[4].isdigit() or parts[4][-1] in "KMGkmbg" else ""
+        if len(parts) >= 9:
             name = parts[-1]
+            mode = parts[0]
+            is_dir = mode.startswith('d')
+            files.append({
+                "name": name,
+                "path": f"{path.rstrip('/')}/{name}",
+                "is_dir": is_dir,
+                "mode": mode,
+                "size": parts[4],
+                "modified": " ".join(parts[5:8])
+            })
+    
+    return jsonify({"files": files, "path": path})
 
-        if not name or name in (".", ".."):
-            continue
 
-        # 处理软链接 "name -> target"
-        real_name = name.split(" -> ")[0].strip() if " -> " in name else name.strip()
-        link_target = name.split(" -> ")[1].strip() if " -> " in name else ""
-
-        # 时间：优先 stat_map，其次从 ls 行提取
-        mtime = stat_map.get(real_name, "")
-        if not mtime:
-            # 从 ls 行尝试提取
-            if len(parts) >= 8 and parts[5].count("-") == 2:
-                mtime = f"{parts[5]} {parts[6][:8]}"  # YYYY-MM-DD HH:MM:SS
-            elif len(parts) >= 8:
-                mtime = f"{parts[5]} {parts[6]} {parts[7]}"  # Mon DD HH:MM/YYYY
-
-        full_path = f"{path}/{real_name}".replace("//", "/")
-        files.append({
-            "name":        real_name,
-            "perm":        perm,
-            "user":        parts[2] if len(parts) > 2 else "",
-            "size":        size,
-            "modified":    mtime,
-            "is_dir":      perm.startswith("d"),
-            "is_link":     perm.startswith("l"),
-            "link_target": link_target,
-            "path":        full_path,
-        })
-
-    files.sort(key=lambda f: (not f["is_dir"], f["name"].lower()))
-    return jsonify({"path": path, "files": files})
-
-@app.post("/api/pod/files/download")
-def pod_files_download():
-    d = request.json
-    import logging as _logging_mod
-    _log = _logging_mod.getLogger(__name__)
-
-    cluster_name = d.get("cluster_name", "")
-    namespace    = d.get("namespace", "default")
-    pod_name     = d.get("pod_name", "")
-    container    = d.get("container", "")
-    pod_path     = d.get("path", "")
-
-    _log.info("download request: cluster=%s ns=%s pod=%s container=%s path=%s",
-              cluster_name, namespace, pod_name, container, pod_path)
-
-    runner, err = _make_runner(cluster_name)
-    if not runner:
+@app.route('/api/pod/files/read', methods=['POST'])
+@login_required
+def read_pod_file():
+    """读取 Pod 内文件内容"""
+    d = request.json or {}
+    runner, err = _make_runner(d.get('cluster_name', ''))
+    if err:
         return jsonify({"error": err}), 400
-
-    if not pod_name:
-        return jsonify({"error": "pod_name 为空，请在左侧边栏填写 Pod 名称"}), 400
-    if not pod_path:
+    
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    container = d.get('container', '')
+    path = d.get('path', '')
+    
+    if not path:
         return jsonify({"error": "path 必填"}), 400
+    
+    rc, out, err = runner.exec_pod(ns, pod, container, f"cat {shlex.quote(path)}", timeout=30)
+    
+    if rc != 0:
+        return jsonify({"error": err or "读取失败"}), 400
+    
+    return jsonify({"content": out})
 
-    filename   = os.path.basename(pod_path)
-    tmp_dir    = tempfile.mkdtemp(prefix="pod_dl_")
-    local_path = os.path.join(tmp_dir, filename)
 
-    _log.info("cp_from_pod: ns=%s pod=%s container=%s src=%s dst=%s",
-              namespace, pod_name, container, pod_path, local_path)
+@app.route('/api/pod/files/download', methods=['POST'])
+@login_required
+def download_pod_file():
+    """从 Pod 下载文件"""
+    d = request.json or {}
+    runner, err = _make_runner(d.get('cluster_name', ''))
+    if err:
+        return jsonify({"error": err}), 400
+    
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    container = d.get('container', '')
+    path = d.get('path', '')
+    
+    if not path:
+        return jsonify({"error": "path 必填"}), 400
+    
+    # 复制到临时目录
+    temp_dir = tempfile.mkdtemp()
+    local_path = os.path.join(temp_dir, os.path.basename(path))
+    
     try:
-        rc, stdout, err2 = runner.cp_from_pod(
-            namespace, pod_name, container, pod_path, local_path,
-        )
-        if rc != 0 or not os.path.exists(local_path):
-            shutil.rmtree(tmp_dir, ignore_errors=True)
-            detail = err2 or stdout or "（无详细信息）"
-            _log.error("cp_from_pod failed rc=%s err=%s", rc, detail)
-            return jsonify({
-                "error": detail,
-                "debug": {
-                    "cluster": cluster_name, "namespace": namespace,
-                    "pod": pod_name, "container": container, "pod_path": pod_path,
-                }
-            }), 500
-        import mimetypes
-        mime, _ = mimetypes.guess_type(filename)
-        resp = send_file(local_path, as_attachment=True, download_name=filename,
-                         mimetype=mime or "application/octet-stream")
-        resp.call_on_close(lambda: shutil.rmtree(tmp_dir, ignore_errors=True))
-        return resp
-    except Exception as e:
-        shutil.rmtree(tmp_dir, ignore_errors=True)
-        _log.exception("download exception")
-        return jsonify({"error": str(e)}), 500
+        rc, out, err = runner.cp_from_pod(ns, pod, container, path, local_path)
+        
+        if rc != 0:
+            return jsonify({"error": err or "下载失败"}), 400
+        
+        # 记录审计日志
+        from services.audit_service import AuditService
+        AuditService.log_file_downloaded(current_user.id, os.path.basename(path))
+        
+        return send_file(local_path, as_attachment=True)
+    finally:
+        shutil.rmtree(temp_dir, ignore_errors=True)
 
-@app.post("/api/pod/files/tail")
-def pod_files_tail():
-    d = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
-    if not runner:
+
+@app.route('/api/pod/files/tail', methods=['POST'])
+@login_required
+def tail_pod_file():
+    """Tail Pod 内文件"""
+    d = request.json or {}
+    runner, err = _make_runner(d.get('cluster_name', ''))
+    if err:
         return jsonify({"error": err, "content": ""}), 400
-    lines = int(d.get("lines", 200))
+    
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    container = d.get('container', '')
+    path = d.get('path', '')
+    lines = int(d.get('lines', 200))
+    
+    if not path:
+        return jsonify({"error": "path 必填", "content": ""}), 400
+    
     rc, out, err2 = runner.exec_pod(
-        d.get("namespace","default"), d.get("pod_name",""), d.get("container",""),
-        f"tail -n {lines} \"{d.get('path','')}\" 2>&1", timeout=10,
+        ns, pod, container,
+        f"tail -n {lines} {shlex.quote(path)} 2>&1", timeout=10
     )
+    
     if rc != 0:
         return jsonify({"error": out or err2, "content": ""})
-    return jsonify({"content": out, "path": d.get("path","")})
+    
+    return jsonify({"content": out, "path": path})
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Pod Terminal exec
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pod 命令执行
+# ═══════════════════════════════════════════════════════════════════════════════
 
-@app.post("/api/pod/exec")
+@app.route('/api/pod/exec', methods=['POST'])
+@login_required
 def pod_exec():
-    """
-    在 Pod 内执行 shell 命令，返回 stdout + stderr + exit code。
-    支持带工作目录（cd + command 拼接）。
-    timeout 最长 60s，超时返回已有输出。
-    """
-    d         = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
-    if not runner:
+    """在 Pod 内执行命令"""
+    d = request.json or {}
+    runner, err = _make_runner(d.get('cluster_name', ''))
+    if err:
         return jsonify({"error": err, "stdout": "", "stderr": "", "rc": -1}), 400
+    
+    ns = d.get('namespace', 'default')
+    pod = d.get('pod_name', '')
+    container = d.get('container', '')
+    command = d.get('command', '').strip()
+    cwd = d.get('cwd', '').strip()
+    timeout = min(int(d.get('timeout', 30)), 60)
+    
+    if not pod or not command:
+        return jsonify({"error": "pod_name 和 command 必填", "stdout": "", "stderr": "", "rc": -1}), 400
+    
+    # 危险命令检测：阻止明显的破坏性操作
+    _DANGEROUS_PATTERNS = re.compile(
+        r'(?:;\s*(?:rm\s|mkfs\b|dd\s+if=|chmod\s|chown\s|shutdown\b|reboot\b|init\s+[06])'
+        r'|`[^`]*`|\$\([^)]*\)|\|\s*(?:rm\s|mkfs\b|dd\s+if=|shutdown\b|reboot\b)'
+        r'|&&\s*(?:rm\s|mkfs\b|dd\s+if=|chmod\s|chown\s|shutdown\b|reboot\b))',
+        re.IGNORECASE
+    )
+    if _DANGEROUS_PATTERNS.search(command):
+        return jsonify({"error": "命令包含不允许的危险操作", "stdout": "", "stderr": "", "rc": -1}), 400
 
-    ns        = d.get("namespace", "default")
-    pod       = d.get("pod_name", "")
-    container = d.get("container", "")
-    command   = d.get("command", "").strip()
-    cwd       = d.get("cwd", "").strip()       # 当前工作目录
-    timeout   = min(int(d.get("timeout", 30)), 60)
-
-    if not pod:
-        return jsonify({"error": "pod_name 必填", "stdout": "", "stderr": "", "rc": -1}), 400
-    if not command:
-        return jsonify({"error": "command 必填", "stdout": "", "stderr": "", "rc": -1}), 400
-
-    # 构建 shell 命令：先 cd 到工作目录，再执行用户命令
-    # 用 { } 包裹保证 cd 失败时提前报错
     if cwd and cwd != "/":
         shell_cmd = f'cd {shlex.quote(cwd)} && ( {command} ); echo "__RC__=$?"'
     else:
         shell_cmd = f'( {command} ); echo "__RC__=$?"'
-
-    rc_exec, raw_out, raw_err = runner.exec_pod(
-        ns, pod, container, shell_cmd, timeout=timeout
-    )
-
-    # 解析 __RC__ 标记
+    
+    rc_exec, raw_out, raw_err = runner.exec_pod(ns, pod, container, shell_cmd, timeout=timeout)
+    
     rc_actual = rc_exec
     out_clean = raw_out
     if "__RC__=" in raw_out:
-        lines     = raw_out.rsplit("__RC__=", 1)
+        lines = raw_out.rsplit("__RC__=", 1)
         out_clean = lines[0]
         try:
             rc_actual = int(lines[1].strip().splitlines()[0])
         except (ValueError, IndexError):
             pass
-
+    
     return jsonify({
         "stdout": out_clean,
         "stderr": raw_err,
-        "rc":     rc_actual,
-        "cwd":    cwd,
+        "rc": rc_actual,
+        "cwd": cwd,
     })
 
 
-@app.post("/api/pod/exec/cwd")
+@app.route('/api/pod/exec/cwd', methods=['POST'])
+@login_required
 def pod_exec_cwd():
-    """获取 Pod 内当前工作目录、hostname、用户名（用于终端初始化）。"""
-    d         = request.json
-    runner, err = _make_runner(d.get("cluster_name", ""))
+    """获取 Pod 内当前工作目录"""
+    d = request.json
+    runner, err = _make_runner(d.get('cluster_name', ''))
     if not runner:
         return jsonify({"cwd": "/", "hostname": "", "user": "root"}), 400
-    ns, pod, ctr = (d.get("namespace","default"), d.get("pod_name",""), d.get("container",""))
-    _, cwd,  _ = runner.exec_pod(ns, pod, ctr, "pwd 2>/dev/null || echo /",          timeout=5)
-    _, host, _ = runner.exec_pod(ns, pod, ctr, "hostname 2>/dev/null || echo pod",    timeout=5)
-    _, user, _ = runner.exec_pod(ns, pod, ctr, "whoami 2>/dev/null || echo root",     timeout=5)
+    
+    ns, pod, ctr = d.get('namespace', 'default'), d.get('pod_name', ''), d.get('container', '')
+    
+    _, cwd, _ = runner.exec_pod(ns, pod, ctr, "pwd 2>/dev/null || echo /", timeout=5)
+    _, host, _ = runner.exec_pod(ns, pod, ctr, "hostname 2>/dev/null || echo pod", timeout=5)
+    _, user, _ = runner.exec_pod(ns, pod, ctr, "whoami 2>/dev/null || echo root", timeout=5)
+    
     return jsonify({
-        "cwd":      cwd.strip()  or "/",
+        "cwd": cwd.strip() or "/",
         "hostname": host.strip() or pod,
-        "user":     user.strip() or "root",
+        "user": user.strip() or "root",
     })
 
 
-# ═════════════════════════════════════════════════════════════════════════════
-# Local output files
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
+# 本地文件下载
+# ═══════════════════════════════════════════════════════════════════════════════
 
-@app.get("/api/files")
+@app.route('/api/files', methods=['GET'])
+@login_required
 def list_local_files():
+    """列出本地输出文件（按用户隔离）"""
+    # 获取当前用户有权限的任务输出文件，关联用户信息
+    if current_user.is_admin:
+        # 管理员看所有，并显示用户名
+        task_files = db.fetch_all(
+            '''SELECT pt.output_path, u.username 
+               FROM profiler_tasks pt 
+               LEFT JOIN users u ON pt.user_id = u.id 
+               WHERE pt.output_path IS NOT NULL AND pt.output_path != ""'''
+        )
+    else:
+        # 普通用户只看自己的
+        task_files = db.fetch_all(
+            '''SELECT pt.output_path, u.username 
+               FROM profiler_tasks pt 
+               LEFT JOIN users u ON pt.user_id = u.id 
+               WHERE pt.user_id = ? AND pt.output_path IS NOT NULL AND pt.output_path != ""''',
+            (current_user.id,)
+        )
+    
+    # 构建文件名 -> 用户名 映射
+    file_users = {}
+    allowed_files = set()
+    for t in (task_files or []):
+        op = t.get('output_path', '')
+        if op:
+            fname = Path(op).name
+            allowed_files.add(fname)
+            file_users[fname] = t.get('username', '-')
+    
     files = []
     for f in sorted(OUTPUT_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
-        if f.is_file():
+        if f.is_file() and f.name in allowed_files:
             files.append({
-                "name":     f.name,
-                "size":     f.stat().st_size,
+                "name": f.name,
+                "size": f.stat().st_size,
                 "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+                "username": file_users.get(f.name, '-'),  # 添加用户名
             })
     return jsonify(files)
 
-@app.get("/api/files/<path:filename>")
+
+@app.route('/api/files/<path:filename>', methods=['GET'])
+@login_required
 def download_local_file(filename: str):
+    """下载本地输出文件（按用户隔离）"""
     p = OUTPUT_DIR / filename
     if not p.exists():
         return jsonify({"error": "不存在"}), 404
+    
+    # 非管理员检查文件归属
+    if not current_user.is_admin:
+        task = db.fetch_one(
+            'SELECT id FROM profiler_tasks WHERE user_id = ? AND output_path LIKE ? LIMIT 1',
+            (current_user.id, f'%{filename}')
+        )
+        if not task:
+            return jsonify({"error": "无权限"}), 403
+    
+    # 记录审计日志
+    from services.audit_service import AuditService
+    AuditService.log_file_downloaded(current_user.id, filename)
+    
     return send_file(str(p), as_attachment=True, download_name=filename)
 
 
-# ═════════════════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════════
+# 主入口
+# ═══════════════════════════════════════════════════════════════════════════════
+
 if __name__ == "__main__":
     import argparse
+    
     parser = argparse.ArgumentParser(description="K8s Arthas Tool Server")
-    parser.add_argument("--port", type=int, default=5001)
-    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=Config.DEFAULT_PORT)
+    parser.add_argument("--host", default=Config.DEFAULT_HOST)
     args = parser.parse_args()
-
+    
     # 初始化数据库
-    _init_db()
-    _load_clusters()
-
-    print(f"🚀  K8s Arthas Tool  →  http://{args.host}:{args.port}")
-    app.run(host=args.host, port=args.port, debug=False, threaded=True)
+    db.initialize()
+    # 从 clusters.json 同步到数据库（仅补充缺失的记录）
+    _sync_clusters_to_db()
+    # 校验生产环境安全配置
+    Config.validate_production()
+    print(f"🚀  K8s Arthas Tool v2026.03.23  →  http://{args.host}:{args.port}")
+    app.run(host=args.host, port=args.port, debug=True)

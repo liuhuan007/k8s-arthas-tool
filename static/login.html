@@ -4,6 +4,12 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Arthas K8s 诊断台 — 登录</title>
+<script>
+// 认证 key（与 index.html 一致）
+var AUTH_KEY = 'arthas_auth_token';
+var AUTH_USER = 'arthas_auth_user';
+var REMEMBER_KEY = 'arthas_remember';
+</script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
 <style>
 /* ── Design tokens — 与 index.html 完全一致 ── */
@@ -295,31 +301,40 @@ html,body{height:100%;background:var(--bg);color:var(--tx);font-family:var(--mon
 
   <!-- 底部提示 -->
   <div class="hint">
-    默认账号 <code>seeyon</code> 密码 <code>seeyon</code>
+    输入账号密码登录系统
   </div>
 
 </div>
 
+<script src="js/core/api.js"></script>
+<script src="js/core/auth.js"></script>
 <script>
-const AUTH_KEY    = 'arthas_auth_token';
-const AUTH_USER   = 'arthas_auth_user';
-const REMEMBER_KEY= 'arthas_remember';
-const VALID_USERS = [{ username:'seeyon', password:'seeyon' }];
-
-window.addEventListener('DOMContentLoaded', () => {
-  // 已登录直接跳转
-  if(sessionStorage.getItem(AUTH_KEY) || localStorage.getItem(AUTH_KEY)) {
-    redirect(); return;
+window.addEventListener('DOMContentLoaded', async () => {
+  // 检查是否已登录（使用原生 fetch，避免 safeGet 的 401 自动跳转导致无限刷新）
+  try {
+    const resp = await fetch('/api/auth/current', { credentials: 'include' });
+    const data = await resp.json();
+    if (data && data.authenticated && data.user) {
+      // 后端 session 有效且有用户信息 → 同步到本地存储后跳转
+      sessionStorage.setItem(AUTH_USER, JSON.stringify(data.user));
+      sessionStorage.setItem(AUTH_KEY, 'logged_in');
+      window.location.href = '/index.html';
+      return;
+    }
+  } catch (e) {
+    console.log('Auth check skipped:', e.message);
   }
+
   // 恢复记住我
   try {
     const d = JSON.parse(localStorage.getItem(REMEMBER_KEY) || 'null');
-    if(d) {
+    if (d) {
       document.getElementById('username').value = d.u || '';
       document.getElementById('password').value = d.p || '';
       document.getElementById('rememberMe').checked = true;
     }
   } catch {}
+
   // 自动聚焦
   setTimeout(() => {
     const u = document.getElementById('username');
@@ -327,48 +342,67 @@ window.addEventListener('DOMContentLoaded', () => {
   }, 80);
 });
 
-function redirect() {
-  const p    = new URLSearchParams(window.location.search);
-  const next = p.get('next');
-  if (next) { window.location.href = next; return; }
-  // HTTP 模式跳到根路径，file:// 模式跳到 index.html
-  window.location.href = window.location.protocol.startsWith('http') ? '/' : 'index.html';
+// 登录成功后直接跳转
+function redirectToIndex() {
+  window.location.href = '/index.html';
 }
 
-function doLogin(e) {
+async function doLogin(e) {
   e.preventDefault();
-  const u  = document.getElementById('username').value.trim();
-  const p  = document.getElementById('password').value;
+  const u = document.getElementById('username').value.trim();
+  const p = document.getElementById('password').value;
   const rm = document.getElementById('rememberMe').checked;
-  const btn= document.getElementById('loginBtn');
+  const btn = document.getElementById('loginBtn');
   const sp = document.getElementById('spinner');
-  btn.disabled = true; sp.style.display = 'block';
+  
+  btn.disabled = true; 
+  sp.style.display = 'block';
+  clearErr();
 
-  setTimeout(() => {
-    const ok = VALID_USERS.some(v => v.username === u && v.password === p);
-    sp.style.display = 'none'; btn.disabled = false;
-    if(ok) {
-      const token = btoa(u + ':' + Date.now());
-      sessionStorage.setItem(AUTH_KEY,  token);
-      sessionStorage.setItem(AUTH_USER, u);
-      if(rm) {
-        localStorage.setItem(AUTH_KEY,   token);
-        localStorage.setItem(AUTH_USER,  u);
-        localStorage.setItem(REMEMBER_KEY, JSON.stringify({u, p}));
+  try {
+    console.log('Logging in...', u);
+    console.log('API URL:', typeof API !== 'undefined' ? API : 'not loaded yet');
+    const resp = await safePost('/auth/login', { username: u, password: p });
+    console.log('Login response:', resp);
+    
+    // 登录成功 - 兼容处理
+    if (resp.ok === true || (resp.ok !== false && !resp.error)) {
+      console.log('Login OK, setting token...');
+      if (rm) {
+        localStorage.setItem(REMEMBER_KEY, JSON.stringify({ u, p }));
       } else {
-        localStorage.removeItem(AUTH_KEY);
-        localStorage.removeItem(AUTH_USER);
         localStorage.removeItem(REMEMBER_KEY);
       }
-      redirect();
+      
+      // 存储用户信息
+      if (resp.user) {
+        sessionStorage.setItem(AUTH_USER, JSON.stringify(resp.user));
+      }
+
+      // 存储 token（标记已登录，供 index.html 登录检查使用）
+      // 使用 localStorage 确保持久化
+      localStorage.setItem(AUTH_KEY, 'logged_in');
+      
+      console.log('Token set, redirecting to:', '/index.html');
+      redirectToIndex();
+      return;
     } else {
-      showErr();
+      console.log('Login failed:', resp);
+      showErr(resp.error || '登录失败');
     }
-  }, 180);
+  } catch (err) {
+    console.error('Login error:', err);
+    showErr(err.message || '登录失败');
+  } finally {
+    sp.style.display = 'none'; 
+    btn.disabled = false;
+  }
 }
 
-function showErr() {
-  document.getElementById('errMsg').classList.add('show');
+function showErr(msg) {
+  const errEl = document.getElementById('errMsg');
+  errEl.childNodes[errEl.childNodes.length - 1].textContent = msg;
+  errEl.classList.add('show');
   document.getElementById('userWrap').classList.add('error');
   document.getElementById('passWrap').classList.add('error');
   const c = document.getElementById('loginCard');
@@ -376,6 +410,7 @@ function showErr() {
   c.offsetHeight;
   c.style.animation = 'shake .4s ease';
 }
+
 function clearErr() {
   document.getElementById('errMsg').classList.remove('show');
   document.getElementById('userWrap').classList.remove('error');

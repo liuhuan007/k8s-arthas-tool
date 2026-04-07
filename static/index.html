@@ -2,22 +2,47 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<title>Arthas K8s 诊断台</title>
+<title>K8s Arthas 诊断台</title>
 <script>
-// ── 登录检查（页面最早执行，避免内容闪烁）────────────────────────────────────
-(function() {
-  var AUTH_KEY = 'arthas_auth_token';
-  var token = sessionStorage.getItem(AUTH_KEY) || localStorage.getItem(AUTH_KEY);
-  if(!token) {
-    var loginUrl = window.location.protocol.startsWith('http') ? '/login.html' : 'login.html';
-    window.location.replace(loginUrl + '?next=' + encodeURIComponent(window.location.href));
+// 认证 key（必须在所有脚本之前定义）
+var AUTH_KEY = 'arthas_auth_token';
+var AUTH_USER = 'arthas_auth_user';
+
+// 前端认证守卫：检查后端 session 是否有效
+(async function() {
+  try {
+    const resp = await fetch('/api/auth/current', { credentials: 'include' });
+    const data = await resp.json();
+    if (!data || !data.authenticated) {
+      window.location.replace('/login.html');
+      return;
+    }
+  } catch (e) {
+    // 后端不可达，跳转登录页
+    window.location.replace('/login.html');
+    return;
   }
 })();
 </script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="static/css/app.css">
-</head>
-<body>
+<link rel="stylesheet" href="css/app.css">
+
+<!-- 核心模块（按依赖顺序） -->
+<script src="js/core/api.js"></script>
+<script src="js/core/auth.js"></script>
+<script src="js/core/utils.js"></script>
+
+<!-- 组件模块 -->
+<script src="js/components/connections.js"></script>
+<script src="js/app-terminal.js"></script>
+<script src="js/components/monitor.js"></script>
+<script src="js/components/profiler.js"></script>
+<script src="js/components/filebrowser.js"></script>
+<script src="js/components/clusters.js"></script>
+
+<!-- 应用入口 -->
+<script src="js/app-ui.js"></script>
+<script src="js/app.js"></script>
 </head>
 <body>
 
@@ -26,15 +51,16 @@
   <div class="tb-logo"><div class="tb-hex"></div><span class="tb-title">Arthas <em>K8s</em></span></div>
   <div class="tb-links">
     <a class="tb-lnk" href="https://arthas.aliyun.com/en/doc/" target="_blank">📖 官方文档</a>
-    <a class="tb-lnk" href="https://arthas.aliyun.com/en/doc/http-api.html" target="_blank">🔌 HTTP API</a>
     <a class="tb-lnk" href="https://arthas.aliyun.com/en/doc/commands.html" target="_blank">📋 命令手册</a>
+    <a class="tb-lnk admin-only" href="user-management.html">用户管理</a>
+    <a class="tb-lnk admin-only" href="audit-logs.html">审计日志</a>
     <a class="tb-lnk" href="javascript:void(0)" onclick="switchTab('history')">📋 历史记录</a>
   </div>
   <div class="tb-right" style="display:flex;align-items:center;gap:10px">
     <div class="tb-srv"><div class="dot" id="svDot"></div><span id="svLbl">连接中...</span></div>
     <div style="display:flex;align-items:center;gap:8px;border-left:1px solid rgba(255,255,255,.2);padding-left:12px">
       <span style="font-size:12px;color:rgba(255,255,255,.8)">
-        👤 <span id="loginUser">seeyon</span>
+        👤 <span id="loginUser">—</span>
       </span>
       <button onclick="doLogout()" title="退出登录"
         style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:4px;
@@ -50,7 +76,7 @@
 <!-- ── Sidebar ── -->
 <div class="sidebar">
   <!-- Arthas Connections -->
-  <div class="sb-hd"><span>Arthas 连接</span></div>
+  <div class="sb-hd"><span>Arthas 连接</span><div style="display:flex;gap:2px"><button onclick="checkConnectionsHealth()" title="检查连接健康状态">♥</button><button onclick="cleanupStaleConnections()" title="清理失效连接">🗑</button><button onclick="renderConnList()" title="刷新">↻</button></div></div>
   <div class="conn-list" id="connList">
     <div class="sb-empty">暂无连接<br>使用下方添加</div>
   </div>
@@ -197,7 +223,6 @@
             <div style="padding:7px 10px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.2);border-radius:5px;font-size:11px;color:var(--a6);margin-bottom:10px;line-height:1.6">
               ⚠ JDK JFR 需要 JDK 11+，通过 Arthas <code>jfr</code> 命令控制
             </div>
-            <!-- 录制名称固定为 arthas-jfr，不需要用户配置 -->
             <input type="hidden" id="jfrName" value="arthas-jfr">
             <div class="fg"><label class="fl">时长 (秒)</label>
               <div class="sl-row">
@@ -272,6 +297,18 @@
             <button class="ib" style="margin-left:auto;font-size:11px" onclick="pfClearLog()">清空</button>
             <button class="ib" style="margin-left:6px;font-size:11px" onclick="togglePfHistory()" title="切换显示当前连接历史">📋 本地历史</button>
             <button class="ib" style="margin-left:6px;font-size:11px" onclick="switchTab('history')" title="查看全部Pod的历史任务">📋 全部历史 ↗</button>
+          </div>
+          <!-- Task info summary (hidden when no task) -->
+          <div id="pfTaskInfo" style="display:none;padding:10px 14px;background:var(--bg2);border-bottom:1px solid var(--ln);font-size:11px;line-height:1.6">
+            <div style="display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center">
+              <span><span style="color:var(--tx3)">任务ID:</span> <span id="pfInfoTaskId" style="color:var(--a);font-family:var(--mono)">-</span></span>
+              <span><span style="color:var(--tx3)">类型:</span> <span id="pfInfoType" style="color:var(--tx)">-</span></span>
+              <span><span style="color:var(--tx3)">事件:</span> <span id="pfInfoEvent" style="color:var(--tx)">-</span></span>
+              <span><span style="color:var(--tx3)">时长:</span> <span id="pfInfoDur" style="color:var(--tx)">-</span></span>
+              <span><span style="color:var(--tx3)">进度:</span> <span id="pfInfoProgress" style="color:var(--a);font-weight:600">-</span></span>
+              <span><span style="color:var(--tx3)">状态:</span> <span id="pfInfoStatus" style="color:var(--a3)">-</span></span>
+              <span id="pfInfoDownloadWrap" style="display:none"><button id="pfInfoDownloadBtn" class="btn btn-dl" style="padding:3px 10px;font-size:11px;cursor:pointer">↓ 下载结果</button></span>
+            </div>
           </div>
           <!-- Log panel -->
           <div id="pfl-panel-log" style="flex:1;overflow-y:auto;padding:10px 14px;font-size:12px;line-height:1.8">
@@ -394,36 +431,34 @@
     </div>
 
     <!-- Terminal -->
-    <!-- Terminal Panel — macOS style -->
-<div class="panel" id="panel-terminal">
-  <div class="xterm-container">
-    <!-- macOS-style title bar -->
-    <div class="xterm-titlebar">
-      <div class="xterm-dots">
-        <div class="xterm-dot red"    onclick="switchTab('console')" title="关闭 → 返回 Arthas"></div>
-        <div class="xterm-dot yellow" onclick="termClear()"          title="清屏"></div>
-        <div class="xterm-dot green"  onclick="termInit()"           title="重新连接"></div>
+    <div class="panel" id="panel-terminal">
+      <div class="xterm-container">
+        <!-- macOS-style title bar -->
+        <div class="xterm-titlebar">
+          <div class="xterm-dots">
+            <div class="xterm-dot red"    onclick="switchTab('console')" title="关闭 → 返回 Arthas"></div>
+            <div class="xterm-dot yellow" onclick="termClear()"          title="清屏"></div>
+            <div class="xterm-dot green"  onclick="termInit()"           title="重新连接"></div>
+          </div>
+          <span class="xterm-title" id="termTitle">Pod Terminal</span>
+          <button class="xterm-conn" id="termConnBtn" onclick="termInit()">连接</button>
+        </div>
+        <!-- Output area -->
+        <div class="xterm-screen" id="termOut" onclick="document.getElementById('termInput').focus()"></div>
+        <!-- Tab completion popup -->
+        <div id="tabPopup" class="tab-popup"></div>
+        <!-- Input bar -->
+        <div class="xterm-input-bar" style="flex-shrink:0">
+          <span class="xterm-input-ps1" id="termPrompt">
+            <span class="ps1-user" id="termUser">root</span><span class="ps1-at">@</span><span class="ps1-host" id="termHostP">pod</span><span class="ps1-sep">:</span><span class="ps1-path" id="termCwdP">~</span><span class="ps1-sym"> # </span>
+          </span>
+          <input class="xterm-input" id="termInput"
+            onkeydown="termKeyDown(event)"
+            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+          <div class="xterm-spin" id="termSpin" style="display:none"></div>
+        </div>
       </div>
-      <span class="xterm-title" id="termTitle">Pod Terminal</span>
-      <button class="xterm-conn" id="termConnBtn" onclick="termInit()">连接</button>
     </div>
-    <!-- Output area -->
-    <div class="xterm-screen" id="termOut" onclick="document.getElementById('termInput').focus()"></div>
-    <!-- Tab completion popup (inside container, above input bar) -->
-    <div id="tabPopup" class="tab-popup"></div>
-    <!-- Input bar — flex-shrink:0 keeps it always visible at bottom -->
-    <div class="xterm-input-bar" style="flex-shrink:0">
-      <span class="xterm-input-ps1" id="termPrompt">
-        <span class="ps1-user" id="termUser">root</span><span class="ps1-at">@</span><span class="ps1-host" id="termHostP">pod</span><span class="ps1-sep">:</span><span class="ps1-path" id="termCwdP">~</span><span class="ps1-sym"> # </span>
-      </span>
-      <input class="xterm-input" id="termInput"
-        onkeydown="termKeyDown(event)"
-        autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
-      <div class="xterm-spin" id="termSpin" style="display:none"></div>
-    </div>
-  </div>
-</div>
-
 
   </div>
 </div>
@@ -457,7 +492,5 @@
 </div>
 
 <div id="toast"></div>
-<script src="static/js/app-ui.js"></script>
-<script src="static/js/app-terminal.js"></script>
 </body>
 </html>

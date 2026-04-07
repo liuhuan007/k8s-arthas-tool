@@ -300,9 +300,9 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 .xterm-dot.red{background:#ff5f57}.xterm-dot.yellow{background:#ffbd2e}.xterm-dot.green{background:#28ca41}
 .xterm-dot.red:hover{background:#ff3b30}.xterm-dot.yellow:hover{background:#ff9500}.xterm-dot.green:hover{background:#34c759}
 .xterm-title{flex:1;text-align:center;font-size:12px;color:#888;letter-spacing:.3px}
-.xterm-conn{font-size:11px;color:#555;cursor:pointer;padding:2px 8px;border:1px solid #444;border-radius:3px;background:none;font-family:inherit;transition:all.15s}
-.xterm-conn:hover{color:#aaa;border-color:#666}
-.xterm-conn.live{color:#28ca41;border-color:#28ca41}
+.xterm-conn{font-size:12px;color:#8be9fd;cursor:pointer;padding:3px 12px;border:1px solid #44475a;border-radius:4px;background:rgba(139,233,253,.08);font-family:inherit;font-weight:600;transition:all.15s}
+.xterm-conn:hover{color:#f1fa8c;border-color:#8be9fd;background:rgba(139,233,253,.15)}
+.xterm-conn.live{color:#50fa7b;border-color:#50fa7b;background:rgba(80,250,123,.1);text-shadow:0 0 6px rgba(80,250,123,.4)}
 .xterm-screen{flex:1;overflow-y:auto;padding:12px 16px;font-size:13px;line-height:1.65;cursor:text;color:#e5e5e5}
 .xterm-screen::-webkit-scrollbar{width:6px}.xterm-screen::-webkit-scrollbar-thumb{background:#404040;border-radius:3px}
 .xterm-screen::-webkit-scrollbar-track{background:transparent}

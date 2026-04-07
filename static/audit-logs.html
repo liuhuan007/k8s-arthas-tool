@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>审计日志 - K8s Arthas Tool</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/app.css">
+    <style>
+        body { background:var(--bg); color:var(--tx); font-family:var(--mono); margin:0; overflow:auto }
+        .admin-page { display:flex; flex-direction:column; min-height:100vh }
+
+        /* ── Topbar (与主页一致) ── */
+        .topbar{height:44px;background:var(--bg1);border-bottom:1px solid var(--ln);display:flex;align-items:center;flex-shrink:0}
+        .tb-logo{display:flex;align-items:center;gap:10px;padding:0 16px;border-right:1px solid var(--ln);height:100%;flex-shrink:0}
+        .tb-hex{width:24px;height:24px;background:var(--a);clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)}
+        .tb-title{font-family:var(--sans);font-weight:800;font-size:14px;letter-spacing:-.5px}
+        .tb-title em{color:var(--a);font-style:normal}
+        .tb-links{display:flex;align-items:center;height:100%;flex:1;padding:0 10px;gap:4px}
+        .tb-lnk{padding:3px 9px;border-radius:3px;font-size:11px;border:1px solid var(--ln2);color:var(--tx2);cursor:pointer;transition:all.15s;text-decoration:none}
+        .tb-lnk:hover{border-color:var(--a);color:var(--a);background:rgba(56,189,248,.06)}
+        .tb-right{display:flex;align-items:center;height:100%;margin-left:auto}
+        .tb-srv{display:flex;align-items:center;gap:6px;padding:0 14px;border-left:1px solid var(--ln);font-size:11px;color:var(--tx2)}
+
+        /* ── Content ── */
+        .admin-content{flex:1;padding:24px 30px;max-width:1400px;margin:0 auto;width:100%}
+        .admin-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--ln)}
+        .admin-header h1{font-family:var(--sans);font-size:18px;font-weight:700;color:var(--tx);margin:0}
+        .admin-header h1 span{color:var(--a)}
+
+        /* ── Buttons ── */
+        .btn-row{display:flex;gap:8px}
+        .ab{padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-family:var(--mono);border:none;transition:all.15s;font-weight:500}
+        .ab-p{background:var(--a);color:#0b0f18;font-weight:600}.ab-p:hover{filter:brightness(1.1)}
+        .ab-g{background:none;color:var(--tx2);border:1px solid var(--ln)}.ab-g:hover{border-color:var(--a);color:var(--a)}
+        .ab-w{background:rgba(251,191,36,.12);color:var(--a6);border:1px solid rgba(251,191,36,.25)}.ab-w:hover{background:rgba(251,191,36,.2)}
+
+        /* ── Filters ── */
+        .filters{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;padding:16px 18px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+        .filters label{font-size:11px;color:var(--tx2);display:flex;align-items:center;gap:6px}
+        .filters select,.filters input[type=date]{padding:5px 8px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-family:var(--mono);font-size:11px;outline:none;transition:border-color.15s}
+        .filters select:focus,.filters input:focus{border-color:var(--a)}
+        .filters .fg-sep{width:1px;height:22px;background:var(--ln);margin:0 4px}
+
+        /* ── Table ── */
+        .tbl-wrap{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;overflow:hidden}
+        .tbl{width:100%;border-collapse:collapse}
+        .tbl th{background:var(--bg2);color:var(--tx2);padding:11px 14px;text-align:left;font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--ln)}
+        .tbl td{padding:10px 14px;border-bottom:1px solid var(--ln);color:var(--tx);font-size:12px}
+        .tbl tr:last-child td{border-bottom:none}
+        .tbl tr:hover td{background:rgba(255,255,255,.02)}
+
+        /* ── Action badges ── */
+        .badge{padding:3px 9px;border-radius:10px;font-size:10px;font-weight:600;display:inline-block}
+        .bg-login{background:rgba(56,189,248,.12);color:var(--a);border:1px solid rgba(56,189,248,.25)}
+        .bg-fail{background:rgba(248,113,113,.12);color:var(--a5);border:1px solid rgba(248,113,113,.25)}
+        .bg-logout{background:rgba(107,127,160,.12);color:var(--tx2);border:1px solid rgba(107,127,160,.25)}
+        .bg-create{background:rgba(52,211,153,.12);color:var(--a3);border:1px solid rgba(52,211,153,.25)}
+        .bg-delete{background:rgba(248,113,113,.12);color:var(--a5);border:1px solid rgba(248,113,113,.25)}
+        .bg-download{background:rgba(167,139,250,.12);color:var(--a2);border:1px solid rgba(167,139,250,.25)}
+        .bg-connect{background:rgba(251,191,36,.12);color:var(--a6);border:1px solid rgba(251,191,36,.25)}
+
+        /* ── Pagination ── */
+        .pagination{margin-top:16px;display:flex;justify-content:center;align-items:center;gap:8px}
+        .pagination button{padding:5px 12px;border-radius:4px;font-size:11px;font-family:var(--mono);cursor:pointer;background:var(--bg2);color:var(--tx2);border:1px solid var(--ln);transition:all.15s}
+        .pagination button:hover{border-color:var(--a);color:var(--a)}
+        .pagination button:disabled{opacity:.4;cursor:not-allowed}
+        .pagination .page-info{font-size:11px;color:var(--tx3)}
+
+        .empty-msg{text-align:center;padding:40px;color:var(--tx3);font-size:12px}
+    </style>
+</head>
+<body>
+    <div class="admin-page">
+        <!-- Topbar -->
+        <div class="topbar">
+            <div class="tb-logo"><div class="tb-hex"></div><span class="tb-title">Arthas <em>K8s</em></span></div>
+            <div class="tb-links">
+                <a class="tb-lnk" href="/">← 返回主页</a>
+                <a class="tb-lnk" href="user-management.html">用户管理</a>
+            </div>
+            <div class="tb-right">
+                <div class="tb-srv"><span id="currentUser">—</span></div>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div class="admin-content">
+            <div class="admin-header">
+                <h1>📋 <span>审计日志</span></h1>
+            </div>
+
+            <div class="filters">
+                <label>用户:
+                    <select id="filterUser"><option value="">全部用户</option></select>
+                </label>
+                <div class="fg-sep"></div>
+                <label>操作:
+                    <select id="filterAction">
+                        <option value="">全部操作</option>
+                        <option value="login">登录</option>
+                        <option value="login_failed">登录失败</option>
+                        <option value="logout">登出</option>
+                        <option value="connect">连接</option>
+                        <option value="disconnect">断开连接</option>
+                        <option value="create">创建</option>
+                        <option value="delete">删除</option>
+                        <option value="download">下载</option>
+                        <option value="task_start">任务开始</option>
+                        <option value="task_cancel">任务取消</option>
+                        <option value="user_create">创建用户</option>
+                        <option value="user_update">更新用户</option>
+                        <option value="user_delete">删除用户</option>
+                        <option value="cluster_assign">分配集群</option>
+                    </select>
+                </label>
+                <div class="fg-sep"></div>
+                <label>资源:
+                    <select id="filterResourceType">
+                        <option value="">全部类型</option>
+                        <option value="user">用户</option>
+                        <option value="connection">连接</option>
+                        <option value="task">任务</option>
+                        <option value="file">文件</option>
+                        <option value="cluster">集群</option>
+                    </select>
+                </label>
+                <label>起始 <input type="date" id="filterStartDate"></label>
+                <label>截止 <input type="date" id="filterEndDate"></label>
+                <button class="ab ab-p" onclick="loadLogs()">查询</button>
+                <button class="ab ab-g" onclick="resetFilters()">重置</button>
+                <button class="ab ab-w" onclick="exportLogs()">↓ 导出 CSV</button>
+            </div>
+
+            <div class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                        <tr>
+                            <th>时间</th>
+                            <th>用户</th>
+                            <th>操作</th>
+                            <th>资源类型</th>
+                            <th>资源ID</th>
+                            <th>详情</th>
+                            <th>IP</th>
+                        </tr>
+                    </thead>
+                    <tbody id="logsTable">
+                        <tr><td colspan="7" class="empty-msg">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="pagination">
+                <button id="prevBtn" onclick="prevPage()">← 上一页</button>
+                <span class="page-info" id="pageInfo">第 1 页</span>
+                <button id="nextBtn" onclick="nextPage()">下一页 →</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/audit-logs.js"></script>
+    <script>
+    (async function() {
+      try {
+        const resp = await fetch('api/auth/current').then(r => r.json());
+        if (!resp || !resp.authenticated) {
+          window.location.href = '/login.html';
+          return;
+        }
+        if (!resp.user || resp.user.role !== 'admin') {
+          alert('只有管理员可以查看审计日志');
+          window.location.href = 'index.html';
+          return;
+        }
+        const el = document.getElementById('currentUser');
+        if (el) el.textContent = '👤 ' + (resp.user.username || '—');
+      } catch (e) {
+        window.location.href = '/login.html';
+      }
+    })();
+    </script>
+</body>
+</html>
