@@ -72,6 +72,12 @@ let _clusters = [], _ac = null;
 let _connections = [], _currentConnId = null;
 let _connected = false, _ap = null;
 let _connHealth = {};  // { connId: { alive, pod_exists, pod_phase, reason } }
+// 同步模块内部状态到 window，供 ai-chat.js / MCP 弹窗等外部模块读取
+function _syncState() {
+  window._connections  = _connections;
+  window._currentConnId = _currentConnId;
+  window._connHealth   = _connHealth;
+}
 let _sid = null, _cid = null, _pollTimer = null, _polling = false;
 let _cmdHist = [], _histIdx = -1, _selCmd = null;
 let _pfTaskId = null, _pfPollTimer = null, _pfStart = null, _pfDur = 60, _pfLL = 0;
@@ -114,7 +120,7 @@ function renderConnList() {
       }
     }
     html += `
-      <div class="conn-itm ${isActive?'on':''}" onclick="switchConnection('${c.id}')" title="集群: ${esc(c.cluster_name)}\n环境: ${c.namespace}\nPod: ${c.pod_name}\n端口: ${c.local_port}${statusHint ? '\n' + statusHint : ''}">
+      <div class="conn-itm ${isActive?'on':''}" onclick="switchConnection('${c.id}')" title="集群: ${esc(c.cluster_name)}\n环境: ${c.namespace}\nPod: ${c.pod_name}\n端口: ${c.local_port}${c.arthas_version ? '\nArthas: ' + c.arthas_version : ''}${c.arthas_address ? '\n地址: ' + c.arthas_address : ''}${statusHint ? '\n' + statusHint : ''}">
         <div style="flex:1;overflow:hidden">
           <div style="font-weight:600;color:${isActive?'var(--a)':'var(--tx)'};margin-bottom:3px">
             ${statusIcon ? `<span style="font-size:9px;${statusStyle};margin-right:3px" title="${statusHint}">${statusIcon}</span>` : '<span style="font-size:11px">🔹</span>'} ${esc(c.cluster_name)}
@@ -124,6 +130,7 @@ function renderConnList() {
             <span style="margin:0 4px;opacity:0.5">/</span>
             <span style="font-weight:500;color:${isActive?'var(--a)':'var(--tx)'}">${c.pod_name}</span>
             <span style="margin-left:6px;font-size:9px;color:var(--tx3);opacity:0.7">:${c.local_port}</span>
+            ${c.arthas_version ? `<span style="margin-left:5px;font-size:9px;color:var(--a3);opacity:0.8">v${esc(c.arthas_version)}</span>` : ''}
           </div>
         </div>
         <button class="del-conn" onclick="event.stopPropagation();deleteConnection('${c.id}')" title="删除连接">✕</button>
@@ -211,9 +218,14 @@ async function switchConnection(connId) {
 
       // 切换成功后，立即标记为健康状态
       _connHealth[connId] = { alive: true, pod_exists: true, pod_phase: 'Running' };
-
-      // 更新连接的 local_port
+      // 更新连接对象的 status
+      conn.status = 'connected';
       conn.local_port = d.local_port;
+
+      // 【关键修复】同步状态到 window
+      _syncState();
+      renderConnList();
+      if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
 
       // 清理当前会话状态
       _polling = false;
@@ -474,8 +486,10 @@ function deleteConnection(connId) {
     document.getElementById('conTitle').textContent = '等待连接...';
     document.getElementById('runBtn').disabled = true;
   }
+  _syncState();  // 【关键修复】同步状态到 window
   renderConnList();
   saveConnections();
+  if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
 }
 
 // 批量检查所有连接的健康状态
@@ -494,7 +508,16 @@ async function checkConnectionsHealth() {
     const d = await r.json();
     if (d.results) {
       _connHealth = d.results;
+      // 同步健康状态到连接对象的 status 字段
+      for (const c of _connections) {
+        const h = _connHealth[c.id];
+        if (h) {
+          c.status = (h.alive && h.pod_exists !== false) ? 'connected' : 'disconnected';
+        }
+      }
       renderConnList();
+      _syncState();  // 【关键修复】同步到 window
+      if (typeof aiUpdateConnIndicator === 'function') aiUpdateConnIndicator();
     }
   } catch(e) {
     console.warn('连接健康检查失败:', e);
@@ -534,6 +557,7 @@ async function cleanupStaleConnections() {
     document.getElementById('conTitle').textContent = '等待连接...';
     document.getElementById('runBtn').disabled = true;
   }
+  _syncState();  // 【关键修复】同步状态到 window
   renderConnList();
   saveConnections();
   toast(`已清理 ${staleIds.length} 个失效连接`, 'success');
@@ -544,6 +568,8 @@ function saveConnections() {
   const user = getCurrentUser();
   const key = user ? `arthas_connections_${user.username}` : 'arthas_connections';
   localStorage.setItem(key, JSON.stringify(_connections));
+  // 【关键修复】同步到 window
+  _syncState();
 }
 
 function loadConnections() {
@@ -559,18 +585,21 @@ function loadConnections() {
       _connections = [];
       renderConnList();
     }
+    // 【关键修复】同步到 window，供 ai-chat.js / MCP 弹窗等外部模块读取
+    _syncState();
   } catch(e) {
     console.error('加载连接失败:', e);
     _connections = [];
+    _syncState();
   }
 }
 
 function switchTab(n) {
   // 支持数字索引 (0-6) 和字符串索引
-  const tabMap = {0:'console', 1:'profiler', 2:'monitor', 3:'filebrowser', 4:'terminal', 5:'history'};
+  const tabMap = {0:'console', 1:'profiler', 2:'monitor', 3:'filebrowser', 4:'terminal', 5:'ai', 6:'history'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
   
-  ['console','profiler','monitor','filebrowser','terminal','history'].forEach(x => {
+  ['console','profiler','monitor','filebrowser','terminal','ai','history'].forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
     document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
   });
@@ -609,6 +638,7 @@ function switchTab(n) {
     }, 100);
   }
   if(n==='terminal') { setTimeout(()=>{ document.getElementById('termInput')?.focus(); },100); }
+  if(n==='ai') { setTimeout(()=>{ aiRefreshConnSelect(); document.getElementById('aiInput')?.focus(); },100); }
 }
 
 function switchHistTab(name) {
@@ -774,60 +804,69 @@ async function arthasConnect() {
     return;
   }
   
-  // 添加用户选择的 Java PID 到请求参数
-  if(window._selectedJavaPid) {
-    t.java_pid = window._selectedJavaPid;
-  }
-  
-  const ptBtn = document.getElementById('ptConnBtn');
-  ptBtn.disabled = true; ptBtn.textContent = '连接中...';
-  setCpSt('', ''); setConnStatus('dim', `正在连接 ${t.cluster_name} / ${t.namespace} / ${t.pod_name} ...`);
-  try {
-    const r = await fetch(`${API}/arthas/connect`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(t)});
-    const d = await r.json();
-    if(d.ok) {
-      // 使用后端返回的 connection_id
-      const connId = d.connection_id || d.conn_id;
-      const newConn = {
-        id: connId,
-        cluster_name: t.cluster_name,
-        namespace: t.namespace,
-        pod_name: t.pod_name,
-        container: t.container,
-        arthas_jar: t.arthas_jar,
-        local_port: d.local_port,
-        message: d.message,
-        created_at: new Date().toISOString()
-      };
-
-      // 检查是否已存在相同的 Pod 连接
-      const existingIndex = _connections.findIndex(c =>
-        c.cluster_name === t.cluster_name && c.namespace === t.namespace && c.pod_name === t.pod_name
-      );
-
-      if (existingIndex >= 0) {
-        // 更新现有连接
-        _connections[existingIndex] = newConn;
-        _currentConnId = newConn.id;
-      } else {
-        // 添加新连接
-        _connections.push(newConn);
-        _currentConnId = newConn.id;
+      // 添加用户选择的 Java PID 到请求参数
+      if(window._selectedJavaPid) {
+        t.java_pid = window._selectedJavaPid;
       }
 
-      _connected = true;
-      _ap = t;
-      ptBtn.textContent = '⚡ 连接'; ptBtn.className = 'pt-btn'; ptBtn.disabled = false;
+      const ptBtn = document.getElementById('ptConnBtn');
+      ptBtn.disabled = true; ptBtn.textContent = '连接中...';
+      setCpSt('', ''); setConnStatus('dim', `正在连接 ${t.cluster_name} / ${t.namespace} / ${t.pod_name} ...`);
+      try {
+        const r = await fetch(`${API}/arthas/connect`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(t)});
+        const d = await r.json();
+        if(d.ok) {
+          // 使用后端返回的 connection_id
+          const connId = d.connection_id || d.conn_id;
+          const newConn = {
+            id: connId,
+            cluster_name: t.cluster_name,
+            namespace: t.namespace,
+            pod_name: t.pod_name,
+            container: t.container,
+            arthas_jar: t.arthas_jar,
+            local_port: d.local_port,
+            mcp_available: !!d.mcp_available,
+            arthas_version: d.arthas_version || '',
+            arthas_address: d.arthas_address || d.http_url || '',
+            status: 'connected',
+            message: d.message,
+            created_at: new Date().toISOString()
+          };
 
-      // 连接成功后，立即标记为健康状态
-      _connHealth[connId] = { alive: true, pod_exists: true, pod_phase: 'Running' };
+          // 检查是否已存在相同的 Pod 连接
+          const existingIndex = _connections.findIndex(c =>
+            c.cluster_name === t.cluster_name && c.namespace === t.namespace && c.pod_name === t.pod_name
+          );
 
-      renderConnList();
+          if (existingIndex >= 0) {
+            // 更新现有连接
+            _connections[existingIndex] = newConn;
+            _currentConnId = newConn.id;
+          } else {
+            // 添加新连接
+            _connections.push(newConn);
+            _currentConnId = newConn.id;
+          }
+
+          _connected = true;
+          _ap = t;
+          ptBtn.textContent = '⚡ 连接'; ptBtn.className = 'pt-btn'; ptBtn.disabled = false;
+
+          // 连接成功后，立即标记为健康状态
+          _connHealth[connId] = { alive: true, pod_exists: true, pod_phase: 'Running' };
+
+          // 【关键修复】同步状态到 window
+          _syncState();
+          renderConnList();
+          if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
       setCpSt('ok', `✓ ${d.message}  (port:${d.local_port})`);
       document.getElementById('runBtn').disabled = false;
       document.getElementById('conTitle').textContent = `${t.cluster_name}/${t.namespace}/${t.pod_name}`;
-      setPtStat('ok', d.java_pid ? `Arthas 已连接 (PID: ${d.java_pid})` : 'Arthas 已连接');
-      setConnStatus('ok', `✓ ${t.cluster_name} / ${t.namespace} / ${t.pod_name}   local port: ${d.local_port}${d.java_pid ? `   PID: ${d.java_pid}` : ''}`);
+      const _verSuffix = d.arthas_version ? `  Arthas ${d.arthas_version}` : '';
+      const _addrInfo = d.arthas_address || d.http_url || `http://127.0.0.1:${d.local_port}`;
+      setPtStat('ok', d.java_pid ? `Arthas 已连接 (PID: ${d.java_pid})${_verSuffix}` : `Arthas 已连接${_verSuffix}`);
+      setConnStatus('ok', `✓ ${t.cluster_name} / ${t.namespace} / ${t.pod_name}   local port: ${d.local_port}${d.java_pid ? `   PID: ${d.java_pid}` : ''}${_verSuffix}   ${_addrInfo}`);
       saveConnections();
       toast('连接成功', 'success');
     } else {
@@ -1231,8 +1270,8 @@ const CMDS = [
         {k:'--file', ph:'输出路径', def:'/tmp/profiler.html'},
       ] },
     { id:'jfr_start', name:'jfr start', icon:'📊', type:'once',
-      desc:'JDK JFR 录制启动（需 JDK 11+）',
-      tip:`JDK 原生 Flight Recorder，需要 JDK 11+。推荐使用右侧「🔥 JProfiler → 📊 JDK JFR」面板操作。\n-d 指定录制时长后自动停止，-s 选择录制配置。`,
+      desc:'JDK JFR 录制启动（需 JDK 8u262+ 或 JDK 11+）',
+      tip:`JDK 原生 Flight Recorder，需要 JDK 8u262+ 或 JDK 11+。推荐使用右侧「🔥 JProfiler → 📊 JDK JFR」面板操作。\n-d 指定录制时长后自动停止，-s 选择录制配置。`,
       example:`jfr start -n myRec -s default -d 60s -f /tmp/my.jfr\njfr status -n myRec\njfr stop -n myRec`,
       doc:`https://arthas.aliyun.com/en/doc/jfr.html`,
       params:[
@@ -2167,7 +2206,7 @@ async function pfRunJfr(t) {
   document.getElementById('pfProg').style.display = 'block';
   pfClearLog();
   pfLog(`JFR 录制: name=${name} settings=${settings} duration=${dur}s`, 'dim');
-  pfLog('注意: JFR 需要 JDK 11+，JDK 8 不支持', 'warn');
+  pfLog('注意: JFR 需要 JDK 8u262+ 或 JDK 11+', 'warn');
 
   try {
     const r = await fetch(`${API}/profile/start`, {

@@ -6,6 +6,7 @@ import json
 import logging
 import time
 import urllib.request
+from typing import Optional
 
 log = logging.getLogger(__name__)
 
@@ -49,7 +50,7 @@ class ArthasHttpClient:
         return json.loads(raw)
 
     def ping(self, retries: int = 3, delay: float = 1.5) -> bool:
-        """Ping with retry"""
+        """Ping with retry — 发送 version 命令检测连通性"""
         for i in range(retries):
             try:
                 r = self._post({"action": "exec", "command": "version"}, timeout=5)
@@ -60,6 +61,22 @@ class ArthasHttpClient:
             if i < retries - 1:
                 time.sleep(delay)
         return False
+
+    def get_version(self, retries: int = 2, delay: float = 1.0) -> Optional[str]:
+        """获取 Arthas 版本号，返回版本字符串或 None"""
+        for i in range(retries):
+            try:
+                r = self._post({"action": "exec", "command": "version"}, timeout=8)
+                if r.get("state") in ("SUCCEEDED", "succeeded"):
+                    for result in r.get("body", {}).get("results", []):
+                        v = result.get("version", "")
+                        if v:
+                            return str(v)
+            except Exception as e:
+                log.debug("get_version attempt %d failed: %s", i + 1, e)
+            if i < retries - 1:
+                time.sleep(delay)
+        return None
 
     # ── One-shot commands ──────────────────────────────────────────────────────
 

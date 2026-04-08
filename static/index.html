@@ -39,6 +39,7 @@ var AUTH_USER = 'arthas_auth_user';
 <script src="js/components/profiler.js"></script>
 <script src="js/components/filebrowser.js"></script>
 <script src="js/components/clusters.js"></script>
+<script src="js/ai-chat.js"></script>
 
 <!-- 应用入口 -->
 <script src="js/app-ui.js"></script>
@@ -54,6 +55,7 @@ var AUTH_USER = 'arthas_auth_user';
     <a class="tb-lnk" href="https://arthas.aliyun.com/en/doc/commands.html" target="_blank">📋 命令手册</a>
     <a class="tb-lnk admin-only" href="user-management.html">用户管理</a>
     <a class="tb-lnk admin-only" href="audit-logs.html">审计日志</a>
+    <a class="tb-lnk" href="javascript:void(0)" onclick="openMcpModal()">🤖 MCP 接入</a>
     <a class="tb-lnk" href="javascript:void(0)" onclick="switchTab('history')">📋 历史记录</a>
   </div>
   <div class="tb-right" style="display:flex;align-items:center;gap:10px">
@@ -116,17 +118,18 @@ var AUTH_USER = 'arthas_auth_user';
 <!-- ── Main ── -->
 <div class="main">
   <div class="tabbar">
-    <div class="tb-tab on" id="tab-console"  onclick="switchTab('console')">⚡ Arthas命令</div>
+    <div class="tb-tab on" id="tab-ai" onclick="switchTab('ai')">🤖 AI 诊断</div>
     <div class="tb-tab"    id="tab-profiler" onclick="switchTab('profiler')">🔥 采样工具</div>
+    <div class="tb-tab"    id="tab-console"  onclick="switchTab('console')">⚡ Arthas命令</div>
     <div class="tb-tab"    id="tab-monitor"  onclick="switchTab('monitor')">📊 Pod 监控</div>
-    <div class="tb-tab"    id="tab-filebrowser" onclick="switchTab('filebrowser')">📂 文件下载</div>
     <div class="tb-tab"    id="tab-terminal" onclick="switchTab('terminal')">🖥️ 终端</div>
+    <div class="tb-tab"    id="tab-filebrowser" onclick="switchTab('filebrowser')">📂 文件下载</div>
   </div>
 
   <div class="panels">
 
     <!-- Arthas Console -->
-    <div class="panel on" id="panel-console">
+    <div class="panel" id="panel-console">
       <div class="ac-grid">
         <div class="cmd-pal">
           <div class="cp-hd">
@@ -221,7 +224,7 @@ var AUTH_USER = 'arthas_auth_user';
           <div id="pfCfg-jfr" style="display:none">
             <div class="sec-lbl">JDK JFR 参数</div>
             <div style="padding:7px 10px;background:rgba(251,191,36,.06);border:1px solid rgba(251,191,36,.2);border-radius:5px;font-size:11px;color:var(--a6);margin-bottom:10px;line-height:1.6">
-              ⚠ JDK JFR 需要 JDK 11+，通过 Arthas <code>jfr</code> 命令控制
+              ⚠ JDK JFR 需要 JDK 8u262+ 或 JDK 11+，通过 Arthas <code>jfr</code> 命令控制，生成 .jfr 文件可用 <a href="https://www.oracle.com/java/technologies/jdk-mission-control.html" target="_blank" style="color:var(--a)">JDK Mission Control</a> 分析
             </div>
             <input type="hidden" id="jfrName" value="arthas-jfr">
             <div class="fg"><label class="fl">时长 (秒)</label>
@@ -460,6 +463,52 @@ var AUTH_USER = 'arthas_auth_user';
       </div>
     </div>
 
+    <!-- AI Chat -->
+    <div class="panel on" id="panel-ai">
+      <div class="ai-container">
+        <div class="ai-header">
+          <span class="ai-title">🤖 AI 诊断助手</span>
+          <div class="ai-header-actions">
+            <div id="aiConnIndicator" class="ai-conn-indicator" onclick="aiToggleConnDropdown()">
+              <span class="ai-conn-dot" id="aiConnDot"></span>
+              <span class="ai-conn-label" id="aiConnLabel">未连接</span>
+              <span class="ai-conn-arrow">▾</span>
+            </div>
+            <div id="aiConnDropdown" class="ai-conn-dropdown" style="display:none">
+              <div class="ai-conn-dd-item" onclick="aiSelectConn('')" id="aiConnAuto">
+                <span class="ai-conn-dot dim"></span> 自动选择活跃连接
+              </div>
+            </div>
+            <select id="aiConnSelect" class="ai-conn-select" style="display:none"><option value="">自动选择活跃连接</option></select>
+            <button class="ib" onclick="aiOpenSettings()" title="AI 配置">⚙️</button>
+            <button class="ib" onclick="aiClearChat()" title="清空对话">🗑️</button>
+          </div>
+        </div>
+        <div class="ai-messages" id="aiMessages">
+          <div class="ai-welcome">
+            <div class="ai-welcome-icon">🤖</div>
+            <div class="ai-welcome-title">Java 诊断 AI 助手</div>
+            <div class="ai-welcome-desc">我可以帮你分析 Java 应用性能问题，通过 Arthas 命令自动诊断 Pod 中的应用。</div>
+            <div class="ai-welcome-tips">
+              <div class="ai-tip" onclick="aiQuickAsk('CPU 占用很高怎么排查？')">🔥 CPU 飙高排查</div>
+              <div class="ai-tip" onclick="aiQuickAsk('接口响应慢如何定位？')">⏱️ 接口慢定位</div>
+              <div class="ai-tip" onclick="aiQuickAsk('内存泄漏怎么排查？')">💾 内存泄漏排查</div>
+              <div class="ai-tip" onclick="aiQuickAsk('线程死锁怎么检测？')">🔒 线程死锁检测</div>
+            </div>
+          </div>
+        </div>
+        <div class="ai-input-area">
+          <div class="ai-input-wrap">
+            <textarea id="aiInput" class="ai-input" placeholder="描述你的 Java 应用问题..." rows="1"
+              onkeydown="aiKeyDown(event)" oninput="aiAutoResize(this)"></textarea>
+            <button class="ai-send-btn" id="aiSendBtn" onclick="aiSend()">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+
   </div>
 </div>
 </div>
@@ -491,6 +540,129 @@ var AUTH_USER = 'arthas_auth_user';
   </div>
 </div>
 
+<!-- AI Settings Modal -->
+<div class="modal-bg" id="aiModal">
+  <div class="modal" style="width:550px">
+    <div class="mhd"><span class="m-tt">⚙️ AI 模型配置</span><button class="m-cl" onclick="closeAiModal()">✕</button></div>
+    <div class="mbd">
+      <!-- 供应商下拉选择 -->
+      <div class="fg">
+        <label class="fl">模型供应商</label>
+        <select class="fs" id="aiProvider" onchange="onProviderChange(this.value)">
+          <option value="">— 请选择供应商 —</option>
+          <option value="deepseek">🧠 DeepSeek — V3.2 性价比高</option>
+          <option value="qwen">☁️ 通义千问 — Qwen3 系列</option>
+          <option value="openai">🌐 OpenAI — GPT-4o / o3</option>
+          <option value="moonshot">🌙 月之暗面 — Kimi K2.5</option>
+          <option value="zhipu">🔮 智谱 AI — GLM-5</option>
+          <option value="ollama">🏠 Ollama (本地) — 免费本地模型</option>
+        </select>
+      </div>
+      <div class="fg">
+        <label class="fl">API Base URL</label>
+        <div style="display:flex;gap:8px">
+          <input class="fi" id="aiBaseUrl" placeholder="选择供应商后自动填充" style="flex:1">
+          <button class="btn btn-g" id="aiDetectOllama" onclick="detectOllamaModels()" style="padding:4px 10px;font-size:11px;white-space:nowrap;display:none">🔍 检测模型</button>
+        </div>
+        <div style="font-size:10px;color:var(--tx3);margin-top:3px" id="aiUrlHint">选择供应商后自动填充默认地址，也可自定义</div>
+      </div>
+      <div class="fg" id="aiApiKeyGroup">
+        <label class="fl">API Key</label>
+        <input class="fi" id="aiApiKey" type="password" placeholder="sk-xxxxxxxxxxxxxxxx">
+        <div style="font-size:10px;color:var(--tx3);margin-top:3px" id="aiKeyHint">从模型服务商获取（Ollama 本地模型无需填写）</div>
+      </div>
+      <div class="fg">
+        <label class="fl">模型名称</label>
+        <div style="display:flex;gap:8px">
+          <input class="fi" id="aiModel" placeholder="选择供应商后显示推荐模型" style="flex:1">
+          <select class="fs" id="aiModelSelect" style="display:none;width:160px" onchange="document.getElementById('aiModel').value=this.value"></select>
+        </div>
+        <div style="font-size:10px;color:var(--tx3);margin-top:3px" id="aiModelHint">支持 OpenAI 兼容格式的任意模型</div>
+      </div>
+      <div class="fg">
+        <label class="fl">系统提示词（可选，留空使用默认）</label>
+        <textarea class="fi" id="aiSystemPrompt" rows="3" style="resize:vertical;font-size:11px" placeholder="自定义 AI 行为，留空使用默认诊断专家提示词"></textarea>
+      </div>
+      <div id="aiModalErr" style="color:var(--a5);font-size:11px;margin-top:6px;display:none"></div>
+    </div>
+    <div class="mft">
+      <button class="btn btn-g" onclick="closeAiModal()">取消</button>
+      <button class="btn btn-g" onclick="testAiConfig()" id="aiTestBtn">测试连接</button>
+      <button class="btn btn-p" onclick="saveAiConfig()">保存</button>
+    </div>
+  </div>
+</div>
+
 <div id="toast"></div>
+
+<!-- MCP Config Modal -->
+<div class="modal-bg" id="mcpModal">
+  <div class="modal" style="width:700px;max-height:85vh;display:flex;flex-direction:column">
+    <div class="mhd"><span class="m-tt">🤖 MCP 接入配置</span><button class="m-cl" onclick="closeMcpModal()">✕</button></div>
+    <div class="mbd" style="overflow-y:auto;flex:1">
+      <!-- 说明 -->
+      <div style="padding:8px 10px;background:var(--bg3);border-radius:6px;font-size:11px;color:var(--tx2);line-height:1.7;margin-bottom:12px">
+        通过 MCP 协议让 AI 客户端（Claude Desktop / Cherry Studio / Cline 等）直接调用 Arthas 诊断工具，实现自动诊断 Java 应用问题。
+      </div>
+      <!-- 创建 Token -->
+      <div class="fg">
+        <div style="display:flex;align-items:center;gap:8px">
+          <label class="fl" style="margin-bottom:0">选择 Arthas 连接</label>
+          <button class="ib" style="font-size:10px;padding:2px 8px;margin-left:auto" onclick="mcpUseCurrentConn()">📌 使用当前连接</button>
+        </div>
+        <div id="mcp-conn-list" style="display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto">
+          <div style="text-align:center;padding:16px;color:var(--tx3);font-size:12px">加载中...</div>
+        </div>
+      </div>
+      <div class="fg">
+        <div style="display:flex;gap:8px;align-items:flex-end">
+          <div style="flex:1"><label class="fl">Token 名称</label><input class="fi" id="mcpTokenName" placeholder="如：my-app-diag"></div>
+          <button class="btn btn-p" onclick="mcpCreateToken()" style="white-space:nowrap;padding:6px 16px">生成 Token</button>
+        </div>
+      </div>
+      <!-- Token 列表 -->
+      <div class="fg">
+        <label class="fl">已有 Token</label>
+        <div id="mcp-token-list" style="display:flex;flex-direction:column;gap:6px">
+          <div style="text-align:center;padding:12px;color:var(--tx3);font-size:12px">暂无 Token</div>
+        </div>
+      </div>
+      <!-- 配置 JSON（选中后显示） -->
+      <div id="mcp-config-section" style="display:none">
+        <div id="mcp-config-hint" style="display:none;padding:8px 10px;background:var(--bg3);border-radius:6px;font-size:11px;line-height:1.6;margin-bottom:8px"></div>
+        <div class="fg">
+          <label class="fl">AI 客户端配置</label>
+          <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
+            <button class="ib mcp-ct on" data-client="cherry_studio_cline" onclick="mcpSwitchClient(this)">Cherry Studio (HTTP)</button>
+            <button class="ib mcp-ct" data-client="cherry_studio_sse" onclick="mcpSwitchClient(this)">Cherry Studio (SSE)</button>
+            <button class="ib mcp-ct" data-client="claude_desktop" onclick="mcpSwitchClient(this)">Claude Desktop</button>
+            <button class="ib mcp-ct" data-client="cursor" onclick="mcpSwitchClient(this)">Cursor</button>
+          </div>
+          <div style="position:relative">
+            <button class="btn btn-g" style="position:absolute;top:6px;right:6px;padding:2px 8px;font-size:10px;z-index:1" onclick="mcpCopyConfig()">📋 复制</button>
+            <pre id="mcpConfigJson" style="background:var(--bg);border:1px solid var(--ln);border-radius:6px;padding:12px;font-size:11px;line-height:1.6;overflow-x:auto;font-family:var(--mono);color:var(--tx2);max-height:250px;overflow-y:auto"></pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.mcp-ct { padding:4px 10px; font-size:11px; border-radius:4px; background:var(--bg3); border:1px solid var(--bd); cursor:pointer; color:var(--tx2); }
+.mcp-ct.on { background:rgba(122,162,247,.15); color:var(--a); border-color:var(--a); }
+.mcp-conn-opt { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--bg2); border:1px solid var(--bd); border-radius:6px; cursor:pointer; transition:all .15s; }
+.mcp-conn-opt:hover { border-color:var(--a); }
+.mcp-conn-opt.sel { border-color:var(--a); background:rgba(122,162,247,.08); }
+.mcp-conn-opt .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
+.mcp-conn-opt .dot.alive { background:var(--a3); }
+.mcp-conn-opt .dot.dead { background:var(--a5); }
+.mcp-token-row { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--bg2); border:1px solid var(--bd); border-radius:6px; font-size:12px; }
+.mcp-token-row .name { font-weight:500; min-width:80px; }
+.mcp-token-row .conn { color:var(--tx3); font-family:var(--mono); font-size:10px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.mcp-token-row .badge { font-size:10px; padding:2px 6px; border-radius:8px; }
+.mcp-token-row .badge.active { background:rgba(63,185,80,.15); color:var(--a3); }
+.mcp-token-row .badge.inactive { background:rgba(139,148,158,.1); color:var(--tx3); }
+</style>
 </body>
 </html>

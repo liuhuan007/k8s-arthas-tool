@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MCP 接入配置 - K8s Arthas Tool</title>
+  <link rel="stylesheet" href="css/login.css">
+  <style>
+    :root {
+      --bg: #0d1117; --bg1: #161b22; --bg2: #1c2333;
+      --tx: #e6edf3; --tx2: #8b949e; --tx3: #484f58;
+      --a: #7aa2f7; --a2: #89b4fa;
+      --ok: #3fb950; --err: #f85149; --warn: #d29922;
+      --ln: #30363d; --bd: #21262d;
+    }
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; background:var(--bg); color:var(--tx); min-height:100vh; }
+
+    /* 顶栏 */
+    .topbar {
+      display:flex; align-items:center; justify-content:space-between;
+      padding:12px 24px; background:var(--bg1); border-bottom:1px solid var(--ln);
+    }
+    .topbar h1 { font-size:16px; font-weight:600; }
+    .topbar h1 span { color:var(--a); }
+    .topbar a { color:var(--tx2); text-decoration:none; font-size:13px; }
+    .topbar a:hover { color:var(--a); }
+
+    /* 主体 */
+    .main { max-width:900px; margin:0 auto; padding:24px; }
+
+    /* 卡片 */
+    .card {
+      background:var(--bg1); border:1px solid var(--ln); border-radius:10px;
+      padding:20px; margin-bottom:16px;
+    }
+    .card h2 { font-size:15px; margin-bottom:14px; display:flex; align-items:center; gap:8px; }
+    .card h2 .badge {
+      font-size:10px; padding:2px 7px; border-radius:10px;
+      background:rgba(122,162,247,.15); color:var(--a); font-weight:500;
+    }
+
+    /* 步骤 */
+    .steps { display:flex; flex-direction:column; gap:16px; }
+    .step {
+      display:flex; gap:14px; padding:14px; background:var(--bg2);
+      border-radius:8px; border:1px solid var(--bd);
+    }
+    .step-num {
+      width:28px; height:28px; border-radius:50%; flex-shrink:0;
+      display:flex; align-items:center; justify-content:center;
+      font-size:13px; font-weight:700; background:var(--a); color:#000;
+    }
+    .step-body h3 { font-size:13px; margin-bottom:6px; }
+    .step-body p { font-size:12px; color:var(--tx2); line-height:1.6; }
+
+    /* 表单 */
+    .form-row { display:flex; gap:12px; align-items:flex-end; margin-bottom:14px; }
+    .form-group { flex:1; }
+    .form-group label { display:block; font-size:11px; color:var(--tx2); margin-bottom:4px; }
+    .form-group select, .form-group input {
+      width:100%; padding:8px 10px; background:var(--bg); border:1px solid var(--ln);
+      border-radius:6px; color:var(--tx); font-size:13px;
+    }
+    .form-group select:focus, .form-group input:focus {
+      outline:none; border-color:var(--a);
+    }
+
+    /* 按钮 */
+    .btn {
+      padding:8px 16px; border:1px solid var(--ln); border-radius:6px;
+      background:var(--bg2); color:var(--tx); font-size:12px; cursor:pointer;
+      transition:all .15s;
+    }
+    .btn:hover { border-color:var(--a); color:var(--a); }
+    .btn-primary { background:var(--a); color:#000; border-color:var(--a); font-weight:600; }
+    .btn-primary:hover { background:var(--a2); }
+    .btn-danger { color:var(--err); border-color:var(--err); }
+    .btn-danger:hover { background:rgba(248,81,73,.1); }
+    .btn-sm { padding:4px 10px; font-size:11px; }
+
+    /* Token 列表 */
+    .token-list { margin-top:14px; }
+    .token-item {
+      display:flex; align-items:center; gap:10px; padding:10px 12px;
+      background:var(--bg2); border:1px solid var(--bd); border-radius:6px;
+      margin-bottom:8px; font-size:12px;
+    }
+    .token-item .name { font-weight:500; min-width:100px; }
+    .token-item .conn { color:var(--tx2); font-family:monospace; font-size:11px; flex:1; }
+    .token-item .time { color:var(--tx3); font-size:10px; white-space:nowrap; }
+    .token-item .status {
+      font-size:10px; padding:2px 6px; border-radius:8px;
+    }
+    .token-item .status.active { background:rgba(63,185,80,.15); color:var(--ok); }
+    .token-item .status.inactive { background:rgba(139,148,158,.1); color:var(--tx3); }
+
+    /* 配置 JSON 展示 */
+    .config-box {
+      position:relative; margin-top:12px;
+    }
+    .config-box pre {
+      background:var(--bg); border:1px solid var(--ln); border-radius:6px;
+      padding:12px; font-size:11px; line-height:1.6; overflow-x:auto;
+      font-family:'SF Mono',Menlo,Consolas,monospace; color:var(--tx2);
+    }
+    .config-box .copy-btn {
+      position:absolute; top:8px; right:8px;
+    }
+
+    /* 客户端选择 Tab */
+    .client-tabs { display:flex; gap:6px; margin-bottom:12px; }
+    .client-tab {
+      padding:6px 14px; font-size:12px; border-radius:6px;
+      background:var(--bg2); border:1px solid var(--bd); cursor:pointer;
+      color:var(--tx2); transition:all .15s;
+    }
+    .client-tab.active { background:rgba(122,162,247,.15); color:var(--a); border-color:var(--a); }
+    .client-tab:hover { color:var(--a); }
+
+    /* 提示 */
+    .tip {
+      padding:10px 14px; background:rgba(122,162,247,.08); border:1px solid rgba(122,162,247,.2);
+      border-radius:6px; font-size:12px; color:var(--tx2); line-height:1.6;
+      margin-top:12px;
+    }
+    .tip code { color:var(--a); font-family:monospace; font-size:11px; }
+
+    /* 消息提示 */
+    .toast {
+      position:fixed; top:20px; right:20px; padding:10px 18px;
+      border-radius:8px; font-size:12px; z-index:999;
+      opacity:0; transition:opacity .3s;
+    }
+    .toast.show { opacity:1; }
+    .toast.ok { background:rgba(63,185,80,.9); color:#000; }
+    .toast.err { background:rgba(248,81,73,.9); color:#fff; }
+
+    /* 空状态 */
+    .empty { text-align:center; padding:30px; color:var(--tx3); font-size:13px; }
+
+    /* MCP 可用性标识 */
+    .mcp-badge {
+      display:inline-flex; align-items:center; gap:4px;
+      font-size:10px; padding:2px 8px; border-radius:8px;
+    }
+    .mcp-badge.yes { background:rgba(63,185,80,.15); color:var(--ok); }
+    .mcp-badge.no { background:rgba(210,153,34,.15); color:var(--warn); }
+
+    /* 新版连接选择器 */
+    .conn-selector {
+      display:flex; flex-direction:column; gap:8px;
+      max-height:200px; overflow-y:auto; padding:4px 0;
+    }
+    .conn-option {
+      display:flex; align-items:center; gap:8px; padding:8px 10px;
+      background:var(--bg); border:1px solid var(--bd); border-radius:6px;
+      cursor:pointer; transition:all .15s;
+    }
+    .conn-option:hover { border-color:var(--a); }
+    .conn-option.selected { border-color:var(--a); background:rgba(122,162,247,.08); }
+    .conn-option .dot {
+      width:8px; height:8px; border-radius:50%; flex-shrink:0;
+    }
+    .conn-option .dot.alive { background:var(--ok); }
+    .conn-option .dot.dead { background:var(--err); }
+    .conn-option .info { flex:1; font-size:12px; }
+    .conn-option .info .path { font-family:monospace; font-size:11px; }
+    .conn-option .info .meta { font-size:10px; color:var(--tx3); margin-top:2px; }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <h1>🤖 <span>MCP</span> 接入配置</h1>
+    <a href="/index.html">← 返回主界面</a>
+  </div>
+
+  <div class="main">
+    <!-- 说明卡片 -->
+    <div class="card">
+      <h2>📖 什么是 MCP 接入？ <span class="badge">Model Context Protocol</span></h2>
+      <div class="steps">
+        <div class="step">
+          <div class="step-num">1</div>
+          <div class="step-body">
+            <h3>生成 MCP Token</h3>
+            <p>选择一个已建立的 Arthas 连接，生成专属的 MCP 接入 Token</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">2</div>
+          <div class="step-body">
+            <h3>配置 AI 客户端</h3>
+            <p>将生成的配置 JSON 复制到 Claude Desktop / Cherry Studio / Cline 等客户端</p>
+          </div>
+        </div>
+        <div class="step">
+          <div class="step-num">3</div>
+          <div class="step-body">
+            <h3>AI 自动诊断</h3>
+            <p>AI 客户端通过 MCP 协议直接调用 Arthas 的 26 个诊断工具，自动分析 Java 应用问题</p>
+          </div>
+        </div>
+      </div>
+      <div class="tip">
+        ⚠️ <strong>前提条件</strong>：目标 Pod 内的 Arthas 版本需要 <code>4.1.8+</code> 才支持 MCP Server。
+        如果 Arthas 版本较低，MCP 端点将不可用，连接时会提示 MCP 不可用。
+      </div>
+    </div>
+
+    <!-- 创建 Token -->
+    <div class="card">
+      <h2>🔑 创建 MCP Token</h2>
+      <div class="form-row">
+        <div class="form-group" style="flex:2">
+          <label>选择连接</label>
+          <div id="conn-list" class="conn-selector">
+            <div class="empty">加载中...</div>
+          </div>
+          <input type="hidden" id="selected-conn" value="">
+        </div>
+        <div class="form-group" style="flex:1">
+          <label>Token 名称</label>
+          <input type="text" id="token-name" placeholder="如：my-app-diag">
+        </div>
+        <div style="flex-shrink:0">
+          <button class="btn btn-primary" onclick="createToken()">生成 Token</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Token 列表 -->
+    <div class="card">
+      <h2>📋 我的 Token 列表</h2>
+      <div id="token-list" class="token-list">
+        <div class="empty">暂无 Token</div>
+      </div>
+    </div>
+
+    <!-- 配置详情（选中后显示） -->
+    <div class="card" id="config-card" style="display:none">
+      <h2>📋 AI 客户端配置</h2>
+      <div class="client-tabs">
+        <div class="client-tab active" data-client="cherry_studio_cline" onclick="switchClientTab(this)">Cherry Studio / Cline</div>
+        <div class="client-tab" data-client="claude_desktop" onclick="switchClientTab(this)">Claude Desktop</div>
+        <div class="client-tab" data-client="cursor" onclick="switchClientTab(this)">Cursor</div>
+      </div>
+      <div class="config-box">
+        <button class="btn btn-sm copy-btn" onclick="copyConfig()">📋 复制</button>
+        <pre id="config-json"></pre>
+      </div>
+      <div class="tip" id="mcp-tip">
+        ✅ 将上方 JSON 配置复制到 AI 客户端的 MCP Server 设置中即可。
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="js/mcp-config.js"></script>
+</body>
+</html>

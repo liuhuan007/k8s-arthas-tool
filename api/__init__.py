@@ -9,12 +9,12 @@ def register_blueprints(app: Flask):
     from api.users import users_bp
     from api.clusters import clusters_bp
     from api.audit import audit_bp
+    from api.mcp_proxy import mcp_bp
+    from api.ai_chat import ai_bp
     
     app.register_blueprint(auth_bp)
     app.register_blueprint(users_bp)
     app.register_blueprint(clusters_bp)
     app.register_blueprint(audit_bp)
-    
-    # 其他 API 蓝图可以在此添加
-    # from api.arthas import arthas_bp
-    # app.register_blueprint(arthas_bp)
+    app.register_blueprint(mcp_bp)
+    app.register_blueprint(ai_bp)

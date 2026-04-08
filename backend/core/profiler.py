@@ -189,19 +189,24 @@ class ProfilerWorkflow:
     # JDK Flight Recorder
     # ─────────────────────────────────────────────────────────────────────────
     def _run_jfr(self, ex, t, client, output_dir, ts,
-                 duration, jfr_name, jfr_settings, jfr_file) -> dict:
-        jfr_file = f"/tmp/{jfr_name}-{t.pod_name[:30]}-{ts}.jfr"
+                  duration, jfr_name, jfr_settings, jfr_file) -> dict:
+        # 使用前端传入的 jfr_file（如有），否则自动生成
+        if not jfr_file:
+            jfr_file = f"/tmp/{jfr_name}-{t.pod_name[:30]}-{ts}.jfr"
 
         self._log("③ 启动 JDK JFR 录制（Arthas jfr 命令）", "dim")
         self._log("   注意: 需要 JDK 8u262+ 或 JDK 11+", "warn")
         self._log(f"   录制名={jfr_name}  设置={jfr_settings}  时长={duration}s", "dim")
         self._log(f"   输出文件={jfr_file}", "dim")
 
+        # Arthas jfr start 参数说明:
+        #   -n 录制名称, -s 设置(default/profile), -d 时长(秒), -f 输出文件
+        # 注意: 使用 -d 而非 --duration，Arthas 使用短参数格式
         start_cmd = (
             f"jfr start"
             f" -n {jfr_name}"
             f" -s {jfr_settings}"
-            f" --duration {duration}s"
+            f" -d {duration}s"
             f" -f {jfr_file}"
         )
         start_resp = client.exec_once(start_cmd, timeout_ms=15000)
@@ -211,72 +216,136 @@ class ProfilerWorkflow:
         state = start_resp.get("state", "")
         body = json.dumps(start_resp.get("body", {}), ensure_ascii=False)
         if state not in ("SUCCEEDED", "succeeded"):
-            if "not supported" in body.lower() or "jdk 11" in body.lower():
+            if "not supported" in body.lower() or "jdk 11" in body.lower() or "unrecognized option" in body.lower():
                 return self._fail("JDK JFR 需要 JDK 8u262+ 或 JDK 11+，当前 JDK 不支持。请改用 async-profiler 模式")
             return self._fail(f"jfr start 失败: {start_raw[:300]}")
 
-        # 提取 recording ID
+        # 提取 recording ID — 多种提取策略
         recording_id = None
         jfr_output = ""
         try:
             for r in start_resp.get("body", {}).get("results", []):
-                jfr_output = r.get("jfrOutput", "")
+                # 策略1: 从 jfrOutput 字段提取
+                jfr_output = r.get("jfrOutput", "") or r.get("output", "") or ""
                 m = re.search(r"Recording\s+(\d+)", jfr_output)
                 if m:
                     recording_id = m.group(1)
                     break
-        except Exception:
-            pass
+                # 策略2: 从 jobId 字段提取（部分 Arthas 版本）
+                job_id = r.get("jobId", "")
+                if job_id and str(job_id).isdigit():
+                    recording_id = str(job_id)
+                    break
+        except Exception as e:
+            self._log(f"   recording_id 提取异常: {e}", "warn")
+
+        # 策略3: 通过 jfr status 命令获取 recording ID
+        if not recording_id:
+            try:
+                status_resp = client.exec_once(f"jfr status -n {jfr_name}", timeout_ms=10000)
+                status_raw = json.dumps(status_resp, ensure_ascii=False)
+                self._log(f"   jfr status 响应: {status_raw[:200]}", "dim")
+                for r in status_resp.get("body", {}).get("results", []):
+                    status_output = r.get("jfrOutput", "") or r.get("output", "") or ""
+                    m = re.search(r"Recording\s+(\d+)", status_output)
+                    if m:
+                        recording_id = m.group(1)
+                        break
+                    # 匹配 "name=xxx (id=N)" 格式
+                    m2 = re.search(r"\(id=(\d+)\)", status_output)
+                    if m2:
+                        recording_id = m2.group(1)
+                        break
+            except Exception as e:
+                self._log(f"   jfr status 查询异常: {e}", "warn")
 
         self._log(f"JFR 录制已启动 ✓  recording_id={recording_id}  output={jfr_output[:80]}", "success")
-        self._log(f"   说明: scheduled 表示录制将在 {duration}s 后自动完成并写入文件", "dim")
+        self.result["jfr_file"] = jfr_file
         self.result["start_time"] = datetime.now().isoformat()
 
         # ④ 倒计时等待录制完成
-        self._log(f"④ JFR 录制中，共 {duration} 秒（自动停止）...")
+        self._log(f"④ JFR 录制中，共 {duration} 秒...")
         for i in range(duration):
             if self._cancelled:
                 self._log("⚠ 手动中止，发送 jfr stop...", "warn")
-                if recording_id:
-                    client.exec_once(f"jfr stop -r {recording_id} -f {jfr_file}", timeout_ms=30000)
+                self._jfr_stop(client, recording_id, jfr_name, jfr_file)
                 break
             time.sleep(1)
             if (i + 1) % 10 == 0:
                 self._log(f"   进度 {i+1}/{duration}s", "dim")
 
-        # ⑤ 等待 JVM 完成文件写入
-        self._log("⑤ 等待 JFR 文件落盘 (10s)...")
-        for i in range(10):
-            time.sleep(1)
-            rc, ls_out, _ = ex.exec_pod(t.namespace, t.pod_name, t.container, f"ls -lh '{jfr_file}' 2>&1", timeout=5)
-            if rc == 0 and " 0 " not in ls_out and "0B" not in ls_out:
-                self._log(f"   文件已写入: {ls_out.strip()}", "success")
-                break
-            if i == 9:
-                self._log(f"   文件状态: {ls_out.strip()}", "dim")
+        # ⑤ 录制完成后，主动发送 jfr stop 确保文件正确落盘
+        #    即使 jfr start -d 自带定时停止，也显式 stop 确保数据完整写入
+        self._log("⑤ 确保录制停止并写入文件...")
+        self._jfr_stop(client, recording_id, jfr_name, jfr_file)
+        time.sleep(3)  # 等待 JVM 完成文件写入
 
-        # 若文件仍为 0，用 dump 强制触发写入
-        rc, ls_out, _ = ex.exec_pod(t.namespace, t.pod_name, t.container, f"ls -lh '{jfr_file}' 2>&1", timeout=5)
-        if rc != 0 or " 0 " in ls_out or "0B" in ls_out:
-            self._log("   文件仍为 0，尝试 jfr dump...", "warn")
-            if recording_id:
-                dump_resp = client.exec_once(f"jfr dump -r {recording_id} -f {jfr_file}", timeout_ms=30000)
-                self._log(f"   jfr dump: {json.dumps(dump_resp)[:200]}", "dim")
-            else:
-                dump_resp = client.exec_once(f"jfr dump -n {jfr_name} -f {jfr_file}", timeout_ms=30000)
-                self._log(f"   jfr dump (by name): {json.dumps(dump_resp)[:200]}", "dim")
-            time.sleep(5)
+        # ⑥ 等待 JFR 文件落盘 (最多20秒轮询)
+        self._log("⑥ 等待 JFR 文件落盘...")
+        file_ready = False
+        for i in range(20):
             rc, ls_out, _ = ex.exec_pod(t.namespace, t.pod_name, t.container, f"ls -lh '{jfr_file}' 2>&1", timeout=5)
-            self._log(f"   dump 后文件状态: {ls_out.strip()}", "dim")
-            if " 0 " in ls_out or "0B" in ls_out:
-                self._log("   扫描 arthas-output 目录...", "dim")
-                rc2, scan_out, _ = ex.exec_pod(t.namespace, t.pod_name, t.container, "ls -lt /arthas-output/*.jfr /tmp/*.jfr 2>/dev/null | head -5", timeout=5)
-                if rc2 == 0 and scan_out.strip():
-                    newest = scan_out.strip().splitlines()[0].split()[-1]
-                    self._log(f"   找到候选文件: {newest}", "dim")
-                    jfr_file = newest
+            if rc == 0 and "cannot access" not in ls_out.lower() and "no such file" not in ls_out.lower() and " 0 " not in ls_out and "0B" not in ls_out:
+                file_size = ls_out.strip()
+                self._log(f"   文件已写入: {file_size}", "success")
+                file_ready = True
+                break
+            if i == 19:
+                self._log(f"   等待超时，文件状态: {ls_out.strip()}", "warn")
+            time.sleep(1)
+
+        # ⑦ 若文件不存在或为空，尝试 jfr dump 强制写入
+        if not file_ready:
+            rc, ls_out, _ = ex.exec_pod(t.namespace, t.pod_name, t.container, f"ls -lh '{jfr_file}' 2>&1", timeout=5)
+            if rc != 0 or " 0 " in ls_out or "0B" in ls_out or "cannot access" in ls_out.lower():
+                self._log("   文件未就绪，尝试 jfr dump...", "warn")
+                dump_resp = None
+                if recording_id:
+                    dump_resp = client.exec_once(f"jfr dump -r {recording_id} -f {jfr_file}", timeout_ms=30000)
+                    self._log(f"   jfr dump (id={recording_id}): {json.dumps(dump_resp)[:200]}", "dim")
+                else:
+                    dump_resp = client.exec_once(f"jfr dump -n {jfr_name} -f {jfr_file}", timeout_ms=30000)
+                    self._log(f"   jfr dump (name={jfr_name}): {json.dumps(dump_resp)[:200]}", "dim")
+                time.sleep(5)
+
+                # dump 后再检查
+                rc, ls_out, _ = ex.exec_pod(t.namespace, t.pod_name, t.container, f"ls -lh '{jfr_file}' 2>&1", timeout=5)
+                self._log(f"   dump 后文件状态: {ls_out.strip()}", "dim")
+                if " 0 " in ls_out or "0B" in ls_out or "cannot access" in ls_out.lower():
+                    # 最终兜底: 扫描可能目录找候选文件
+                    self._log("   扫描所有可能目录...", "dim")
+                    rc2, scan_out, _ = ex.exec_pod(t.namespace, t.pod_name, t.container,
+                        "ls -lt /tmp/*.jfr /arthas-output/*.jfr /home/admin/arthas-output/*.jfr 2>/dev/null | head -5", timeout=5)
+                    if rc2 == 0 and scan_out.strip():
+                        lines = [l.strip() for l in scan_out.strip().splitlines() if l.strip()]
+                        if lines:
+                            newest = lines[0].split()[-1]
+                            # 验证候选文件非空
+                            rc3, check_out, _ = ex.exec_pod(t.namespace, t.pod_name, t.container,
+                                f"ls -lh '{newest}' 2>&1", timeout=5)
+                            if rc3 == 0 and " 0 " not in check_out and "0B" not in check_out:
+                                self._log(f"   找到候选文件: {newest}", "success")
+                                jfr_file = newest
+                            else:
+                                self._log(f"   候选文件也为空: {newest}", "warn")
+                        else:
+                            self._log("   未找到任何 .jfr 文件", "warn")
+                    else:
+                        self._log("   未找到任何 .jfr 文件", "warn")
 
         return self._verify_and_download(ex, t, output_dir, ts, jfr_file, "jfr")
+
+    def _jfr_stop(self, client, recording_id, jfr_name, jfr_file):
+        """安全执行 jfr stop，确保录制数据写入文件"""
+        try:
+            if recording_id:
+                stop_resp = client.exec_once(f"jfr stop -r {recording_id} -f {jfr_file}", timeout_ms=30000)
+                self._log(f"   jfr stop (id={recording_id}): state={stop_resp.get('state', '?')}", "dim")
+            else:
+                stop_resp = client.exec_once(f"jfr stop -n {jfr_name} -f {jfr_file}", timeout_ms=30000)
+                self._log(f"   jfr stop (name={jfr_name}): state={stop_resp.get('state', '?')}", "dim")
+        except Exception as e:
+            self._log(f"   jfr stop 异常（录制可能已自动停止）: {e}", "warn")
 
     # ─────────────────────────────────────────────────────────────────────────
     # Thread Dump
@@ -430,6 +499,9 @@ class ProfilerWorkflow:
     # ─────────────────────────────────────────────────────────────────────────
     def _verify_and_download(self, ex, t, output_dir, ts, pod_path, ext) -> dict:
         self._log(f"⑥ 验证 Pod 内文件: {pod_path}")
+        # 如果是 JFR 文件，记录实际使用的文件路径，方便定位与排错
+        if ext == 'jfr':
+            self.result["jfr_file_used"] = pod_path
         rc, out, _ = ex.exec_pod(t.namespace, t.pod_name, t.container, f"ls -lh '{pod_path}' 2>&1")
         if rc != 0 or "cannot access" in out.lower() or "no such file" in out.lower():
             scan_cmd = f"ls -t /tmp/*.{ext} /arthas-output/*.{ext} /home/admin/arthas-output/*.{ext} /root/arthas-output/*.{ext} 2>/dev/null | head -5"

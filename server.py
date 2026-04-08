@@ -57,10 +57,17 @@ app = Flask(__name__,
     static_url_path=Config.STATIC_URL_PATH,
 )
 app.secret_key = Config.SECRET_KEY
-CORS(app, supports_credentials=True, resources={r"/api/*": {
-    "origins": os.environ.get('CORS_ORIGINS', 'http://127.0.0.1:5001,http://localhost:5001').split(','),
-    "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-}})
+CORS(app, supports_credentials=True, resources={
+    r"/api/*": {
+        "origins": os.environ.get('CORS_ORIGINS', 'http://127.0.0.1:5001,http://localhost:5001').split(','),
+        "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    },
+    r"/mcp/*": {
+        "origins": "*",  # AI 客户端来自任意来源
+        "methods": ["GET", "POST", "DELETE", "OPTIONS"],
+        "allow_headers": ["Content-Type", "Authorization", "Accept"],
+    },
+})
 
 # Flask-Login 配置
 login_manager = LoginManager(app)
@@ -83,6 +90,14 @@ def load_user(user_id: int):
 
 # 注册 API 蓝图
 register_blueprints(app)
+
+# 初始化 MCP 数据库表
+from api.mcp_proxy import init_mcp_tables
+init_mcp_tables()
+
+# 初始化 AI 数据库表
+from api.ai_chat import init_ai_tables
+init_ai_tables()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 辅助函数
@@ -169,6 +184,13 @@ def user_management_page():
 def audit_logs_page():
     """审计日志页面（仅管理员）"""
     return app.send_static_file('audit-logs.html')
+
+
+@app.route('/mcp-config.html')
+@login_required
+def mcp_config_page():
+    """MCP 接入配置页面"""
+    return app.send_static_file('mcp-config.html')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -315,8 +337,11 @@ def arthas_connect():
         if not ok:
             return jsonify({"ok": False, "error": msg}), 400
         
+        # 检测 MCP 端点是否可用
+        mcp_available = conn.agent_mgr._check_mcp_available(conn.local_port)
+        
         with _connections_lock:
-            _connections[conn_id] = {"conn": conn, "user_id": current_user.id}
+            _connections[conn_id] = {"conn": conn, "user_id": current_user.id, "mcp_available": mcp_available}
         
         # 持久化连接到数据库（UPSERT）
         now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -347,6 +372,9 @@ def arthas_connect():
             "local_port": conn.local_port,
             "java_pid": conn.java_pid,  # 返回实际连接的 PID
             "http_url": f"http://localhost:{conn.local_port}",
+            "arthas_version": conn.arthas_version,  # Arthas 版本号
+            "arthas_address": conn.arthas_address,   # Arthas HTTP 地址
+            "mcp_available": mcp_available,  # MCP 端点是否可用
             "message": msg
         })
     except Exception as e:

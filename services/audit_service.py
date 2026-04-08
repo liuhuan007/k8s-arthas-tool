@@ -28,6 +28,7 @@ class AuditService:
             'user_id': user_id,
             'action': 'login',
             'resource_type': 'user',
+            'resource_id': username,
             'details': f'用户 {username} 登录成功',
             **client
         })
@@ -40,6 +41,7 @@ class AuditService:
             'user_id': user_id,
             'action': 'login_failed',
             'resource_type': 'user',
+            'resource_id': username,
             'details': f'登录失败: {reason} (用户: {username})',
             **client
         })
@@ -52,6 +54,7 @@ class AuditService:
             'user_id': user_id,
             'action': 'logout',
             'resource_type': 'user',
+            'resource_id': username,
             'details': f'用户 {username} 登出',
             **client
         })
@@ -202,6 +205,24 @@ class AuditService:
             **client
         })
     
+    # ─────────────────────────────────────────────────────────────────
+    # MCP 相关
+    # ─────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _log_raw(user_id: int, action: str, resource_type: str,
+                 resource_id: str, details: str):
+        """通用审计日志记录（内部方法，供特殊场景使用）"""
+        client = AuditService._get_client_info()
+        db.insert('audit_logs', {
+            'user_id': user_id,
+            'action': action,
+            'resource_type': resource_type,
+            'resource_id': resource_id,
+            'details': details,
+            **client
+        })
+
     # ─────────────────────────────────────────────────────────────────
     # 通用查询方法
     # ─────────────────────────────────────────────────────────────────

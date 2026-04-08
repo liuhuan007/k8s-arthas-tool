@@ -109,6 +109,22 @@ class ArthasAgentManager:
                 return True
         return False
 
+    def _detect_mcp_support(self, http_port: int) -> str:
+        """检测当前 Arthas 是否支持 MCP，如果支持则返回启动参数"""
+        # 简单策略：始终尝试启用 MCP 端点
+        # Arthas < 4.1.8 会忽略未知 -D 参数，不会影响启动
+        # Arthas >= 4.1.8 会自动在 HTTP 端口上暴露 /mcp 路径
+        return f" -Darthas.mcpEndpoint=/mcp"
+
+    def _check_mcp_available(self, http_port: int) -> bool:
+        """检查 Pod 内 Arthas MCP 端点是否可用"""
+        rc, out, _ = self._exec(
+            f"curl -sf --max-time 3 http://127.0.0.1:{http_port}/mcp "
+            f"-o /dev/null -w '%{{http_code}}' 2>/dev/null",
+            timeout=6,
+        )
+        return rc == 0 and out.strip() in ("200", "400", "404")
+
     def ensure_agent_running(self) -> Tuple[bool, str]:
         """确保 Arthas agent 在 Pod 内运行"""
         port = self.t.arthas_http_port
@@ -141,11 +157,14 @@ class ArthasAgentManager:
             )
 
         # 情况 E: 启动
+        # 检查是否支持 MCP（Arthas 4.1.8+），通过探测是否有 mcpEndpoint 配置项
+        mcp_config = self._detect_mcp_support(port)
         start_cmd = (
             f"nohup java"
             f" -Darthas.httpPort={port}"
             f" -Darthas.telnetPort={self.t.arthas_telnet_port}"
             f" -Darthas.ip=127.0.0.1"
+            f"{mcp_config}"
             f" -jar {self.t.arthas_jar}"
             f" {pid}"
             f" > /tmp/arthas_start.log 2>&1 </dev/null &"
