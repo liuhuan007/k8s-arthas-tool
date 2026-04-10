@@ -360,130 +360,295 @@ def parse_top_metrics(raw: str) -> dict:
 # ── 容器内部指标（通过 kubectl exec）──────────────────────────────────────────
 
 def collect_container_metrics(runner: KubectlRunner, ns: str, pod: str, container: str) -> dict:
-    """在容器内执行命令采集精细指标"""
+    """在容器内执行命令采集精细指标（并发 3 次 exec，减少总耗时）"""
+    import concurrent.futures
     result = {}
 
-    # 内存详情（/proc/meminfo 或 cgroup）
-    rc, out, _ = runner.exec_pod(ns, pod, container,
-        "cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null || "
-        "cat /sys/fs/cgroup/memory.current 2>/dev/null || echo ''")
-    if rc == 0 and out.strip().isdigit():
-        result["cgroup_mem_usage_bytes"] = int(out.strip())
+    def _exec1():
+        """内存 + CPU + 磁盘 + FD"""
+        rc, out, _ = runner.exec_pod(ns, pod, container,
+            "echo '===MEM==='; "
+            "cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null "
+            "|| cat /sys/fs/cgroup/memory.current 2>/dev/null || true; "
+            "echo '===MEMLIMIT==='; "
+            "cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null "
+            "|| cat /sys/fs/cgroup/memory.max 2>/dev/null || true; "
+            "echo '===CPUSTAT==='; "
+            "cat /sys/fs/cgroup/cpu/cpu.stat 2>/dev/null "
+            "|| cat /sys/fs/cgroup/cpu.stat 2>/dev/null | head -5 || true; "
+            "echo '===DISK==='; "
+            "df -hP 2>/dev/null | grep -v '^Filesystem' || true; "
+            "echo '===DISKROOT==='; "
+            "df -hP / 2>/dev/null | tail -1 || true; "
+            "echo '===FD==='; "
+            "ls /proc/1/fd 2>/dev/null | wc -l || echo 0",
+            timeout=10)
+        return rc, out
 
-    rc2, out2, _ = runner.exec_pod(ns, pod, container,
-        "cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || "
-        "cat /sys/fs/cgroup/memory.max 2>/dev/null || echo ''")
-    if rc2 == 0 and out2.strip().isdigit() and int(out2.strip()) < 2**60:
-        result["cgroup_mem_limit_bytes"] = int(out2.strip())
+    def _exec2():
+        """进程列表 + 网络"""
+        rc, out, _ = runner.exec_pod(ns, pod, container,
+            "echo '===PS==='; "
+            # 优先使用 ps aux，如果不可用则回退到 /proc 扫描
+            "if command -v ps >/dev/null 2>&1; then "
+            "ps aux 2>/dev/null; "
+            "else "
+            "echo 'USER       PID %CPU %MEM    STAT COMMAND'; "
+            "for p in /proc/[0-9]*/stat; do "
+            "pid=$(echo $p | grep -o '[0-9]*'); "
+            "if [ -r \"$p\" ]; then "
+            "comm=$(cat /proc/$pid/cmdline 2>/dev/null | tr '\\0' ' ' | head -c 80); "
+            "if [ -z \"$comm\" ]; then comm=$(cat \"$p\" 2>/dev/null | awk '{print $2}' | tr -d '()'); fi; "
+            "echo \"root $pid 0.0 0.0 S $comm\"; "
+            "fi; done; "
+            "fi; "
+            "echo '===NET==='; "
+            "cat /proc/net/dev 2>/dev/null || true",
+            timeout=15)
+        return rc, out
 
-    # CPU 节流（cgroup）
-    rc3, out3, _ = runner.exec_pod(ns, pod, container,
-        "cat /sys/fs/cgroup/cpu/cpu.stat 2>/dev/null || "
-        "cat /sys/fs/cgroup/cpu.stat 2>/dev/null | head -5 || echo ''")
-    if rc3 == 0 and out3:
-        for line in out3.splitlines():
-            parts = line.split()
-            if len(parts) == 2 and parts[0] in ("throttled_time", "nr_throttled", "nr_periods"):
-                try:
-                    result[f"cpu_{parts[0]}"] = int(parts[1])
-                except Exception:
-                    pass
+    def _exec3():
+        """挂载详情"""
+        rc, out, _ = runner.exec_pod(ns, pod, container,
+            "if [ -r /proc/self/mountinfo ]; then cat /proc/self/mountinfo; else mount 2>/dev/null; fi || echo ''",
+            timeout=8)
+        return rc, out
 
-    # 磁盘使用（df）
-    rc4, out4, _ = runner.exec_pod(ns, pod, container,
-        "df -h / 2>/dev/null | tail -1 || echo ''", timeout=8)
-    if rc4 == 0 and out4:
-        parts = out4.split()
-        if len(parts) >= 5:
-            result["disk_total"] = parts[1]
-            result["disk_used"] = parts[2]
-            result["disk_avail"] = parts[3]
-            result["disk_use_pct"] = parts[4]
+    # 并发执行 3 次 exec
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as ex:
+        f1 = ex.submit(_exec1)
+        f2 = ex.submit(_exec2)
+        f3 = ex.submit(_exec3)
+        rc1, out1 = f1.result()
+        rc2, out2 = f2.result()
+        rc3, out3 = f3.result()
 
-    # 进程列表（top 15 by CPU）
-    # 兼容 BusyBox ps（不支持 --sort，列数少于标准 ps）
-    rc5, out5, _ = runner.exec_pod(ns, pod, container,
-        "ps aux 2>/dev/null | head -20 || echo ''",
-        timeout=8)
-    if rc5 == 0 and out5:
-        lines = out5.strip().splitlines()
-        processes = []
-        for line in lines[1:16]:  # skip header, max 15
-            parts = line.split(None, 10)
-            if len(parts) < 3:
-                continue
-            # 标准 ps aux: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND (11列)
-            # BusyBox ps:   USER PID %CPU %MEM VSZ RSS TTY STAT TIME COMMAND (10列，无 START)
-            # 注意: split(None, 10) 最多产生 11 部分，COMMAND 可能含空格
-            if len(parts) >= 11:
-                # 标准 11 列格式
-                processes.append({
-                    "user": parts[0], "pid": parts[1], "cpu": parts[2], "mem": parts[3],
-                    "stat": parts[7], "cmd": parts[10][:80],
-                })
-            elif len(parts) == 10:
-                # BusyBox 10 列格式: USER PID %CPU %MEM VSZ RSS TTY STAT TIME COMMAND
-                processes.append({
-                    "user": parts[0], "pid": parts[1], "cpu": parts[2], "mem": parts[3],
-                    "stat": parts[7], "cmd": parts[9][:80],
-                })
-            elif len(parts) >= 9:
-                # 9 列格式: USER PID %CPU %MEM VSZ RSS TTY STAT COMMAND (无 TIME)
-                processes.append({
-                    "user": parts[0], "pid": parts[1], "cpu": parts[2], "mem": parts[3],
-                    "stat": parts[7], "cmd": parts[8][:80],
-                })
-            elif len(parts) >= 5:
-                # 精简格式兜底
-                processes.append({
-                    "user": parts[0] if len(parts) > 0 else '?',
-                    "pid": parts[1] if len(parts) > 1 else '?',
-                    "cpu": parts[2] if len(parts) > 2 else '0',
-                    "mem": parts[3] if len(parts) > 3 else '0',
-                    "stat": parts[4] if len(parts) > 4 else '?',
-                    "cmd": parts[-1][:80] if parts else '?',
-                })
-        # 按 CPU 降序排列（处理不支持 --sort 的情况）
-        try:
-            processes.sort(key=lambda p: float(p.get('cpu', '0').replace(',', '.')), reverse=True)
-        except (ValueError, TypeError):
-            pass
-        result["processes"] = processes
+    # ── 解析第一次 exec：内存 + CPU + 磁盘 + FD ───────────────────────────
+    if rc1 == 0 and out1:
+        sections = out1.split('===MEM===')
+        body = sections[-1] if len(sections) > 1 else out1
 
-    # 网络接口统计
-    rc6, out6, _ = runner.exec_pod(ns, pod, container,
-        "cat /proc/net/dev 2>/dev/null || echo ''", timeout=8)
-    if rc6 == 0 and out6:
-        net_ifaces = []
-        for line in out6.splitlines()[2:]:
-            line = line.strip()
-            if not line or "lo:" in line:
-                continue
-            parts = line.split()
-            if len(parts) >= 10:
-                iface = parts[0].rstrip(":")
-                try:
-                    net_ifaces.append({
-                        "iface": iface,
-                        "rx_bytes": int(parts[1]),
-                        "rx_packets": int(parts[2]),
-                        "rx_errors": int(parts[3]),
-                        "tx_bytes": int(parts[9]),
-                        "tx_packets": int(parts[10]),
-                        "tx_errors": int(parts[11]),
+        # 内存 usage
+        mem_parts = body.split('===MEMLIMIT===')
+        mem_usage_str = mem_parts[0].strip().splitlines()
+        if mem_usage_str:
+            val = mem_usage_str[0].strip()
+            if val.isdigit():
+                result["cgroup_mem_usage_bytes"] = int(val)
+
+        # 内存 limit
+        if len(mem_parts) > 1:
+            limit_parts = mem_parts[1].split('===CPUSTAT===')
+            mem_limit_str = limit_parts[0].strip().splitlines()
+            if mem_limit_str:
+                val = mem_limit_str[0].strip()
+                if val.isdigit() and int(val) < 2**60:
+                    result["cgroup_mem_limit_bytes"] = int(val)
+
+            # CPU stat
+            if len(limit_parts) > 1:
+                cpu_parts = limit_parts[1].split('===DISK===')
+                for line in cpu_parts[0].strip().splitlines():
+                    parts = line.split()
+                    if len(parts) == 2 and parts[0] in ("throttled_time", "nr_throttled", "nr_periods"):
+                        try:
+                            result[f"cpu_{parts[0]}"] = int(parts[1])
+                        except Exception:
+                            pass
+
+                # 磁盘（所有挂载点）
+                if len(cpu_parts) > 1:
+                    disk_parts = cpu_parts[1].split('===DISKROOT===')
+                    disk_text = disk_parts[0]
+                    diskroot_text = disk_parts[1] if len(disk_parts) > 1 else ''
+
+                    # 多挂载点列表（从右往左解析，兼容 NFS 长路径/含空格）
+                    disk_mounts = []
+                    df_lines = disk_text.strip().splitlines()
+                    for dl in df_lines:
+                        dp = dl.split()
+                        if len(dp) >= 6:
+                            try:
+                                mount = dp[-1]
+                                use_pct = dp[-2]
+                                avail = dp[-3]
+                                used = dp[-4]
+                                size = dp[-5]
+                                filesystem = ' '.join(dp[:-5])
+                                pct_val = int(use_pct.replace('%', ''))
+                            except (ValueError, TypeError, IndexError):
+                                continue
+                            disk_mounts.append({
+                                "filesystem": filesystem,
+                                "size": size,
+                                "used": used,
+                                "avail": avail,
+                                "use_pct": use_pct,
+                                "use_pct_val": pct_val,
+                                "mount": mount,
+                                "fs_type": "",
+                                "mount_source": "",
+                                "mount_options": "",
+                            })
+                    result["disk_mounts"] = disk_mounts
+
+                    # 根分区摘要（兼容旧字段）
+                    fd_parts = diskroot_text.split('===FD===')
+                    root_text = fd_parts[0]
+                    fd_text = fd_parts[1] if len(fd_parts) > 1 else ''
+
+                    if root_text.strip():
+                        root_line = root_text.strip().splitlines()
+                        if root_line:
+                            parts = root_line[0].split()
+                            if len(parts) >= 5:
+                                result["disk_total"] = parts[1]
+                                result["disk_used"] = parts[2]
+                                result["disk_avail"] = parts[3]
+                                result["disk_use_pct"] = parts[4]
+                    elif disk_mounts:
+                        root_m = next((m for m in disk_mounts if m["mount"] == "/"), disk_mounts[0])
+                        result["disk_total"] = root_m["size"]
+                        result["disk_used"] = root_m["used"]
+                        result["disk_avail"] = root_m["avail"]
+                        result["disk_use_pct"] = root_m["use_pct"]
+
+                    # FD
+                    if fd_text.strip():
+                        fd_val = fd_text.strip().splitlines()[0].strip()
+                        try:
+                            result["open_fds"] = int(fd_val)
+                        except Exception:
+                            pass
+
+    # ── 解析第二次 exec：进程列表 + 网络 ───────────────────────────────────
+    if rc2 == 0 and out2:
+        sections = out2.split('===PS===')
+        body = sections[-1] if len(sections) > 1 else out2
+
+        ps_parts = body.split('===NET===')
+
+        # 进程列表
+        ps_output = ps_parts[0].strip()
+        if ps_output:
+            lines = ps_output.splitlines()
+            processes = []
+            # 检测 ps 输出格式：标准 ps aux 有 11 列，BusyBox ps 只有 4-5 列
+            header = lines[0] if lines else ''
+            is_full_ps = 'STAT' in header or 'VSZ' in header or 'TTY' in header
+
+            for line in lines[1:51]:  # skip header, max 50
+                parts = line.split(None, 10)
+                if len(parts) < 3:
+                    continue
+                if is_full_ps and len(parts) >= 11:
+                    # 标准 ps aux 格式: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
+                    processes.append({
+                        "user": parts[0], "pid": parts[1], "cpu": parts[2], "mem": parts[3],
+                        "stat": parts[7], "cmd": parts[10][:80],
                     })
-                except Exception:
-                    pass
-        result["network"] = net_ifaces
+                elif is_full_ps and len(parts) >= 9:
+                    # 缺少某些列的标准 ps
+                    processes.append({
+                        "user": parts[0], "pid": parts[1], "cpu": parts[2], "mem": parts[3],
+                        "stat": parts[7] if len(parts) > 7 else '?', "cmd": parts[-1][:80],
+                    })
+                elif len(parts) >= 5:
+                    # BusyBox ps 或自定义格式: USER PID %CPU %MEM STAT COMMAND (或类似)
+                    # 或简化 /proc 解析: USER PID %CPU %MEM STAT COMMAND
+                    processes.append({
+                        "user": parts[0],
+                        "pid": parts[1],
+                        "cpu": parts[2] if len(parts) > 2 else '0',
+                        "mem": parts[3] if len(parts) > 3 else '0',
+                        "stat": parts[4] if len(parts) > 4 else '?',
+                        "cmd": parts[5][:80] if len(parts) > 5 else (parts[4][:80] if len(parts) > 4 else '?'),
+                    })
+                elif len(parts) >= 3:
+                    # BusyBox 极简格式: PID USER TIME COMMAND
+                    # 尝试识别 PID（数字）在哪个位置
+                    pid_idx = 0
+                    for i, p in enumerate(parts):
+                        if p.isdigit():
+                            pid_idx = i
+                            break
+                    processes.append({
+                        "user": parts[0] if pid_idx != 0 else '?',
+                        "pid": parts[pid_idx],
+                        "cpu": '0',
+                        "mem": '0',
+                        "stat": '?',
+                        "cmd": parts[-1][:80],
+                    })
+            try:
+                processes.sort(key=lambda p: float(p.get('cpu', '0').replace(',', '.')), reverse=True)
+            except (ValueError, TypeError):
+                pass
+            result["processes"] = processes
 
-    # 打开文件描述符数量
-    rc7, out7, _ = runner.exec_pod(ns, pod, container,
-        "ls /proc/1/fd 2>/dev/null | wc -l || echo 0", timeout=5)
-    if rc7 == 0:
-        try:
-            result["open_fds"] = int(out7.strip())
-        except Exception:
-            pass
+        # 网络
+        if len(ps_parts) > 1:
+            net_output = ps_parts[1].strip()
+            if net_output:
+                net_ifaces = []
+                for line in net_output.splitlines()[2:]:
+                    line = line.strip()
+                    if not line or "lo:" in line:
+                        continue
+                    parts = line.split()
+                    if len(parts) >= 10:
+                        iface = parts[0].rstrip(":")
+                        try:
+                            net_ifaces.append({
+                                "iface": iface,
+                                "rx_bytes": int(parts[1]),
+                                "rx_packets": int(parts[2]),
+                                "rx_errors": int(parts[3]),
+                                "tx_bytes": int(parts[9]),
+                                "tx_packets": int(parts[10]),
+                                "tx_errors": int(parts[11]),
+                            })
+                        except Exception:
+                            pass
+                result["network"] = net_ifaces
+
+    # ── 解析第三次 exec：挂载详情 ──────────────────────────────────────────
+    if result.get("disk_mounts") and rc3 == 0 and out3 and out3.strip():
+        mount_details = {}
+        for ml in out3.strip().splitlines():
+            ml = ml.strip()
+            if not ml:
+                continue
+            # mountinfo 格式: 36 35 0:40 / /code rw,relatime - nfs4 10.0.0.1:/data /code rw,noacl
+            mi_match = re.match(
+                r'^\d+\s+\d+\s+\d+:\d+\s+\S+\s+(\S+)\s+(\S+)\s+.*?-\s+(\S+)\s+(\S+)\s+(.*)',
+                ml
+            )
+            if mi_match:
+                mnt_point = mi_match.group(1)
+                mount_details[mnt_point] = {
+                    "fs_type": mi_match.group(3),
+                    "source": mi_match.group(4),
+                    "options": mi_match.group(2),
+                }
+                continue
+            # mount 命令格式: source on /mnt type nfs (rw,addr=10.0.0.1)
+            mt_match = re.match(r'^(\S+)\s+on\s+(\S+)\s+type\s+(\S+)\s+\((.+)\)', ml)
+            if mt_match:
+                mnt_point = mt_match.group(2)
+                mount_details[mnt_point] = {
+                    "fs_type": mt_match.group(3),
+                    "source": mt_match.group(1),
+                    "options": mt_match.group(4),
+                }
+
+        # 将挂载详情合并到 disk_mounts
+        for dm in result["disk_mounts"]:
+            detail = mount_details.get(dm["mount"])
+            if detail:
+                dm["fs_type"] = detail.get("fs_type", "")
+                dm["mount_source"] = detail.get("source", "")
+                dm["mount_options"] = detail.get("options", "")
 
     return result
 
@@ -519,10 +684,12 @@ def collect_pod_snapshot(runner: KubectlRunner, ns: str, pod: str,
     """
     完整采集 Pod 监控快照，返回标准化数据结构
     用于首次加载 + 定期轮询
+    优化：并发执行 kubectl 调用，合并容器内 exec 命令
     """
+    import concurrent.futures
     ts = datetime.now().isoformat()
 
-    # 1. Pod JSON
+    # 1. Pod JSON（必须先获取，确定 target_container）
     pod_json = runner.get_pod_json(ns, pod)
     if pod_json is None:
         return {"error": "Pod 不存在或无法访问", "timestamp": ts}
@@ -534,17 +701,29 @@ def collect_pod_snapshot(runner: KubectlRunner, ns: str, pod: str,
     if not target_container and pod_info["containers"]:
         target_container = pod_info["containers"][0]["name"]
 
-    # 2. kubectl top pod（可能没有 metrics-server，允许失败）
-    top_raw = runner.get_pod_metrics(ns, pod)
-    top_metrics = parse_top_metrics(top_raw["cpu_raw"] + " " + top_raw["memory_raw"]) if top_raw else {}
-
-    # 3. 容器内部指标
+    # 2. 并发采集 top metrics / 容器内部指标 / 事件
+    top_metrics = {}
     container_metrics = {}
-    if pod_info["phase"] == "Running":
-        container_metrics = collect_container_metrics(runner, ns, pod, target_container)
+    events = []
 
-    # 4. 事件
-    events = runner.get_pod_events(ns, pod)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        future_top = executor.submit(runner.get_pod_metrics, ns, pod)
+        future_events = executor.submit(runner.get_pod_events, ns, pod)
+
+        # 容器内部指标仅 Running 状态才采集
+        future_metrics = None
+        if pod_info["phase"] == "Running":
+            future_metrics = executor.submit(
+                collect_container_metrics, runner, ns, pod, target_container)
+
+        top_raw = future_top.result()
+        if top_raw:
+            top_metrics = parse_top_metrics(top_raw["cpu_raw"] + " " + top_raw["memory_raw"])
+
+        events = future_events.result()
+
+        if future_metrics:
+            container_metrics = future_metrics.result()
 
     return {
         "timestamp": ts,

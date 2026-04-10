@@ -95,15 +95,36 @@ async function createToken() {
 function showTokenCreated(token, name) {
   // 用一个临时模态框显示 Token
   const modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.6);display:flex;align-items:center;justify-content:center;z-index:1000';
+  modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:1000;backdrop-filter:blur(4px)';
   modal.innerHTML = `
-    <div style="background:var(--bg1);border:1px solid var(--ln);border-radius:12px;padding:24px;max-width:500px;width:90%">
-      <h3 style="font-size:15px;margin-bottom:12px">🔑 Token 已创建</h3>
-      <p style="font-size:12px;color:var(--tx2);margin-bottom:10px">请妥善保存以下 Token，<strong style="color:var(--warn)">关闭后将无法再次查看</strong></p>
-      <div style="background:var(--bg);border:1px solid var(--ln);border-radius:6px;padding:10px;font-family:monospace;font-size:11px;word-break:break-all;color:var(--a);margin-bottom:14px" id="new-token-text">${esc(token)}</div>
-      <div style="display:flex;gap:8px;justify-content:flex-end">
-        <button class="btn btn-sm" onclick="navigator.clipboard.writeText(document.getElementById('new-token-text').textContent);this.textContent='已复制'" style="cursor:pointer">📋 复制 Token</button>
-        <button class="btn btn-primary btn-sm" onclick="this.closest('div[style]').parentElement.remove()" style="cursor:pointer">我已保存</button>
+    <div style="background:linear-gradient(145deg,#1e2a3a 0%,#162029 100%);border:1px solid rgba(99,179,237,0.2);border-radius:16px;padding:28px 32px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5),0 0 40px rgba(99,179,237,0.1)">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
+        <div style="width:44px;height:44px;background:linear-gradient(135deg,#63b3ed 0%,#4299e1 100%);border-radius:12px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 15px rgba(99,179,237,0.4)">
+          <span style="font-size:22px">🔑</span>
+        </div>
+        <div>
+          <h3 style="font-size:17px;font-weight:600;color:#e2e8f0;margin:0">Token 创建成功</h3>
+          <p style="font-size:12px;color:#94a3b8;margin:4px 0 0 0">${name ? esc(name) : '未命名 Token'}</p>
+        </div>
+      </div>
+      <div style="background:rgba(15,23,42,0.8);border:1px solid rgba(99,179,237,0.15);border-radius:10px;padding:14px;margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <span style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px">Access Token</span>
+          <div style="flex:1;height:1px;background:rgba(99,179,237,0.1)"></div>
+        </div>
+        <div style="font-family:'JetBrains Mono','SF Mono',monospace;font-size:12px;word-break:break-all;color:#63b3ed;line-height:1.6" id="new-token-text">${esc(token)}</div>
+      </div>
+      <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:12px;margin-bottom:20px;display:flex;align-items:flex-start;gap:10px">
+        <span style="font-size:16px;margin-top:1px">⚠️</span>
+        <p style="font-size:12px;color:#fbbf24;margin:0;line-height:1.5"><strong>重要提示：</strong>请立即复制并妥善保存此 Token，关闭后将<strong>无法再次查看</strong></p>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button onclick="navigator.clipboard.writeText(document.getElementById('new-token-text').textContent);this.innerHTML='<span style=\\'margin-right:6px\\'>✓</span>已复制到剪贴板';this.style.background='rgba(34,197,94,0.2)';this.style.borderColor='rgba(34,197,94,0.4)';this.style.color='#4ade80'" style="background:rgba(99,179,237,0.1);border:1px solid rgba(99,179,237,0.3);border-radius:8px;padding:10px 18px;font-size:13px;color:#63b3ed;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:6px">
+          <span>📋</span> 复制 Token
+        </button>
+        <button onclick="this.closest('div[style*=\\'linear-gradient\\']').parentElement.remove()" style="background:linear-gradient(135deg,#63b3ed 0%,#4299e1 100%);border:none;border-radius:8px;padding:10px 20px;font-size:13px;color:#0f172a;font-weight:600;cursor:pointer;box-shadow:0 4px 15px rgba(99,179,237,0.3);transition:all 0.2s">
+          我已保存，关闭
+        </button>
       </div>
     </div>
   `;

@@ -155,6 +155,7 @@ var AUTH_USER = 'arthas_auth_user';
         <div class="ac-right">
           <div class="con-tb">
             <span class="con-title" id="conTitle">等待连接...</span>
+            <span id="arthasVerBadge" class="ver-badge" style="display:none"></span>
             <button class="ib danger" id="btnStop" onclick="interruptCmd()" style="display:none">⏹ 中断</button>
             <button class="ib" onclick="clearConOut()">清空</button>
           </div>
@@ -352,6 +353,7 @@ var AUTH_USER = 'arthas_auth_user';
           <div class="pm-st"    id="pms-mt" onclick="switchPm('mt')">📈 指标</div>
           <div class="pm-st"    id="pms-pr" onclick="switchPm('pr')">⚙️ 进程</div>
           <div class="pm-st"    id="pms-nw" onclick="switchPm('nw')">🌐 网络</div>
+          <div class="pm-st"    id="pms-dk" onclick="switchPm('dk')">💾 磁盘</div>
           <div class="pm-st"    id="pms-ev" onclick="switchPm('ev')">🔔 事件 <span id="evBdg"></span></div>
           <div class="pm-st"    id="pms-lg" onclick="switchPm('lg')">📄 日志</div>
           <div class="pm-st"    id="pms-cf" onclick="switchPm('cf')">🔧 配置</div>
@@ -372,6 +374,7 @@ var AUTH_USER = 'arthas_auth_user';
           <div class="pm-panel" id="pmp-mt"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
           <div class="pm-panel" id="pmp-pr"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
           <div class="pm-panel" id="pmp-nw"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
+          <div class="pm-panel" id="pmp-dk"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
           <div class="pm-panel" id="pmp-ev"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
           <div class="pm-panel" id="pmp-lg" style="padding:0">
             <div class="log-panel">

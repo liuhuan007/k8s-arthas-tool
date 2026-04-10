@@ -138,8 +138,6 @@ function renderConnList() {
             <span style="opacity:0.8">${c.namespace}</span>
             <span style="margin:0 4px;opacity:0.5">/</span>
             <span style="font-weight:500;color:${isActive?'var(--a)':'var(--tx)'}">${c.pod_name}</span>
-            <span style="margin-left:6px;font-size:9px;color:var(--tx3);opacity:0.7">:${c.local_port}</span>
-            ${c.arthas_version ? `<span style="margin-left:5px;font-size:9px;color:var(--a3);opacity:0.8">v${esc(c.arthas_version)}</span>` : ''}
           </div>
         </div>
         <button class="del-conn" onclick="event.stopPropagation();deleteConnection('${c.id}')" title="删除连接">✕</button>
@@ -227,9 +225,14 @@ async function switchConnection(connId) {
 
       // 切换成功后，立即标记为健康状态
       _connHealth[connId] = { alive: true, pod_exists: true, pod_phase: 'Running' };
-      // 更新连接对象的 status
+      // 更新连接对象的状态 + 后端返回的元数据
       conn.status = 'connected';
       conn.local_port = d.local_port;
+      if (d.java_pid) conn.java_pid = d.java_pid;
+      if (d.arthas_version) conn.arthas_version = d.arthas_version;
+      if (d.arthas_address) conn.arthas_address = d.arthas_address;
+      if (d.http_url) conn.http_url = d.http_url;
+      if (d.mcp_available !== undefined) conn.mcp_available = d.mcp_available;
 
       // 【关键修复】同步状态到 window
       _syncState();
@@ -253,10 +256,35 @@ async function switchConnection(connId) {
 
       // 更新 UI
       renderConnList();
-      setConnStatus('ok', `✓ ${conn.cluster_name} / ${conn.namespace} / ${conn.pod_name}   local port: ${conn.local_port}`);
-      setPtStat('ok', 'Arthas 已连接');
+      const _switchVerSuffix = conn.arthas_version ? `  Arthas ${conn.arthas_version}` : '';
+      const _switchAddr = conn.arthas_address || conn.http_url || `http://127.0.0.1:${conn.local_port}`;
+      setConnStatus('ok', `✓ ${conn.cluster_name} / ${conn.namespace} / ${conn.pod_name}   local port: ${conn.local_port}${conn.java_pid ? `   PID: ${conn.java_pid}` : ''}${_switchVerSuffix}   ${_switchAddr}`);
       setCpSt('ok', `✓ 已连接  (port:${conn.local_port})`);
-      document.getElementById('conTitle').textContent = `${conn.cluster_name}/${conn.namespace}/${conn.pod_name}`;
+      // 切换连接时设置 conTitle（含悬浮 tooltip）
+      const _switchConTitle = document.getElementById('conTitle');
+      if (_switchConTitle) {
+        const _switchTipHtml = [
+          `<b>集群:</b> ${esc(conn.cluster_name)}`,
+          `<b>命名空间:</b> ${esc(conn.namespace)}`,
+          `<b>Pod:</b> ${esc(conn.pod_name)}`,
+          conn.java_pid ? `<b>Java PID:</b> ${esc(String(conn.java_pid))}` : '',
+          `<b>本地端口:</b> ${esc(String(conn.local_port))}`,
+          `<b>Arthas 地址:</b> ${esc(_switchAddr)}`,
+          conn.arthas_version ? `<b>Arthas 版本:</b> ${esc(conn.arthas_version)}` : '',
+          `<b>MCP:</b> ${conn.mcp_available ? '✓ 可用' : '✗ 不可用'}`,
+        ].filter(Boolean).join('\n');
+        _switchConTitle.innerHTML = `${esc(conn.cluster_name)}/${esc(conn.namespace)}/${esc(conn.pod_name)}<span class="ct-tip">${_switchTipHtml}</span>`;
+      }
+      // 切换连接时更新 Arthas 版本徽章
+      const _verBadgeSwitch = document.getElementById('arthasVerBadge');
+      if (_verBadgeSwitch) {
+        if (conn.arthas_version) {
+          _verBadgeSwitch.textContent = `Arthas v${conn.arthas_version}`;
+          _verBadgeSwitch.style.display = '';
+        } else {
+          _verBadgeSwitch.style.display = 'none';
+        }
+      }
       document.getElementById('runBtn').disabled = false;
 
       // 切换连接后自动折叠 Pod 目标区
@@ -500,7 +528,9 @@ function deleteConnection(connId) {
     setConnStatus('', '');
     setPtStat('', '');
     setCpSt('', '');
-    document.getElementById('conTitle').textContent = '等待连接...';
+    document.getElementById('conTitle').innerHTML = '等待连接...';
+    const _verBadgeDel = document.getElementById('arthasVerBadge');
+    if (_verBadgeDel) _verBadgeDel.style.display = 'none';
     document.getElementById('runBtn').disabled = true;
   }
   _syncState();  // 【关键修复】同步状态到 window
@@ -571,7 +601,9 @@ async function cleanupStaleConnections() {
     _connected = false;
     _ap = null;
     setConnStatus('', '');
-    document.getElementById('conTitle').textContent = '等待连接...';
+    document.getElementById('conTitle').innerHTML = '等待连接...';
+    const _verBadgeStale = document.getElementById('arthasVerBadge');
+    if (_verBadgeStale) _verBadgeStale.style.display = 'none';
     document.getElementById('runBtn').disabled = true;
   }
   _syncState();  // 【关键修复】同步状态到 window
@@ -641,6 +673,11 @@ function switchTab(n) {
   }
 
   if(tab==='history') loadHistory();
+  // 离开监控 tab 时清理 history 轮询
+  if(tab!=='monitor') {
+    clearInterval(window._histTimer);
+    window._histTimer = null;
+  }
   if(tab==='profiler') {
     setTimeout(() => {
       // 不再在这里加载历史，因为顶部历史显示全部，采样工具有自己的历史面板
@@ -658,8 +695,12 @@ function switchTab(n) {
   if(tab==='terminal') { setTimeout(()=>{ document.getElementById('termInput')?.focus(); },100); }
   if(tab==='ai') { setTimeout(()=>{ aiRefreshConnSelect(); document.getElementById('aiInput')?.focus(); },100); }
   if(tab==='monitor') {
-    // 切换到监控 tab 时，加载一次快照（不自动刷新，避免接口慢导致卡顿）
-    loadSnap(true);
+    // 切换到监控 tab 时：已有数据直接渲染，否则加载一次快照
+    if (_snap && !_snap.error) {
+      renderOverview(_snap); renderProcs(_snap); renderNetwork(_snap); renderDisk(_snap); renderEvents(_snap); renderConfig(_snap);
+    } else {
+      loadSnap();
+    }
   }
 }
 
@@ -674,7 +715,7 @@ function switchHistTab(name) {
 
 
 function switchPm(n) {
-  const tabs = ['ov','mt','pr','nw','ev','lg','cf'];
+  const tabs = ['ov','mt','pr','nw','dk','ev','lg','cf'];
   tabs.forEach(x => {
     document.getElementById('pms-'+x)?.classList.toggle('on', x===n);
     const p = document.getElementById('pmp-'+x);
@@ -684,6 +725,7 @@ function switchPm(n) {
   const lg = document.getElementById('pmp-lg');
   if(lg && n==='lg') lg.style.display = 'flex'; // override block
   if(n==='mt' && _snap) renderMetrics(_snap);
+  if(n==='dk' && _snap) renderDisk(_snap);
 }
 
 // ── Server health ──────────────────────────────────────────────────────────────
@@ -884,9 +926,33 @@ async function arthasConnect() {
           if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
       setCpSt('ok', `✓ ${d.message}  (port:${d.local_port})`);
       document.getElementById('runBtn').disabled = false;
-      document.getElementById('conTitle').textContent = `${t.cluster_name}/${t.namespace}/${t.pod_name}`;
       const _verSuffix = d.arthas_version ? `  Arthas ${d.arthas_version}` : '';
       const _addrInfo = d.arthas_address || d.http_url || `http://127.0.0.1:${d.local_port}`;
+      // conTitle 悬浮 tooltip 展示完整连接信息
+      const _conTitleEl = document.getElementById('conTitle');
+      if (_conTitleEl) {
+        const _tipHtml = [
+          `<b>集群:</b> ${esc(t.cluster_name)}`,
+          `<b>命名空间:</b> ${esc(t.namespace)}`,
+          `<b>Pod:</b> ${esc(t.pod_name)}`,
+          d.java_pid ? `<b>Java PID:</b> ${esc(String(d.java_pid))}` : '',
+          `<b>本地端口:</b> ${esc(String(d.local_port))}`,
+          `<b>Arthas 地址:</b> ${esc(_addrInfo)}`,
+          d.arthas_version ? `<b>Arthas 版本:</b> ${esc(d.arthas_version)}` : '',
+          `<b>MCP:</b> ${d.mcp_available ? '✓ 可用' : '✗ 不可用'}`,
+        ].filter(Boolean).join('\n');
+        _conTitleEl.innerHTML = `${esc(t.cluster_name)}/${esc(t.namespace)}/${esc(t.pod_name)}<span class="ct-tip">${_tipHtml}</span>`;
+      }
+      // 在 conTitle 旁显示 Arthas 版本徽章
+      const _verBadge = document.getElementById('arthasVerBadge');
+      if (_verBadge) {
+        if (d.arthas_version) {
+          _verBadge.textContent = `Arthas v${d.arthas_version}`;
+          _verBadge.style.display = '';
+        } else {
+          _verBadge.style.display = 'none';
+        }
+      }
       setPtStat('ok', d.java_pid ? `Arthas 已连接 (PID: ${d.java_pid})${_verSuffix}` : `Arthas 已连接${_verSuffix}`);
       setConnStatus('ok', `✓ ${t.cluster_name} / ${t.namespace} / ${t.pod_name}   local port: ${d.local_port}${d.java_pid ? `   PID: ${d.java_pid}` : ''}${_verSuffix}   ${_addrInfo}`);
       // 在控制台输出区显示连接信息
@@ -924,6 +990,9 @@ async function arthasDC() {
   document.getElementById('runBtn').disabled = true;
   setCpSt('', ''); setPtStat('', ''); setConnStatus('', '');
   document.getElementById('btnStop').style.display = 'none';
+  document.getElementById('conTitle').innerHTML = '等待连接...';
+  const _verBadgeDisc = document.getElementById('arthasVerBadge');
+  if (_verBadgeDisc) _verBadgeDisc.style.display = 'none';
   clog('── 已断开连接 ──', 'dim'); toast('已断开','info');
 }
 
@@ -2851,12 +2920,19 @@ async function loadSnap(silent = false) {
   const t = getT();
   if(!t.cluster_name || !t.pod_name) { toast('请先配置集群和 Pod','warn'); return; }
   // 静默刷新时不显示 loading，避免闪烁
-  if (!silent) document.getElementById('pmp-ov').innerHTML = '<div style="color:var(--tx3);padding:30px">加载中...</div>';
+  if (!silent) {
+    const loadingHtml = '<div style="color:var(--tx3);padding:30px;text-align:center"><div style="font-size:14px;margin-bottom:8px">⏳ 加载监控数据中...</div><div style="font-size:11px">首次加载可能需要 10-20 秒（kubectl 采集）</div></div>';
+    document.getElementById('pmp-ov').innerHTML = loadingHtml;
+    document.getElementById('pmp-dk').innerHTML = loadingHtml;
+    document.getElementById('pmp-pr').innerHTML = loadingHtml;
+    document.getElementById('pmp-nw').innerHTML = loadingHtml;
+  }
   try {
-    _snap = await safePost(`${API}/monitor/snapshot`, t);
+    // snapshot 接口涉及多次 kubectl 调用，超时设为 60 秒
+    _snap = await safePost(`${API}/monitor/snapshot`, t, 60000);
     if(_snap.error) { if(!silent) toast(_snap.error, 'error'); return; }
     document.getElementById('pmTs').textContent = new Date().toLocaleTimeString('zh-CN',{hour12:false});
-    renderOverview(_snap); renderProcs(_snap); renderNetwork(_snap); renderEvents(_snap); renderConfig(_snap);
+    renderOverview(_snap); renderProcs(_snap); renderNetwork(_snap); renderDisk(_snap); renderEvents(_snap); renderConfig(_snap);
     const ctrs = _snap.pod_info?.containers||[];
     const lcsel = document.getElementById('logCtr');
     if(lcsel) lcsel.innerHTML = ctrs.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
@@ -2864,8 +2940,11 @@ async function loadSnap(silent = false) {
     fetch(`${API}/monitor/start-polling`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(t)}).catch(()=>{});
     clearInterval(window._histTimer);
     window._histTimer = setInterval(async () => {
+      // 只在监控 tab 激活且指标子 tab 可见时才请求
+      const monitorTab = document.getElementById('tab-monitor');
+      if (!monitorTab || !monitorTab.classList.contains('on')) return;
       const r2 = await fetch(`${API}/monitor/history`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(t)}).catch(()=>null);
-      if(r2) { _histData = await r2.json(); if(document.getElementById('pms-mt').classList.contains('on')) renderMetrics(_snap); }
+      if(r2) { _histData = await r2.json(); if(document.getElementById('pms-mt')?.classList.contains('on')) renderMetrics(_snap); }
     }, 16000);
   } catch(e) { if(!silent) toast('加载失败: '+e.message, 'error'); }
 }
@@ -2900,6 +2979,10 @@ function renderOverview(snap) {
   const mp = ml ? Math.round(mu/ml*100) : 0;
   const dp = cm.disk_use_pct ? parseInt(cm.disk_use_pct) : 0;
   const dc = dp>85?'var(--a5)':dp>70?'var(--a4)':'var(--a3)';
+  // 获取当前 Arthas 版本
+  const curConn = _connections.find(c => c.id === _currentConnId);
+  const arthasVer = curConn?.arthas_version || '';
+  const arthasVerHtml = arthasVer ? `<div class="sc" style="--sc-ac:var(--a)"><div class="sc-lbl">Arthas</div><div class="sc-val" style="font-size:16px;color:var(--a3)">v${esc(arthasVer)}</div><div class="sc-sub">${curConn?.local_port ? 'port: ' + curConn.local_port : ''}</div></div>` : '';
 
   let html = `<div class="sg">
     <div class="sc" style="--sc-ac:var(--a)"><div class="sc-lbl">状态</div><div class="sc-val" style="font-size:16px;color:${info.phase==='Running'?'var(--a3)':'var(--a4)'}">${info.phase}</div><div class="sc-sub">${info.namespace}/${info.name}</div></div>
@@ -2911,7 +2994,8 @@ function renderOverview(snap) {
     <div class="sc" style="--sc-ac:var(--a)"><div class="sc-lbl">节点</div><div class="sc-val" style="font-size:13px">${info.node_name||'—'}</div><div class="sc-sub">HostIP: ${info.host_ip||'—'}</div></div>
     <div class="sc" style="--sc-ac:var(--a6)"><div class="sc-lbl">Pod IP</div><div class="sc-val" style="font-size:14px">${info.pod_ip||'—'}</div><div class="sc-sub">QoS: ${info.qos_class||'—'}</div></div>
     <div class="sc" style="--sc-ac:var(--a3)"><div class="sc-lbl">运行时长</div><div class="sc-val">${info.age||'—'}</div><div class="sc-sub">${fmtTs(info.creation_timestamp)}</div></div>
-    <div class="sc" style="--sc-ac:${dc}"><div class="sc-lbl">磁盘 /</div><div class="sc-val" style="color:${dc}">${cm.disk_use_pct||'—'}</div><div class="sc-sub">${cm.disk_used||''}/${cm.disk_total||''}</div></div>
+    <div class="sc" style="--sc-ac:${dc}"><div class="sc-lbl">磁盘 /</div><div class="sc-val" style="color:${dc}">${cm.disk_use_pct||'—'}</div><div class="sc-sub">${cm.disk_used||''}/${cm.disk_total||''}${cm.disk_mounts?.length?' · '+cm.disk_mounts.length+'挂载点':''}</div></div>
+    ${arthasVerHtml}
   </div>`;
 
   html += `<div style="margin-bottom:10px"><div style="font-size:10px;color:var(--tx2);text-transform:uppercase;letter-spacing:1px;margin-bottom:7px">Pod 条件</div>
@@ -3052,6 +3136,73 @@ function renderNetwork(snap) {
     </table></div>
     <div style="font-size:10px;color:var(--tx3);margin-top:6px">注：数据为 Pod 启动至今累计值，非实时速率</div>`;
   }
+  el.innerHTML = html;
+}
+
+function renderDisk(snap) {
+  const cm = snap.container_metrics || {};
+  const mounts = cm.disk_mounts || [];
+  const el = document.getElementById('pmp-dk');
+  if (!mounts.length) {
+    el.innerHTML = '<div style="color:var(--tx3);padding:30px;text-align:center">无磁盘数据 (需要 Pod Running 且 df 可用)</div>';
+    return;
+  }
+
+  // 网络挂载关键字
+  const netFs = ['nfs','nfs4','cifs','smb','fuse.sshfs','glusterfs','ceph','9p'];
+  const isNet = m => netFs.some(nf => (m.fs_type||'').toLowerCase().includes(nf) || m.filesystem.toLowerCase().includes(nf)) || m.filesystem.includes(':');
+
+  let html = `<div style="font-size:10px;color:var(--tx2);text-transform:uppercase;letter-spacing:1px;margin-bottom:7px">磁盘挂载点 (${mounts.length})</div>`;
+  html += `<div style="background:var(--bg2);border:1px solid var(--ln);border-radius:7px;overflow:hidden;margin-bottom:8px">
+    <table class="ptbl" style="font-size:11px"><thead><tr><th>Filesystem</th><th>Type</th><th>Size</th><th>Used</th><th>Avail</th><th>Use%</th><th>Mounted on</th></tr></thead>
+    <tbody>${mounts.map(m => {
+      const pct = m.use_pct_val || 0;
+      const barColor = pct > 85 ? 'var(--a5)' : pct > 70 ? 'var(--a4)' : 'var(--a3)';
+      const net = isNet(m);
+      const netTag = net ? '<span style="font-size:9px;color:var(--a);background:var(--bg3);border-radius:3px;padding:1px 5px;margin-left:4px">网络</span>' : '';
+      const fsType = m.fs_type || '';
+      return `<tr style="${net?'background:rgba(0,212,255,0.04)':''}">
+        <td style="color:var(--tx2);max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(m.filesystem)}">${esc(m.filesystem)}${netTag}</td>
+        <td style="color:var(--tx3)">${esc(fsType)}</td>
+        <td>${esc(m.size)}</td>
+        <td style="color:var(--a4)">${esc(m.used)}</td>
+        <td style="color:var(--a3)">${esc(m.avail)}</td>
+        <td><div style="display:flex;align-items:center;gap:4px"><div style="background:var(--bg3);border-radius:2px;width:50px;height:6px;overflow:hidden;flex-shrink:0"><div style="background:${barColor};height:100%;width:${Math.min(pct,100)}%;border-radius:2px"></div></div><span style="color:${barColor};font-weight:600;min-width:32px">${esc(m.use_pct)}</span></div></td>
+        <td style="color:var(--a);font-weight:600">${esc(m.mount)}</td>
+      </tr>`;
+    }).join('')}</tbody></table></div>`;
+
+  // 网络挂载详情
+  const netMounts = mounts.filter(isNet);
+  if (netMounts.length) {
+    html += `<div style="font-size:10px;color:var(--tx2);text-transform:uppercase;letter-spacing:1px;margin:10px 0 7px">网络挂载详情 (${netMounts.length})</div>`;
+    html += netMounts.map(m => {
+      const pct = m.use_pct_val || 0;
+      const barColor = pct > 85 ? 'var(--a5)' : pct > 70 ? 'var(--a4)' : 'var(--a3)';
+      return `<div style="background:var(--bg2);border:1px solid var(--ln);border-radius:7px;padding:12px;margin-bottom:8px;border-left:3px solid var(--a)">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+          <span style="font-size:13px;color:var(--a);font-weight:700">${esc(m.mount)}</span>
+          <span style="font-size:11px;color:var(--tx3);background:var(--bg3);border-radius:3px;padding:1px 6px">${esc(m.fs_type||'—')}</span>
+          <span style="margin-left:auto;font-size:14px;font-weight:700;color:${barColor}">${esc(m.use_pct)}</span>
+        </div>
+        <div style="background:var(--bg3);border-radius:3px;height:8px;overflow:hidden;margin-bottom:10px">
+          <div style="background:${barColor};height:100%;width:${Math.min(pct,100)}%;border-radius:3px;transition:width .3s"></div>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:6px;font-size:11px;margin-bottom:8px">
+          <div style="background:var(--bg3);border-radius:4px;padding:6px 8px"><div style="font-size:9px;color:var(--tx3);margin-bottom:2px">总量</div><div style="color:var(--a)">${esc(m.size)}</div></div>
+          <div style="background:var(--bg3);border-radius:4px;padding:6px 8px"><div style="font-size:9px;color:var(--tx3);margin-bottom:2px">已用</div><div style="color:var(--a4)">${esc(m.used)}</div></div>
+          <div style="background:var(--bg3);border-radius:4px;padding:6px 8px"><div style="font-size:9px;color:var(--tx3);margin-bottom:2px">可用</div><div style="color:var(--a3)">${esc(m.avail)}</div></div>
+          <div style="background:var(--bg3);border-radius:4px;padding:6px 8px"><div style="font-size:9px;color:var(--tx3);margin-bottom:2px">使用率</div><div style="color:${barColor}">${esc(m.use_pct)}</div></div>
+        </div>
+        <div style="font-size:11px;border-top:1px solid var(--ln);padding-top:8px;display:grid;grid-template-columns:auto 1fr;gap:4px 12px">
+          <span style="color:var(--tx3)">挂载源</span><span style="color:var(--a);word-break:break-all">${esc(m.mount_source||m.filesystem)}</span>
+          <span style="color:var(--tx3)">文件系统</span><span style="color:var(--tx2)">${esc(m.fs_type||'—')}</span>
+          <span style="color:var(--tx3)">挂载选项</span><span style="color:var(--tx2);word-break:break-all;font-size:10px">${esc(m.mount_options||'—')}</span>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
   el.innerHTML = html;
 }
 
