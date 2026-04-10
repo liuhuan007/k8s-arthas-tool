@@ -78,19 +78,15 @@ function renderConnList() {
   
   listEl.innerHTML = (window._connections || []).map(conn => {
     const isActive = conn.id === (window._currentConnId || null);
-    // 左侧状态图标颜色：根据连接状态映射到 alive/dead/dim，确保与 MCP 弹窗的状态一致
-    const dotClass = conn.status === 'connected' ? 'alive' : (conn.status === 'error' ? 'dead' : 'dim');
-    const mcpBadge = conn.mcp_available 
-      ? '<span style="font-size:9px;padding:1px 4px;border-radius:4px;background:rgba(63,185,80,.15);color:#3fb950;margin-left:4px">MCP</span>' 
-      : '';
+    const statusIcon = conn.status === 'connected' ? '●' : (conn.status === 'error' ? '⊘' : '○');
+    const statusStyle = conn.status === 'connected' ? 'color:var(--a3)' : (conn.status === 'error' ? 'color:var(--a5)' : 'color:var(--tx3)');
     return `
-      <div class="conn-itm ${isActive ? 'on' : ''}" data-id="${esc(conn.id)}">
-        <span class="conn-dot ${dotClass}"></span>
-        <div class="conn-info" onclick="switchConnection('${esc(conn.id)}')">
-          <div class="conn-nm">${esc(conn.name || conn.pod)}${mcpBadge}</div>
-          <div class="conn-dt">${esc(conn.cluster)}/${esc(conn.namespace)}</div>
+      <div class="conn-itm ${isActive ? 'on' : ''}" data-id="${esc(conn.id)}" onclick="switchConnection('${esc(conn.id)}')">
+        <div class="conn-info">
+          <div class="conn-cluster"><span style="font-size:9px;${statusStyle};margin-right:3px">${statusIcon}</span> ${esc(conn.cluster || conn.cluster_name || '')}</div>
+          <div class="conn-pod"><span class="conn-ns">${esc(conn.namespace || '')}</span><span class="conn-slash">/</span><span class="conn-name">${esc(conn.pod || conn.pod_name || '')}</span></div>
         </div>
-        <button class="del-conn" onclick="deleteConnection('${esc(conn.id)}')" title="删除">×</button>
+        <button class="del-conn" onclick="event.stopPropagation();deleteConnection('${esc(conn.id)}')" title="删除">×</button>
       </div>`;
   }).join('');
 }

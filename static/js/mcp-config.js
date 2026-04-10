@@ -41,8 +41,8 @@ async function loadConnections() {
       <div class="conn-option ${_selectedConn === c.id ? 'selected' : ''}" onclick="selectConn('${c.id}')">
         <div class="dot ${c.alive ? 'alive' : 'dead'}"></div>
         <div class="info">
-          <div class="path">${esc(c.id)}</div>
-          <div class="meta">port: ${c.local_port}</div>
+          <div class="path">${esc(c.cluster || c.id)}</div>
+          <div class="meta">${c.namespace ? esc(c.namespace) + ' / ' : ''}${esc(c.pod || c.id)}${c.local_port ? ' · port ' + c.local_port : ''}</div>
         </div>
       </div>
     `).join('');
@@ -93,42 +93,78 @@ async function createToken() {
 }
 
 function showTokenCreated(token, name) {
-  // 用一个临时模态框显示 Token
+  // 注入弹窗样式（仅一次）
+  if (!document.getElementById('token-modal-css')) {
+    const s = document.createElement('style');
+    s.id = 'token-modal-css';
+    s.textContent = `
+      .tm-overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:10000;backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);animation:tmFadeIn .25s ease}
+      @keyframes tmFadeIn{from{opacity:0}to{opacity:1}}
+      @keyframes tmSlideUp{from{transform:translateY(20px);opacity:0}to{transform:translateY(0);opacity:1}}
+      .tm-card{background:var(--bg1);border:1px solid rgba(122,162,247,.2);border-radius:14px;padding:26px 30px;max-width:460px;width:92%;box-shadow:0 24px 80px rgba(0,0,0,.6),0 0 0 1px rgba(122,162,247,.08);animation:tmSlideUp .3s ease}
+      .tm-header{display:flex;align-items:center;gap:14px;margin-bottom:22px}
+      .tm-icon{width:46px;height:46px;background:linear-gradient(135deg,var(--a) 0%,#4f8ff7 100%);border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:22px;box-shadow:0 6px 20px rgba(122,162,247,.35)}
+      .tm-title{font-size:17px;font-weight:700;color:var(--tx);margin:0}
+      .tm-subtitle{font-size:12px;color:var(--tx2);margin:3px 0 0 0}
+      .tm-token-box{background:var(--bg);border:1px solid rgba(122,162,247,.12);border-radius:10px;padding:14px 16px;margin-bottom:18px}
+      .tm-token-label{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px}
+      .tm-token-value{font-family:'SF Mono',Menlo,Consolas,monospace;font-size:12px;word-break:break-all;color:var(--a);line-height:1.7;user-select:all}
+      .tm-warn{background:rgba(210,153,34,.08);border:1px solid rgba(210,153,34,.2);border-radius:8px;padding:12px 14px;margin-bottom:22px;display:flex;align-items:flex-start;gap:10px;font-size:12px;color:var(--warn);line-height:1.6}
+      .tm-warn strong{color:#e8b339}
+      .tm-actions{display:flex;gap:10px;justify-content:flex-end}
+      .tm-btn-copy{background:rgba(122,162,247,.1);border:1px solid rgba(122,162,247,.25);border-radius:8px;padding:9px 18px;font-size:13px;color:var(--a);cursor:pointer;transition:all .2s;display:flex;align-items:center;gap:6px}
+      .tm-btn-copy:hover{background:rgba(122,162,247,.18);border-color:var(--a)}
+      .tm-btn-copy.copied{background:rgba(63,185,80,.12);border-color:rgba(63,185,80,.35);color:var(--ok)}
+      .tm-btn-close{background:linear-gradient(135deg,var(--a) 0%,#4f8ff7 100%);border:none;border-radius:8px;padding:9px 20px;font-size:13px;color:#000;font-weight:600;cursor:pointer;box-shadow:0 4px 16px rgba(122,162,247,.3);transition:all .2s}
+      .tm-btn-close:hover{box-shadow:0 6px 24px rgba(122,162,247,.45);transform:translateY(-1px)}
+    `;
+    document.head.appendChild(s);
+  }
+
   const modal = document.createElement('div');
-  modal.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.7);display:flex;align-items:center;justify-content:center;z-index:1000;backdrop-filter:blur(4px)';
+  modal.className = 'tm-overlay';
   modal.innerHTML = `
-    <div style="background:linear-gradient(145deg,#1e2a3a 0%,#162029 100%);border:1px solid rgba(99,179,237,0.2);border-radius:16px;padding:28px 32px;max-width:480px;width:90%;box-shadow:0 20px 60px rgba(0,0,0,0.5),0 0 40px rgba(99,179,237,0.1)">
-      <div style="display:flex;align-items:center;gap:12px;margin-bottom:20px">
-        <div style="width:44px;height:44px;background:linear-gradient(135deg,#63b3ed 0%,#4299e1 100%);border-radius:12px;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 15px rgba(99,179,237,0.4)">
-          <span style="font-size:22px">🔑</span>
-        </div>
+    <div class="tm-card">
+      <div class="tm-header">
+        <div class="tm-icon">🔑</div>
         <div>
-          <h3 style="font-size:17px;font-weight:600;color:#e2e8f0;margin:0">Token 创建成功</h3>
-          <p style="font-size:12px;color:#94a3b8;margin:4px 0 0 0">${name ? esc(name) : '未命名 Token'}</p>
+          <h3 class="tm-title">Token 创建成功</h3>
+          <p class="tm-subtitle">${name ? esc(name) : '未命名 Token'}</p>
         </div>
       </div>
-      <div style="background:rgba(15,23,42,0.8);border:1px solid rgba(99,179,237,0.15);border-radius:10px;padding:14px;margin-bottom:16px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-          <span style="font-size:11px;color:#94a3b8;text-transform:uppercase;letter-spacing:0.5px">Access Token</span>
-          <div style="flex:1;height:1px;background:rgba(99,179,237,0.1)"></div>
-        </div>
-        <div style="font-family:'JetBrains Mono','SF Mono',monospace;font-size:12px;word-break:break-all;color:#63b3ed;line-height:1.6" id="new-token-text">${esc(token)}</div>
+      <div class="tm-token-box">
+        <div class="tm-token-label">Access Token</div>
+        <div class="tm-token-value" id="new-token-text">${esc(token)}</div>
       </div>
-      <div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.2);border-radius:8px;padding:12px;margin-bottom:20px;display:flex;align-items:flex-start;gap:10px">
-        <span style="font-size:16px;margin-top:1px">⚠️</span>
-        <p style="font-size:12px;color:#fbbf24;margin:0;line-height:1.5"><strong>重要提示：</strong>请立即复制并妥善保存此 Token，关闭后将<strong>无法再次查看</strong></p>
+      <div class="tm-warn">
+        <span>⚠️</span>
+        <span><strong>重要提示：</strong>请立即复制并妥善保存此 Token，关闭后将<strong>无法再次查看</strong></span>
       </div>
-      <div style="display:flex;gap:10px;justify-content:flex-end">
-        <button onclick="navigator.clipboard.writeText(document.getElementById('new-token-text').textContent);this.innerHTML='<span style=\\'margin-right:6px\\'>✓</span>已复制到剪贴板';this.style.background='rgba(34,197,94,0.2)';this.style.borderColor='rgba(34,197,94,0.4)';this.style.color='#4ade80'" style="background:rgba(99,179,237,0.1);border:1px solid rgba(99,179,237,0.3);border-radius:8px;padding:10px 18px;font-size:13px;color:#63b3ed;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;gap:6px">
+      <div class="tm-actions">
+        <button class="tm-btn-copy" id="tm-copy-btn">
           <span>📋</span> 复制 Token
         </button>
-        <button onclick="this.closest('div[style*=\\'linear-gradient\\']').parentElement.remove()" style="background:linear-gradient(135deg,#63b3ed 0%,#4299e1 100%);border:none;border-radius:8px;padding:10px 20px;font-size:13px;color:#0f172a;font-weight:600;cursor:pointer;box-shadow:0 4px 15px rgba(99,179,237,0.3);transition:all 0.2s">
+        <button class="tm-btn-close" id="tm-close-btn">
           我已保存，关闭
         </button>
       </div>
     </div>
   `;
   document.body.appendChild(modal);
+
+  // 绑定事件
+  modal.querySelector('#tm-copy-btn').onclick = function() {
+    navigator.clipboard.writeText(document.getElementById('new-token-text').textContent);
+    this.innerHTML = '<span>✓</span> 已复制到剪贴板';
+    this.classList.add('copied');
+  };
+  modal.querySelector('#tm-close-btn').onclick = function() {
+    modal.remove();
+  };
+  // 点击遮罩关闭
+  modal.addEventListener('click', function(e) {
+    if (e.target === modal) modal.remove();
+  });
 }
 
 // ─── 加载 Token 列表 ─────────────────────────────────────────────

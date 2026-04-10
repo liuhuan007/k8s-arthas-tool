@@ -25,7 +25,7 @@ var AUTH_USER = 'arthas_auth_user';
 })();
 </script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css">
+<link rel="stylesheet" href="css/app.css?v=20260411e">
 
 <!-- 核心模块（按依赖顺序） -->
 <script src="js/core/api.js"></script>
@@ -33,7 +33,7 @@ var AUTH_USER = 'arthas_auth_user';
 <script src="js/core/utils.js"></script>
 
 <!-- 组件模块 -->
-<script src="js/components/connections.js"></script>
+<script src="js/components/connections.js?v=20260411e"></script>
 <script src="js/app-terminal.js"></script>
 <script src="js/components/monitor.js"></script>
 <script src="js/components/profiler.js"></script>
@@ -42,7 +42,7 @@ var AUTH_USER = 'arthas_auth_user';
 <script src="js/ai-chat.js"></script>
 
 <!-- 应用入口 -->
-<script src="js/app-ui.js"></script>
+<script src="js/app-ui.js?v=20260411e"></script>
 <script src="js/app.js"></script>
 </head>
 <body>
@@ -121,7 +121,7 @@ var AUTH_USER = 'arthas_auth_user';
       <button class="pt-btn" id="ptConnBtn" onclick="arthasConnect()">⚡ 连接</button>
     </div>
     <div class="pt-stat" id="ptStat"></div>
-    <div id="connStatus" style="display:none;margin-top:8px;padding:8px;background:var(--bg3);border-radius:6px;font-size:11px;line-height:1.6"></div>
+    <div id="connStatus" style="display:none"></div>
   </div>
 </div>
 

@@ -130,15 +130,9 @@ function renderConnList() {
     }
     html += `
       <div class="conn-itm ${isActive?'on':''}" onclick="switchConnection('${c.id}')" title="集群: ${esc(c.cluster_name)}\n环境: ${c.namespace}\nPod: ${c.pod_name}\n端口: ${c.local_port}${c.arthas_version ? '\nArthas: ' + c.arthas_version : ''}${c.arthas_address ? '\n地址: ' + c.arthas_address : ''}${statusHint ? '\n' + statusHint : ''}">
-        <div style="flex:1;overflow:hidden">
-          <div style="font-weight:600;color:${isActive?'var(--a)':'var(--tx)'};margin-bottom:3px">
-            ${statusIcon ? `<span style="font-size:9px;${statusStyle};margin-right:3px" title="${statusHint}">${statusIcon}</span>` : '<span style="font-size:11px">🔹</span>'} ${esc(c.cluster_name)}
-          </div>
-          <div style="font-size:10px;color:var(--tx2)">
-            <span style="opacity:0.8">${c.namespace}</span>
-            <span style="margin:0 4px;opacity:0.5">/</span>
-            <span style="font-weight:500;color:${isActive?'var(--a)':'var(--tx)'}">${c.pod_name}</span>
-          </div>
+        <div class="conn-info">
+          <div class="conn-cluster">${statusIcon ? `<span style="font-size:9px;${statusStyle};margin-right:3px" title="${statusHint}">${statusIcon}</span>` : '<span style="font-size:11px">🔹</span>'} ${esc(c.cluster_name)}</div>
+          <div class="conn-pod"><span class="conn-ns">${c.namespace}</span><span class="conn-slash">/</span><span class="conn-name">${esc(c.pod_name)}</span></div>
         </div>
         <button class="del-conn" onclick="event.stopPropagation();deleteConnection('${c.id}')" title="删除连接">✕</button>
       </div>
@@ -256,24 +250,31 @@ async function switchConnection(connId) {
 
       // 更新 UI
       renderConnList();
-      const _switchVerSuffix = conn.arthas_version ? `  Arthas ${conn.arthas_version}` : '';
       const _switchAddr = conn.arthas_address || conn.http_url || `http://127.0.0.1:${conn.local_port}`;
-      setConnStatus('ok', `✓ ${conn.cluster_name} / ${conn.namespace} / ${conn.pod_name}   local port: ${conn.local_port}${conn.java_pid ? `   PID: ${conn.java_pid}` : ''}${_switchVerSuffix}   ${_switchAddr}`);
+      const _switchRows = [
+        conn.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(conn.java_pid))}</span></div>` : '',
+        `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div>`,
+        `<div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_switchAddr)}</span></div>`,
+        conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : '',
+      ].filter(Boolean).join('');
+      setConnStatus('ok', `<div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div style="flex:1;min-width:0"><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body">${_switchRows}</div>`);
       setCpSt('ok', `✓ 已连接  (port:${conn.local_port})`);
       // 切换连接时设置 conTitle（含悬浮 tooltip）
       const _switchConTitle = document.getElementById('conTitle');
       if (_switchConTitle) {
-        const _switchTipHtml = [
-          `<b>集群:</b> ${esc(conn.cluster_name)}`,
-          `<b>命名空间:</b> ${esc(conn.namespace)}`,
-          `<b>Pod:</b> ${esc(conn.pod_name)}`,
-          conn.java_pid ? `<b>Java PID:</b> ${esc(String(conn.java_pid))}` : '',
-          `<b>本地端口:</b> ${esc(String(conn.local_port))}`,
-          `<b>Arthas 地址:</b> ${esc(_switchAddr)}`,
-          conn.arthas_version ? `<b>Arthas 版本:</b> ${esc(conn.arthas_version)}` : '',
-          `<b>MCP:</b> ${conn.mcp_available ? '✓ 可用' : '✗ 不可用'}`,
-        ].filter(Boolean).join('\n');
-        _switchConTitle.innerHTML = `${esc(conn.cluster_name)}/${esc(conn.namespace)}/${esc(conn.pod_name)}<span class="ct-tip">${_switchTipHtml}</span>`;
+        const _mcpClass = conn.mcp_available ? 'live' : 'dead';
+        const _mcpText = conn.mcp_available ? '✓ 可用' : '✗ 不可用';
+        const _switchTipRows = [
+          `<div class="ct-tip-row"><span class="ct-tip-k">集群</span><span class="ct-tip-v">${esc(conn.cluster_name)}</span></div>`,
+          `<div class="ct-tip-row"><span class="ct-tip-k">命名空间</span><span class="ct-tip-v">${esc(conn.namespace)}</span></div>`,
+          `<div class="ct-tip-row"><span class="ct-tip-k">Pod</span><span class="ct-tip-v">${esc(conn.pod_name)}</span></div>`,
+          conn.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(conn.java_pid))}</span></div>` : '',
+          `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div>`,
+          `<div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_switchAddr)}</span></div>`,
+          conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : '',
+          `<div class="ct-tip-row"><span class="ct-tip-k">MCP</span><span class="ct-tip-v ${_mcpClass}">${_mcpText}</span></div>`,
+        ].filter(Boolean).join('');
+        _switchConTitle.innerHTML = `${esc(conn.cluster_name)}/${esc(conn.namespace)}/${esc(conn.pod_name)}<span class="ct-tip"><div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body">${_switchTipRows}</div></span>`;
       }
       // 切换连接时更新 Arthas 版本徽章
       const _verBadgeSwitch = document.getElementById('arthasVerBadge');
@@ -931,17 +932,19 @@ async function arthasConnect() {
       // conTitle 悬浮 tooltip 展示完整连接信息
       const _conTitleEl = document.getElementById('conTitle');
       if (_conTitleEl) {
-        const _tipHtml = [
-          `<b>集群:</b> ${esc(t.cluster_name)}`,
-          `<b>命名空间:</b> ${esc(t.namespace)}`,
-          `<b>Pod:</b> ${esc(t.pod_name)}`,
-          d.java_pid ? `<b>Java PID:</b> ${esc(String(d.java_pid))}` : '',
-          `<b>本地端口:</b> ${esc(String(d.local_port))}`,
-          `<b>Arthas 地址:</b> ${esc(_addrInfo)}`,
-          d.arthas_version ? `<b>Arthas 版本:</b> ${esc(d.arthas_version)}` : '',
-          `<b>MCP:</b> ${d.mcp_available ? '✓ 可用' : '✗ 不可用'}`,
-        ].filter(Boolean).join('\n');
-        _conTitleEl.innerHTML = `${esc(t.cluster_name)}/${esc(t.namespace)}/${esc(t.pod_name)}<span class="ct-tip">${_tipHtml}</span>`;
+        const _mcpClass = d.mcp_available ? 'live' : 'dead';
+        const _mcpText = d.mcp_available ? '✓ 可用' : '✗ 不可用';
+        const _tipRows = [
+          `<div class="ct-tip-row"><span class="ct-tip-k">集群</span><span class="ct-tip-v">${esc(t.cluster_name)}</span></div>`,
+          `<div class="ct-tip-row"><span class="ct-tip-k">命名空间</span><span class="ct-tip-v">${esc(t.namespace)}</span></div>`,
+          `<div class="ct-tip-row"><span class="ct-tip-k">Pod</span><span class="ct-tip-v">${esc(t.pod_name)}</span></div>`,
+          d.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(d.java_pid))}</span></div>` : '',
+          `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(d.local_port))}</span></div>`,
+          `<div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_addrInfo)}</span></div>`,
+          d.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(d.arthas_version)}</span></div>` : '',
+          `<div class="ct-tip-row"><span class="ct-tip-k">MCP</span><span class="ct-tip-v ${_mcpClass}">${_mcpText}</span></div>`,
+        ].filter(Boolean).join('');
+        _conTitleEl.innerHTML = `${esc(t.cluster_name)}/${esc(t.namespace)}/${esc(t.pod_name)}<span class="ct-tip"><div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div><div class="ct-tip-pod">${esc(t.pod_name)}</div><div class="ct-tip-ns">${esc(t.cluster_name)} / ${esc(t.namespace)}</div></div></div><div class="ct-tip-body">${_tipRows}</div></span>`;
       }
       // 在 conTitle 旁显示 Arthas 版本徽章
       const _verBadge = document.getElementById('arthasVerBadge');
@@ -954,10 +957,16 @@ async function arthasConnect() {
         }
       }
       setPtStat('ok', d.java_pid ? `Arthas 已连接 (PID: ${d.java_pid})${_verSuffix}` : `Arthas 已连接${_verSuffix}`);
-      setConnStatus('ok', `✓ ${t.cluster_name} / ${t.namespace} / ${t.pod_name}   local port: ${d.local_port}${d.java_pid ? `   PID: ${d.java_pid}` : ''}${_verSuffix}   ${_addrInfo}`);
+      const _connRows = [
+        d.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(d.java_pid))}</span></div>` : '',
+        `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(d.local_port))}</span></div>`,
+        `<div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_addrInfo)}</span></div>`,
+        d.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(d.arthas_version)}</span></div>` : '',
+      ].filter(Boolean).join('');
+      setConnStatus('ok', `<div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div style="flex:1;min-width:0"><div class="ct-tip-pod">${esc(t.pod_name)}</div><div class="ct-tip-ns">${esc(t.cluster_name)} / ${esc(t.namespace)}</div></div></div><div class="ct-tip-body">${_connRows}</div>`);
       // 在控制台输出区显示连接信息
       clog(`── Arthas 已连接 ──`, 'dim');
-      clog(`PID: ${d.java_pid || '?'}   Port: ${d.local_port}   Address: ${_addrInfo}`, 'dim');
+      clog(`PID: ${d.java_pid || '?'}   Port: ${d.local_port}`, 'dim');
       if (d.arthas_version) clog(`Arthas Version: ${d.arthas_version}`, 'ok');
       saveConnections();
       toast('连接成功', 'success');
@@ -999,10 +1008,10 @@ async function arthasDC() {
 function setConnStatus(type, msg) {
   const el = document.getElementById('connStatus');
   if (!el) return;
-  if (!msg) { el.style.display = 'none'; el.textContent = ''; return; }
+  if (!msg) { el.style.display = 'none'; el.innerHTML = ''; return; }
   el.style.display = 'block';
-  el.className = type === 'ok' ? 'conn-status ok' : type === 'dim' ? 'conn-status dim' : 'conn-status';
-  el.textContent = msg;
+  el.className = type === 'ok' ? 'conn-status ok' : type === 'dim' ? 'conn-status dim' : type === 'fail' ? 'conn-status fail' : 'conn-status';
+  el.innerHTML = msg;
 }
 
 function setCpSt(type, msg) {

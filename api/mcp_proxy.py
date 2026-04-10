@@ -335,8 +335,10 @@ def list_available_connections():
         for conn_id, entry in _connections.items():
             if entry.get('user_id') == current_user.id:
                 conn = entry.get('conn')
+                has_port = bool(conn and conn.local_port)
+                alive = conn.is_alive() if conn else False
                 alive_map[conn_id] = {
-                    'alive': conn.is_alive() if conn else False,
+                    'alive': alive or has_port,  # 有端口转发也视为连接中
                     'local_port': conn.local_port if conn else 0,
                 }
                 mcp_map[conn_id] = entry.get('mcp_available', False)

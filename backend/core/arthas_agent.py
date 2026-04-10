@@ -132,6 +132,9 @@ class ArthasAgentManager:
         # 情况 A: HTTP 已响应，直接复用
         if self._http_reachable():
             log.info("Arthas HTTP already reachable on port %d — reusing", port)
+            # 复用时也要获取 java_pid
+            if not self._pid:
+                self.find_java_pid()
             return True, f"Arthas 已在运行，直接复用 (port {port})"
 
         # 情况 B: HTTP 不通，先清理残留进程
