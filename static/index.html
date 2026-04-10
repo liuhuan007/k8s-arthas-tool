@@ -51,12 +51,16 @@ var AUTH_USER = 'arthas_auth_user';
 <div class="topbar">
   <div class="tb-logo"><div class="tb-hex"></div><span class="tb-title">Arthas <em>K8s</em></span></div>
   <div class="tb-links">
-    <a class="tb-lnk" href="https://arthas.aliyun.com/en/doc/" target="_blank">📖 官方文档</a>
-    <a class="tb-lnk" href="https://arthas.aliyun.com/en/doc/commands.html" target="_blank">📋 命令手册</a>
-    <a class="tb-lnk admin-only" href="user-management.html">用户管理</a>
-    <a class="tb-lnk admin-only" href="audit-logs.html">审计日志</a>
-    <a class="tb-lnk" href="javascript:void(0)" onclick="openMcpModal()">🤖 MCP 接入</a>
-    <a class="tb-lnk" href="javascript:void(0)" onclick="switchTab('history')">📋 历史记录</a>
+    <div class="tb-dropdown">
+      <a class="tb-lnk" href="javascript:void(0)">📖 文档 ▾</a>
+      <div class="tb-dropdown-menu">
+        <a href="https://arthas.aliyun.com/en/doc/" target="_blank">📖 Arthas 官方文档</a>
+        <a href="https://arthas.aliyun.com/en/doc/commands.html" target="_blank">📋 命令手册</a>
+      </div>
+    </div>
+    <a class="tb-lnk admin-only" href="user-management.html">👥 用户管理</a>
+    <a class="tb-lnk admin-only" href="audit-logs.html">📋 审计日志</a>
+    <a class="tb-lnk" href="javascript:void(0)" onclick="openMcpModal()">🔌 MCP 接入</a>
   </div>
   <div class="tb-right" style="display:flex;align-items:center;gap:10px">
     <div class="tb-srv"><div class="dot" id="svDot"></div><span id="svLbl">连接中...</span></div>
@@ -87,7 +91,13 @@ var AUTH_USER = 'arthas_auth_user';
   <!-- Cluster Selection -->
   <div class="sb-hd"><span>集群</span><button onclick="openAddCluster()" title="添加集群">＋</button></div>
   <div class="sb-cls" id="sbCls"><div class="sb-empty">暂无集群<br>点击 ＋ 添加</div></div>
-  <div class="pod-target">
+
+  <!-- Pod Target: collapsible section -->
+  <div class="pt-collapse-hd" id="ptCollapseHd" onclick="togglePodTarget()">
+    <span style="font-size:10px;font-weight:600;color:var(--tx3);letter-spacing:1.5px;text-transform:uppercase">目标 Pod</span>
+    <span class="pt-collapse-arrow" id="ptCollapseArrow">▾</span>
+  </div>
+  <div class="pod-target" id="podTarget">
     <div class="pt-lbl">Namespace</div>
     <input class="pt-inp" id="ptNs" value="default" placeholder="default">
     <div class="pt-lbl">Pod</div>
@@ -101,7 +111,7 @@ var AUTH_USER = 'arthas_auth_user';
     <div class="pt-lbl">Container</div>
     <select class="pt-sel" id="ptCtr"><option value="">默认容器</option></select>
     <!-- Arthas JAR: only shown when Arthas/JProfiler tab is active -->
-    <div id="ptArthasWrap" style="display:none">
+    <div id="ptArthasWrap" style="display:block">
       <div class="pt-lbl">Arthas JAR 路径</div>
       <input class="pt-inp" id="ptArthas" value="/app/arthas/arthas-boot.jar">
     </div>
@@ -118,12 +128,15 @@ var AUTH_USER = 'arthas_auth_user';
 <!-- ── Main ── -->
 <div class="main">
   <div class="tabbar">
-    <div class="tb-tab on" id="tab-ai" onclick="switchTab('ai')">🤖 AI 诊断</div>
-    <div class="tb-tab"    id="tab-profiler" onclick="switchTab('profiler')">🔥 采样工具</div>
+    <div class="tb-tab on" id="tab-profiler" onclick="switchTab('profiler')">🔥 采样工具</div>
     <div class="tb-tab"    id="tab-console"  onclick="switchTab('console')">⚡ Arthas命令</div>
-    <div class="tb-tab"    id="tab-monitor"  onclick="switchTab('monitor')">📊 Pod 监控</div>
     <div class="tb-tab"    id="tab-terminal" onclick="switchTab('terminal')">🖥️ 终端</div>
+    <div class="tb-tab-sep"></div>
+    <div class="tb-tab"    id="tab-monitor"  onclick="switchTab('monitor')">📊 Pod 监控</div>
     <div class="tb-tab"    id="tab-filebrowser" onclick="switchTab('filebrowser')">📂 文件下载</div>
+    <div class="tb-tab-sep"></div>
+    <div class="tb-tab"    id="tab-ai" onclick="switchTab('ai')">🤖 AI 诊断</div>
+    <div class="tb-tab"    id="tab-history" onclick="switchTab('history')">📋 历史记录</div>
   </div>
 
   <div class="panels">
@@ -165,7 +178,7 @@ var AUTH_USER = 'arthas_auth_user';
     </div>
 
     <!-- JProfiler -->
-    <div class="panel" id="panel-profiler">
+    <div class="panel on" id="panel-profiler">
       <div class="pf-grid">
         <div class="pf-cfg">
           <!-- 采样工具选择 -->
@@ -464,7 +477,7 @@ var AUTH_USER = 'arthas_auth_user';
     </div>
 
     <!-- AI Chat -->
-    <div class="panel on" id="panel-ai">
+    <div class="panel" id="panel-ai">
       <div class="ai-container">
         <div class="ai-header">
           <span class="ai-title">🤖 AI 诊断助手</span>

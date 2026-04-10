@@ -45,11 +45,14 @@ class KubectlRunner:
         cmd += list(args)
         try:
             r = subprocess.run(
-                cmd, capture_output=True, text=True,
+                cmd, capture_output=True,
                 timeout=timeout,
-                input=input_data
+                input=input_data.encode('utf-8') if input_data else None
             )
-            return r.returncode, r.stdout.strip(), r.stderr.strip()
+            # Pod 终端输出统一为 UTF-8；Windows 下 text=True 会使用系统默认编码（GBK）导致中文乱码
+            stdout = r.stdout.decode('utf-8', errors='replace').strip() if r.stdout else ''
+            stderr = r.stderr.decode('utf-8', errors='replace').strip() if r.stderr else ''
+            return r.returncode, stdout, stderr
         except subprocess.TimeoutExpired:
             return -1, "", f"超时({timeout}s)"
         except FileNotFoundError:
@@ -86,10 +89,10 @@ class KubectlRunner:
             cmd1 += ["-c", container]
         _logger.info("kubectl cp: %s", " ".join(cmd1))
         try:
-            r1 = _sp.run(cmd1, capture_output=True, text=True, timeout=120)
+            r1 = _sp.run(cmd1, capture_output=True, timeout=120)
             if r1.returncode == 0 and _os.path.exists(local_path):
                 return 0, "", ""
-            err1 = r1.stderr.strip() or r1.stdout.strip()
+            err1 = r1.stderr.decode('utf-8', errors='replace').strip() or r1.stdout.decode('utf-8', errors='replace').strip()
         except Exception as e1:
             err1 = str(e1)
 
@@ -107,7 +110,7 @@ class KubectlRunner:
                 with open(local_path, "wb") as fout:
                     fout.write(r2.stdout)
                 return 0, "", ""
-            err2 = r2.stderr.decode(errors="replace").strip()
+            err2 = r2.stderr.decode('utf-8', errors='replace').strip()
         except Exception as e2:
             err2 = str(e2)
 
@@ -119,12 +122,14 @@ class KubectlRunner:
             exec_b64 += ["-c", container]
         exec_b64 += ["--", "sh", "-c", f"base64 '{pod_path}'"]
         try:
-            r3 = _sp.run(exec_b64, capture_output=True, text=True, timeout=120)
-            if r3.returncode == 0 and r3.stdout.strip():
+            r3 = _sp.run(exec_b64, capture_output=True, timeout=120)
+            b64_text = r3.stdout.decode('ascii', errors='replace') if r3.stdout else ''
+            b64_err = r3.stderr.decode('utf-8', errors='replace').strip() if r3.stderr else ''
+            if r3.returncode == 0 and b64_text.strip():
                 with open(local_path, "wb") as fout:
-                    fout.write(_b64.b64decode(r3.stdout.replace("\n", "").strip()))
+                    fout.write(_b64.b64decode(b64_text.replace("\n", "").strip()))
                 return 0, "", ""
-            err3 = r3.stderr.strip()
+            err3 = b64_err
         except Exception as e3:
             err3 = str(e3)
 

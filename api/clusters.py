@@ -206,11 +206,13 @@ def test_cluster(cluster_id: str):
         cmd.extend(['--context', cluster['context']])
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(cmd, capture_output=True, timeout=10)
+        stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ''
+        stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ''
         if result.returncode == 0:
             return jsonify({'ok': True, 'message': '连接成功'})
         else:
-            return jsonify({'ok': False, 'error': result.stderr or '连接失败'}), 400
+            return jsonify({'ok': False, 'error': stderr or '连接失败'}), 400
     except subprocess.TimeoutExpired:
         return jsonify({'ok': False, 'error': '连接超时'}), 400
     except FileNotFoundError:
@@ -235,13 +237,15 @@ def list_namespaces(cluster_id: str):
         cmd.extend(['--context', cluster['context']])
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(cmd, capture_output=True, timeout=10)
+        stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ''
+        stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ''
         if result.returncode == 0:
-            data = json.loads(result.stdout)
+            data = json.loads(stdout)
             ns_list = [item['metadata']['name'] for item in data.get('items', [])]
             return jsonify({'namespaces': ns_list})
         else:
-            return jsonify({'error': result.stderr}), 400
+            return jsonify({'error': stderr}), 400
     except subprocess.TimeoutExpired:
         return jsonify({'error': '请求超时'}), 400
     except json.JSONDecodeError:
@@ -268,9 +272,11 @@ def list_pods(cluster_id: str):
         cmd.extend(['--context', cluster['context']])
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(cmd, capture_output=True, timeout=10)
+        stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ''
+        stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ''
         if result.returncode == 0:
-            data = json.loads(result.stdout)
+            data = json.loads(stdout)
             pods = []
             for item in data.get('items', []):
                 pods.append({
@@ -282,7 +288,7 @@ def list_pods(cluster_id: str):
                 })
             return jsonify({'pods': pods})
         else:
-            return jsonify({'error': result.stderr}), 400
+            return jsonify({'error': stderr}), 400
     except subprocess.TimeoutExpired:
         return jsonify({'error': '请求超时'}), 400
 
@@ -303,12 +309,14 @@ def list_contexts(cluster_id: str):
     cmd = ['kubectl', 'config', 'get-contexts', '-o', 'json']
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        result = subprocess.run(cmd, capture_output=True, timeout=10)
+        stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ''
+        stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ''
         if result.returncode == 0:
-            data = json.loads(result.stdout)
+            data = json.loads(stdout)
             contexts = [c['name'] for c in data.get('clusters', [])]
             return jsonify({'contexts': contexts})
         else:
-            return jsonify({'error': result.stderr}), 400
+            return jsonify({'error': stderr}), 400
     except subprocess.TimeoutExpired:
         return jsonify({'error': '请求超时'}), 400

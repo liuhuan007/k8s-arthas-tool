@@ -93,6 +93,15 @@ let _metricsCache = new Map();
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // esc, fmtSz, fmtTs, mkv, gRow, toast 已在 utils.js 中定义
 
+// ── Sidebar Pod Target Collapse ──────────────────────────────────────────────
+function togglePodTarget() {
+  const el = document.getElementById('podTarget');
+  const arrow = document.getElementById('ptCollapseArrow');
+  if (!el) return;
+  el.classList.toggle('collapsed');
+  if (arrow) arrow.classList.toggle('up', !el.classList.contains('collapsed'));
+}
+
 // ── Connection Management ─────────────────────────────────────────────────────
 function renderConnList() {
   const el = document.getElementById('connList');
@@ -249,6 +258,14 @@ async function switchConnection(connId) {
       setCpSt('ok', `✓ 已连接  (port:${conn.local_port})`);
       document.getElementById('conTitle').textContent = `${conn.cluster_name}/${conn.namespace}/${conn.pod_name}`;
       document.getElementById('runBtn').disabled = false;
+
+      // 切换连接后自动折叠 Pod 目标区
+      const podTarget = document.getElementById('podTarget');
+      const ptArrow = document.getElementById('ptCollapseArrow');
+      if (podTarget && !podTarget.classList.contains('collapsed')) {
+        podTarget.classList.add('collapsed');
+        if (ptArrow) ptArrow.classList.add('up');
+      }
 
       // 更新 Pod 目标选择器
       const ptNs = document.getElementById('ptNs');
@@ -595,24 +612,25 @@ function loadConnections() {
 }
 
 function switchTab(n) {
-  // 支持数字索引 (0-6) 和字符串索引
-  const tabMap = {0:'console', 1:'profiler', 2:'monitor', 3:'filebrowser', 4:'terminal', 5:'ai', 6:'history'};
+  // 支持数字索引和字符串索引
+  // 新 tab 顺序: profiler, console, terminal, monitor, filebrowser, ai, history
+  const tabMap = {0:'profiler', 1:'console', 2:'terminal', 3:'monitor', 4:'filebrowser', 5:'ai', 6:'history'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
-  
+
   ['console','profiler','monitor','filebrowser','terminal','ai','history'].forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
     document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
   });
 
   // Show Arthas JAR path only for Arthas/JProfiler tabs
-  const needsArthas = ['console','profiler'].includes(n);
+  const needsArthas = ['console','profiler'].includes(tab);
   const jarWrap = document.getElementById('ptArthasWrap');
   if(jarWrap) jarWrap.style.display = needsArthas ? 'block' : 'none';
 
   // Adapt connect button: Arthas tabs show "⚡ 连接", others show "🖥️ 终端连接"
   const connBtn = document.getElementById('ptConnBtn');
   if(connBtn) {
-    if(n === 'terminal') {
+    if(tab === 'terminal') {
       connBtn.textContent = '🖥️ 终端连接';
       connBtn.onclick = () => { termInit(); };
     } else {
@@ -622,8 +640,8 @@ function switchTab(n) {
     }
   }
 
-  if(n==='history') loadHistory();
-  if(n==='profiler') {
+  if(tab==='history') loadHistory();
+  if(tab==='profiler') {
     setTimeout(() => {
       // 不再在这里加载历史，因为顶部历史显示全部，采样工具有自己的历史面板
       // 如果历史面板是打开的，则刷新当前连接的历史
@@ -637,8 +655,8 @@ function switchTab(n) {
       }
     }, 100);
   }
-  if(n==='terminal') { setTimeout(()=>{ document.getElementById('termInput')?.focus(); },100); }
-  if(n==='ai') { setTimeout(()=>{ aiRefreshConnSelect(); document.getElementById('aiInput')?.focus(); },100); }
+  if(tab==='terminal') { setTimeout(()=>{ document.getElementById('termInput')?.focus(); },100); }
+  if(tab==='ai') { setTimeout(()=>{ aiRefreshConnSelect(); document.getElementById('aiInput')?.focus(); },100); }
 }
 
 function switchHistTab(name) {
@@ -869,6 +887,13 @@ async function arthasConnect() {
       setConnStatus('ok', `✓ ${t.cluster_name} / ${t.namespace} / ${t.pod_name}   local port: ${d.local_port}${d.java_pid ? `   PID: ${d.java_pid}` : ''}${_verSuffix}   ${_addrInfo}`);
       saveConnections();
       toast('连接成功', 'success');
+      // 连接成功后自动折叠 Pod 目标区，节省侧边栏空间
+      const podTarget = document.getElementById('podTarget');
+      const ptArrow = document.getElementById('ptCollapseArrow');
+      if (podTarget && !podTarget.classList.contains('collapsed')) {
+        podTarget.classList.add('collapsed');
+        if (ptArrow) ptArrow.classList.add('up');
+      }
     } else {
       setCpSt('fail', '✗ ' + d.message); setPtStat('fail', d.message);
       clog('✗ ' + d.message, 'err'); toast('连接失败','error');
@@ -2213,7 +2238,7 @@ async function pfRunJfr(t) {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({...t, mode: 'jfr', jfr_name: name,
                             jfr_settings: settings, jfr_file: jfrFile,
-                            duration: dur, format: 'jfr'}),
+                            duration: dur, format: 'jfr', event: settings}),
     });
     const d = await r.json(); 
     if(!r.ok) {

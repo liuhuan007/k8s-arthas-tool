@@ -741,10 +741,16 @@ def start_profiler():
     d = request.json or {}
     # DEPRECATED: conn_id parameter support (remove in v2.0)
     conn_id = d.get('conn_id') or d.get('connection_id') or ''
-    task_type = d.get('type', 'profiler')  # profiler/jfr/threaddump/heapdump
+    # 优先使用 mode，兼容旧版 type 参数
+    task_type = d.get('mode') or d.get('type', 'profiler')  # profiler/jfr/threaddump/heapdump
     duration = int(d.get('duration', 60))
     fmt = d.get('format', 'html')  # html/collapsed/jfr
-    event = d.get('event', 'cpu')
+    # JFR 模式使用 jfr_settings (default/profile) 作为事件标识
+    mode = task_type
+    if mode == 'jfr':
+        event = d.get('event', d.get('jfr_settings', 'default'))
+    else:
+        event = d.get('event', 'cpu')
     
     conn, err = _ensure_connection(conn_id, d)
     if err:
