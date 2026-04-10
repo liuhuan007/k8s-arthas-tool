@@ -110,19 +110,20 @@ function renderProcs(snap) {
   const el = document.getElementById('procsTable');
   if (!el) return;
   
-  const procs = snap.processes || [];
+  const procs = snap.processes || snap.container_metrics?.processes || [];
   if (procs.length === 0) {
-    el.innerHTML = '<tr><td colspan="5" class="empty-state">无进程数据</td></tr>';
+    el.innerHTML = '<tr><td colspan="6" class="empty-state">无进程数据</td></tr>';
     return;
   }
   
   el.innerHTML = procs.slice(0, 20).map(p => `
     <tr>
-      <td>${p.pid}</td>
+      <td style="font-family:monospace;color:var(--a)">${esc(p.pid || '?')}</td>
       <td>${esc(p.user || '—')}</td>
-      <td>${esc(p.cpu || '—')}</td>
-      <td>${esc(p.mem || '—')}</td>
-      <td>${esc(p.cmd || '—')}</td>
+      <td>${esc(p.cpu || '0')}%</td>
+      <td>${esc(p.mem || '0')}%</td>
+      <td>${esc(p.stat || '—')}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.cmd || '')}">${esc(p.cmd || '—')}</td>
     </tr>`).join('');
 }
 

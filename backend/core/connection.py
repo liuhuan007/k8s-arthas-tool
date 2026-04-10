@@ -109,7 +109,9 @@ class ArthasConnection:
         # 短路 1: 当前 client 仍然存活
         if self.client and self.client.ping(retries=1, delay=0):
             log.info("ArthasConnection already alive (port=%d) — reusing", self.local_port)
-            # 尝试获取版本信息（如果尚未获取）
+            # 优先从 ping 缓存获取版本
+            if not self.arthas_version and hasattr(self.client, '_last_version') and self.client._last_version:
+                self.arthas_version = self.client._last_version
             if not self.arthas_version:
                 self._fetch_version()
             return True, f"已连接，复用 (port {self.local_port})"
@@ -139,8 +141,12 @@ class ArthasConnection:
             self.client = client
             self.http_client = client  # 兼容
             self.arthas_address = f"http://127.0.0.1:{self.local_port}"
-            # Step 4: 获取 Arthas 版本信息
-            self._fetch_version()
+            # Step 4: 获取 Arthas 版本信息（优先用 ping 缓存）
+            if hasattr(client, '_last_version') and client._last_version:
+                self.arthas_version = client._last_version
+                log.info("Arthas version (from ping cache): %s", self.arthas_version)
+            else:
+                self._fetch_version()
             version_suffix = f"  Arthas {self.arthas_version}" if self.arthas_version else ""
             return True, f"连接成功 · {agent_msg} · {pf_msg}{version_suffix}"
 
@@ -160,20 +166,36 @@ class ArthasConnection:
         if not self.client:
             return
         try:
+            version = self.client.get_version(retries=2, delay=1.0)
+            if version:
+                self.arthas_version = version
+                log.info("Arthas version: %s", version)
+                return
+            # 兜底：用 exec_once 手动解析
             resp = self.client.exec_once("version", timeout_ms=5000)
             if resp.get("state") in ("SUCCEEDED", "succeeded"):
-                for r in resp.get("body", {}).get("results", []):
-                    v = r.get("version", "")
-                    if v:
-                        self.arthas_version = v
-                        log.info("Arthas version: %s", v)
-                        return
-            # 兜底：从 message 字段提取
-            raw = str(resp.get("body", ""))
-            import re
-            m = re.search(r'(\d+\.\d+\.\d+[\.\-\w]*)', raw)
-            if m:
-                self.arthas_version = m.group(1)
+                body = resp.get("body", {})
+                # body 可能是 dict 或 JSON 字符串
+                if isinstance(body, str):
+                    try:
+                        import json
+                        body = json.loads(body)
+                    except Exception:
+                        body = {}
+                if isinstance(body, dict):
+                    for r in body.get("results", []):
+                        v = r.get("version", "")
+                        if v:
+                            self.arthas_version = str(v)
+                            log.info("Arthas version: %s", v)
+                            return
+                # 从 message 字段提取
+                raw = str(resp.get("body", "")) + str(resp.get("message", ""))
+                import re
+                m = re.search(r'(\d+\.\d+\.\d+[\.\-\w]*)', raw)
+                if m:
+                    self.arthas_version = m.group(1)
+                    log.info("Arthas version (from regex): %s", m.group(1))
         except Exception as e:
             log.debug("fetch version failed: %s", e)
 

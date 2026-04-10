@@ -50,11 +50,13 @@ class ArthasHttpClient:
         return json.loads(raw)
 
     def ping(self, retries: int = 3, delay: float = 1.5) -> bool:
-        """Ping with retry — 发送 version 命令检测连通性"""
+        """Ping with retry — 发送 version 命令检测连通性，同时提取版本号"""
         for i in range(retries):
             try:
                 r = self._post({"action": "exec", "command": "version"}, timeout=5)
                 if r.get("state") in ("SUCCEEDED", "succeeded"):
+                    # 顺便提取版本号缓存到实例属性
+                    self._last_version = self._extract_version(r)
                     return True
             except Exception as e:
                 log.debug("ping attempt %d failed: %s", i + 1, e)
@@ -62,16 +64,34 @@ class ArthasHttpClient:
                 time.sleep(delay)
         return False
 
+    def _extract_version(self, resp: dict) -> Optional[str]:
+        """从 version 命令响应中提取版本号"""
+        body = resp.get("body", {})
+        if isinstance(body, str):
+            try:
+                body = json.loads(body)
+            except Exception:
+                body = {}
+        if isinstance(body, dict):
+            for r in body.get("results", []):
+                v = r.get("version", "")
+                if v:
+                    return str(v)
+        # 从 message 字段提取
+        raw = str(resp.get("body", "")) + str(resp.get("message", ""))
+        import re
+        m = re.search(r'(\d+\.\d+\.\d+[\.\-\w]*)', raw)
+        if m:
+            return m.group(1)
+        return None
+
     def get_version(self, retries: int = 2, delay: float = 1.0) -> Optional[str]:
         """获取 Arthas 版本号，返回版本字符串或 None"""
         for i in range(retries):
             try:
                 r = self._post({"action": "exec", "command": "version"}, timeout=8)
                 if r.get("state") in ("SUCCEEDED", "succeeded"):
-                    for result in r.get("body", {}).get("results", []):
-                        v = result.get("version", "")
-                        if v:
-                            return str(v)
+                    return self._extract_version(r)
             except Exception as e:
                 log.debug("get_version attempt %d failed: %s", i + 1, e)
             if i < retries - 1:

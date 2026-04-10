@@ -357,6 +357,13 @@ var AUTH_USER = 'arthas_auth_user';
           <div class="pm-st"    id="pms-cf" onclick="switchPm('cf')">🔧 配置</div>
           <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding-right:10px;flex-shrink:0">
             <span id="pmTs" style="font-size:10px;color:var(--tx3)"></span>
+            <select id="pmAutoRefresh" style="font-size:10px;padding:2px 4px;background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:3px" onchange="toggleAutoRefresh(this.value)">
+              <option value="0" selected>手动刷新</option>
+              <option value="5">5秒刷新</option>
+              <option value="10">10秒刷新</option>
+              <option value="30">30秒刷新</option>
+              <option value="60">60秒刷新</option>
+            </select>
             <button class="ib" onclick="loadSnap()">↻ 刷新</button>
           </div>
         </div>

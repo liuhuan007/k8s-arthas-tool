@@ -657,6 +657,10 @@ function switchTab(n) {
   }
   if(tab==='terminal') { setTimeout(()=>{ document.getElementById('termInput')?.focus(); },100); }
   if(tab==='ai') { setTimeout(()=>{ aiRefreshConnSelect(); document.getElementById('aiInput')?.focus(); },100); }
+  if(tab==='monitor') {
+    // 切换到监控 tab 时，加载一次快照（不自动刷新，避免接口慢导致卡顿）
+    loadSnap(true);
+  }
 }
 
 function switchHistTab(name) {
@@ -885,6 +889,10 @@ async function arthasConnect() {
       const _addrInfo = d.arthas_address || d.http_url || `http://127.0.0.1:${d.local_port}`;
       setPtStat('ok', d.java_pid ? `Arthas 已连接 (PID: ${d.java_pid})${_verSuffix}` : `Arthas 已连接${_verSuffix}`);
       setConnStatus('ok', `✓ ${t.cluster_name} / ${t.namespace} / ${t.pod_name}   local port: ${d.local_port}${d.java_pid ? `   PID: ${d.java_pid}` : ''}${_verSuffix}   ${_addrInfo}`);
+      // 在控制台输出区显示连接信息
+      clog(`── Arthas 已连接 ──`, 'dim');
+      clog(`PID: ${d.java_pid || '?'}   Port: ${d.local_port}   Address: ${_addrInfo}`, 'dim');
+      if (d.arthas_version) clog(`Arthas Version: ${d.arthas_version}`, 'ok');
       saveConnections();
       toast('连接成功', 'success');
       // 连接成功后自动折叠 Pod 目标区，节省侧边栏空间
@@ -2474,9 +2482,31 @@ function updatePfTaskInfo() {
   el.style.display = 'block';
   const info = _pfTaskInfo || {};
   document.getElementById('pfInfoTaskId').textContent = info.taskId || '-';
-  document.getElementById('pfInfoType').textContent = info.type || '-';
-  document.getElementById('pfInfoEvent').textContent = info.event || '-';
-  document.getElementById('pfInfoDur').textContent = info.duration ? `${info.duration}s` : '-';
+  // 友好的类型/事件名称
+  const typeLabels = {
+    'Thread Dump': '线程转储',
+    'Heap Dump': '堆转储',
+    'async-profiler': 'async-profiler',
+    'JDK JFR': 'JDK JFR'
+  };
+  const eventLabels = {
+    'threaddump': '线程转储',
+    'heapdump': '堆转储',
+    'cpu': 'CPU 采样',
+    'alloc': '内存分配',
+    'lock': '锁竞争',
+    'wall': 'Wall 时间',
+    'default': '默认配置',
+    'profile': 'Profile 配置'
+  };
+  const typeDisplay = typeLabels[info.type] || info.type || '-';
+  const eventDisplay = eventLabels[info.event] || info.event || '-';
+  document.getElementById('pfInfoType').textContent = typeDisplay;
+  document.getElementById('pfInfoEvent').textContent = eventDisplay;
+  // 时长显示：dump 类型或 duration 为 0/空 显示 '-'
+  const isDump = info.type === 'Thread Dump' || info.type === 'Heap Dump' || info.event === 'threaddump' || info.event === 'heapdump';
+  const durDisplay = isDump || !info.duration || info.duration === '-' || info.duration === 0 ? '-' : `${info.duration}s`;
+  document.getElementById('pfInfoDur').textContent = durDisplay;
   document.getElementById('pfInfoProgress').textContent = info.progress || '-';
   const statusEl = document.getElementById('pfInfoStatus');
   statusEl.textContent = info.status || '-';
@@ -2582,8 +2612,10 @@ async function pfPoll() {
         document.getElementById('pfProgLbl').textContent = d.status;
       }
 
-      // 更新任务信息面板
+      // 更新任务信息面板（从后端同步 type 和 event）
       _pfTaskInfo.status = d.status || 'running';
+      if (d.type) _pfTaskInfo.type = d.type;
+      if (d.event) _pfTaskInfo.event = d.event;
       if (overtime && d.status === 'running') {
         _pfTaskInfo.progress = `采样完成，下载中 (${Math.round(el)}s)`;
       } else {
@@ -2730,13 +2762,37 @@ async function loadPfHistoryForCurrentConn() {
     const showUser = typeof isAdmin === 'function' && isAdmin();
 
     el.innerHTML = currentTasks.map(t => {
-      const metaParts = [`事件: ${t.config.event||"-"}`, `时长: ${t.config.duration}s · 格式: ${t.config.format}`];
+      const mode = t.config.mode || 'profiler';
+      const event = t.config.event || '-';
+      const duration = t.config.duration || 0;
+      const format = t.config.format || 'html';
+
+      // 友好的事件类型名称
+      const eventLabels = {
+        'threaddump': '线程转储',
+        'heapdump': '堆转储',
+        'cpu': 'CPU 采样',
+        'alloc': '内存分配',
+        'lock': '锁竞争',
+        'wall': 'Wall 时间',
+        'default': 'JFR 默认',
+        'profile': 'JFR Profile'
+      };
+      const eventDisplay = eventLabels[event] || event;
+
+      // 时长显示：dump 类型显示 "-"，其他显示秒数
+      const durationDisplay = (mode === 'threaddump' || mode === 'heapdump' || duration === 0) ? '-' : `${duration}s`;
+
+      // 格式显示
+      const formatDisplay = mode === 'threaddump' ? 'HTML' : mode === 'heapdump' ? 'HPROF' : format;
+
+      const metaParts = [`事件: ${eventDisplay}`, `时长: ${durationDisplay} · 格式: ${formatDisplay}`];
       if (showUser && t.username) metaParts.push(`<span style="color:var(--a)">@${esc(t.username)}</span>`);
       return `
       <div style="padding:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:6px;margin-bottom:8px">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
           <span style="font-size:14px">${icons[t.status]||'❓'}</span>
-          <span style="font-size:11px;color:var(--tx2)">${t.config.mode||"profiler"}</span>
+          <span style="font-size:11px;color:var(--tx2)">${mode}</span>
           <span class="st-badge ${bcls[t.status]||''}" style="font-size:10px">${labels[t.status]||t.status}</span>
           <span style="margin-left:auto;font-size:10px;color:var(--tx3)">${fmtTs(t.created_at)}</span>
         </div>
@@ -2791,13 +2847,14 @@ async function loadConnectionProfilerLogs(connId) {
 }
 
 // ── Pod Monitor ───────────────────────────────────────────────────────────────
-async function loadSnap() {
+async function loadSnap(silent = false) {
   const t = getT();
   if(!t.cluster_name || !t.pod_name) { toast('请先配置集群和 Pod','warn'); return; }
-  document.getElementById('pmp-ov').innerHTML = '<div style="color:var(--tx3);padding:30px">加载中...</div>';
+  // 静默刷新时不显示 loading，避免闪烁
+  if (!silent) document.getElementById('pmp-ov').innerHTML = '<div style="color:var(--tx3);padding:30px">加载中...</div>';
   try {
     _snap = await safePost(`${API}/monitor/snapshot`, t);
-    if(_snap.error) { toast(_snap.error, 'error'); return; }
+    if(_snap.error) { if(!silent) toast(_snap.error, 'error'); return; }
     document.getElementById('pmTs').textContent = new Date().toLocaleTimeString('zh-CN',{hour12:false});
     renderOverview(_snap); renderProcs(_snap); renderNetwork(_snap); renderEvents(_snap); renderConfig(_snap);
     const ctrs = _snap.pod_info?.containers||[];
@@ -2810,7 +2867,29 @@ async function loadSnap() {
       const r2 = await fetch(`${API}/monitor/history`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(t)}).catch(()=>null);
       if(r2) { _histData = await r2.json(); if(document.getElementById('pms-mt').classList.contains('on')) renderMetrics(_snap); }
     }, 16000);
-  } catch(e) { toast('加载失败: '+e.message, 'error'); }
+  } catch(e) { if(!silent) toast('加载失败: '+e.message, 'error'); }
+}
+
+// ── 监控面板自动刷新 ─────────────────────────────────────────────────────────────
+window._monitorAutoTimer = null;
+
+function toggleAutoRefresh(seconds) {
+  seconds = parseInt(seconds) || 0;
+  if (window._monitorAutoTimer) {
+    clearInterval(window._monitorAutoTimer);
+    window._monitorAutoTimer = null;
+  }
+  if (seconds > 0) {
+    // 立即静默刷新一次
+    loadSnap(true);
+    // 设置定时静默刷新（避免闪烁）
+    window._monitorAutoTimer = setInterval(() => {
+      const monitorTab = document.getElementById('tab-monitor');
+      if (monitorTab && monitorTab.classList.contains('on')) {
+        loadSnap(true);
+      }
+    }, seconds * 1000);
+  }
 }
 
 function renderOverview(snap) {
@@ -2842,7 +2921,7 @@ function renderOverview(snap) {
   ${ctrs.map((c,i) => {
     const sc = c.state==='running'?'bg':c.state==='waiting'?'by':'br';
     return `<div class="ctr-card">
-      <div class="ctr-hd" onclick="toggleCtr(${i})">
+      <div class="ctr-hd">
         <div><div class="ctr-nm">${esc(c.name)}</div><div class="ctr-img">${esc(c.image)}</div></div>
         <div class="ctr-badges">
           <span class="badge ${sc}">${c.state}</span>
@@ -2851,7 +2930,6 @@ function renderOverview(snap) {
           ${c.liveness_probe?'<span class="badge bb">Liveness</span>':''}
           ${c.readiness_probe?'<span class="badge bb">Readiness</span>':''}
         </div>
-        <span style="margin-left:8px;color:var(--tx3)">▾</span>
       </div>
       <div class="ctr-body" id="ctrbd${i}">
         <div class="ctr-res">
@@ -2949,9 +3027,11 @@ function renderProcs(snap) {
   const procs = snap.container_metrics?.processes||[];
   const el = document.getElementById('pmp-pr');
   if(!procs.length) { el.innerHTML='<div style="color:var(--tx3);padding:30px;text-align:center">无进程数据 (需要 Pod Running 且 ps 可用)</div>'; return; }
+  // 调试：打印进程数据结构
+  console.log('[renderProcs] processes data:', procs.slice(0, 2));
   el.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--ln);border-radius:7px;overflow:hidden;margin-bottom:8px">
-    <table class="ptbl"><thead><tr><th>PID</th><th>%CPU</th><th>%MEM</th><th>STAT</th><th>命令</th></tr></thead>
-    <tbody>${procs.map(p=>`<tr><td class="ppid">${esc(p.pid)}</td><td class="pc">${esc(p.cpu)}%</td><td class="pmem">${esc(p.mem)}%</td><td class="ps-${(p.stat||'S')[0]}">${esc(p.stat||'')}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.cmd)}">${esc(p.cmd)}</td></tr>`).join('')}</tbody>
+    <table class="ptbl"><thead><tr><th>PID</th><th>USER</th><th>%CPU</th><th>%MEM</th><th>STAT</th><th>命令</th></tr></thead>
+    <tbody>${procs.map(p=>`<tr><td class="ppid">${esc(p.pid)}</td><td style="color:var(--tx2)">${esc(p.user||'—')}</td><td class="pc">${esc(p.cpu)}%</td><td class="pmem">${esc(p.mem)}%</td><td class="ps-${(p.stat||'S')[0]}">${esc(p.stat||'')}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.cmd)}">${esc(p.cmd)}</td></tr>`).join('')}</tbody>
     </table></div>
   <div style="font-size:10px;color:var(--tx3)">STAT: <code>R</code>=运行中 <code>S</code>=睡眠 <code>D</code>=不可中断 <code>Z</code>=僵尸</div>`;
 }
@@ -3460,8 +3540,23 @@ async function loadPfHistory(filterByCurrentConn = false) {
     const labels = {completed:'完成',failed:'失败',running:'运行中',starting:'启动中'};
     const bcls = {completed:'st-ok',failed:'st-fail',running:'st-run',starting:'st-run'};
     const showUser = typeof isAdmin === 'function' && isAdmin();  // admin 显示用户名
+    const eventLabels = {
+      'threaddump': '线程转储',
+      'heapdump': '堆转储',
+      'cpu': 'CPU',
+      'alloc': '内存分配',
+      'lock': '锁竞争',
+      'wall': 'Wall',
+      'default': 'JFR默认',
+      'profile': 'JFR Profile'
+    };
     el.innerHTML = filteredTasks.map(t => {
-      const metaParts = [`${esc(t.config.cluster)}/${esc(t.config.namespace)}`, t.config.mode||"profiler", t.config.event||"", `${t.config.duration}s`, t.config.format, fmtTs(t.created_at)];
+      const mode = t.config.mode || 'profiler';
+      const event = t.config.event || '';
+      const duration = t.config.duration || 0;
+      const eventDisplay = eventLabels[event] || event;
+      const durationDisplay = (mode === 'threaddump' || mode === 'heapdump' || duration === 0) ? '-' : `${duration}s`;
+      const metaParts = [`${esc(t.config.cluster)}/${esc(t.config.namespace)}`, mode, eventDisplay, durationDisplay, t.config.format, fmtTs(t.created_at)];
       if (showUser && t.username) metaParts.push(`<span style="color:var(--a)">@${esc(t.username)}</span>`);
       return `<div class="tc">
       <div class="tc-inner">
@@ -3590,6 +3685,7 @@ window.togglePfHistory = togglePfHistory;
 
 // 监控
 window.loadSnap = loadSnap;
+window.toggleAutoRefresh = toggleAutoRefresh;
 window.loadLogs = loadLogs;
 window.downloadLogsFile = downloadLogsFile;
 window.toggleWrap = toggleWrap;

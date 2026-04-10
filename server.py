@@ -745,12 +745,14 @@ def start_profiler():
     task_type = d.get('mode') or d.get('type', 'profiler')  # profiler/jfr/threaddump/heapdump
     duration = int(d.get('duration', 60))
     fmt = d.get('format', 'html')  # html/collapsed/jfr
-    # JFR 模式使用 jfr_settings (default/profile) 作为事件标识
+    # 根据任务类型设置默认事件
     mode = task_type
     if mode == 'jfr':
         event = d.get('event', d.get('jfr_settings', 'default'))
+    elif mode in ('threaddump', 'heapdump'):
+        event = d.get('event', mode)  # dump 类型事件=类型名
     else:
-        event = d.get('event', 'cpu')
+        event = d.get('event', 'cpu')  # profiler 默认 cpu
     
     conn, err = _ensure_connection(conn_id, d)
     if err:
@@ -797,18 +799,24 @@ def start_profiler():
     
     # 后台执行任务
     def run_task():
+        import logging
+        logger = logging.getLogger(__name__)
         workflow = ProfilerWorkflow(conn)
         try:
-            result = workflow.run(duration=duration, fmt=fmt, mode=task_type, event=event, 
+            result = workflow.run(duration=duration, fmt=fmt, mode=task_type, event=event,
                                    output_dir=str(OUTPUT_DIR))
             output_path = (result.get('local_file', '') or result.get('output_path', '')) if isinstance(result, dict) else ''
+            message = result.get('message', '') if isinstance(result, dict) else ''
+            logger.info(f"[Profiler] Task {task_id} completed: {output_path}")
             db.update('profiler_tasks', {
                 'status': 'completed',
                 'progress': 100,
                 'output_path': output_path,
+                'message': message,
                 'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             }, 'id = ?', (task_id,))
         except Exception as e:
+            logger.error(f"[Profiler] Task {task_id} failed: {e}", exc_info=True)
             db.update('profiler_tasks', {
                 'status': 'failed',
                 'message': str(e),

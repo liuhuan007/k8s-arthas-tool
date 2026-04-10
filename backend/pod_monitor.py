@@ -401,19 +401,53 @@ def collect_container_metrics(runner: KubectlRunner, ns: str, pod: str, containe
             result["disk_use_pct"] = parts[4]
 
     # 进程列表（top 15 by CPU）
+    # 兼容 BusyBox ps（不支持 --sort，列数少于标准 ps）
     rc5, out5, _ = runner.exec_pod(ns, pod, container,
-        "ps aux --sort=-%cpu 2>/dev/null | head -16 || ps aux 2>/dev/null | head -16 || echo ''",
+        "ps aux 2>/dev/null | head -20 || echo ''",
         timeout=8)
     if rc5 == 0 and out5:
         lines = out5.strip().splitlines()
         processes = []
-        for line in lines[1:15]:  # skip header
+        for line in lines[1:16]:  # skip header, max 15
             parts = line.split(None, 10)
+            if len(parts) < 3:
+                continue
+            # 标准 ps aux: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND (11列)
+            # BusyBox ps:   USER PID %CPU %MEM VSZ RSS TTY STAT TIME COMMAND (10列，无 START)
+            # 注意: split(None, 10) 最多产生 11 部分，COMMAND 可能含空格
             if len(parts) >= 11:
+                # 标准 11 列格式
                 processes.append({
-                    "pid": parts[1], "cpu": parts[2], "mem": parts[3],
-                    "stat": parts[7], "cmd": parts[10][:60],
+                    "user": parts[0], "pid": parts[1], "cpu": parts[2], "mem": parts[3],
+                    "stat": parts[7], "cmd": parts[10][:80],
                 })
+            elif len(parts) == 10:
+                # BusyBox 10 列格式: USER PID %CPU %MEM VSZ RSS TTY STAT TIME COMMAND
+                processes.append({
+                    "user": parts[0], "pid": parts[1], "cpu": parts[2], "mem": parts[3],
+                    "stat": parts[7], "cmd": parts[9][:80],
+                })
+            elif len(parts) >= 9:
+                # 9 列格式: USER PID %CPU %MEM VSZ RSS TTY STAT COMMAND (无 TIME)
+                processes.append({
+                    "user": parts[0], "pid": parts[1], "cpu": parts[2], "mem": parts[3],
+                    "stat": parts[7], "cmd": parts[8][:80],
+                })
+            elif len(parts) >= 5:
+                # 精简格式兜底
+                processes.append({
+                    "user": parts[0] if len(parts) > 0 else '?',
+                    "pid": parts[1] if len(parts) > 1 else '?',
+                    "cpu": parts[2] if len(parts) > 2 else '0',
+                    "mem": parts[3] if len(parts) > 3 else '0',
+                    "stat": parts[4] if len(parts) > 4 else '?',
+                    "cmd": parts[-1][:80] if parts else '?',
+                })
+        # 按 CPU 降序排列（处理不支持 --sort 的情况）
+        try:
+            processes.sort(key=lambda p: float(p.get('cpu', '0').replace(',', '.')), reverse=True)
+        except (ValueError, TypeError):
+            pass
         result["processes"] = processes
 
     # 网络接口统计
