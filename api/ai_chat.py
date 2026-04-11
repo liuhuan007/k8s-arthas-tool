@@ -298,6 +298,98 @@ ARTHAS_TOOLS = [
             }
         }
     },
+    # ── 性能诊断专用 Tools ──────────────────────────────────────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "arthas_trace_method",
+            "description": "快速追踪方法调用链耗时。返回归一化耗时数据，适合定位慢方法根因。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "class_pattern": {
+                        "type": "string",
+                        "description": "类名模式，如 com.example.service.* 或 com.example.Foo"
+                    },
+                    "method_pattern": {
+                        "type": "string",
+                        "description": "方法名，如 saveUser，支持 * 通配"
+                    },
+                    "skip_jdk": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "是否跳过 JDK 自身方法，减少噪声"
+                    },
+                    "max_depth": {
+                        "type": "integer",
+                        "default": 3,
+                        "description": "最大追踪深度，默认3层"
+                    },
+                    "sample_count": {
+                        "type": "integer",
+                        "default": 5,
+                        "description": "采样次数，默认5次"
+                    }
+                },
+                "required": ["class_pattern", "method_pattern"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "arthas_get_dashboard",
+            "description": "获取当前 JVM 实时指标快照（内存/GC/线程/cpu），返回归一化 JSON，适合快速评估 JVM 状态基线。"
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "arthas_analyze_threads",
+            "description": "线程快照 + 阻塞分析。返回所有线程状态、BLOCKED 线程列表和可能的死锁信息。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "top_n": {
+                        "type": "integer",
+                        "default": 10,
+                        "description": "返回耗时最高的 N 个线程，默认10个"
+                    },
+                    "check_deadlock": {
+                        "type": "boolean",
+                        "default": True,
+                        "description": "是否执行死锁检测（thread -b）"
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "arthas_diagnose_performance",
+            "description": "一键性能诊断（核心入口）。自动组合 trace + dashboard + thread 采样 → 规则预筛 → LLM 解读 → 结构化报告。直接返回根因、影响范围、优化建议。建议作为性能问题的第一个诊断动作。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target": {
+                        "type": "string",
+                        "enum": ["method_slow", "oom", "thread_block", "general"],
+                        "default": "general",
+                        "description": "诊断目标场景：method_slow=方法慢, oom=内存问题, thread_block=线程阻塞, general=通用诊断"
+                    },
+                    "class_pattern": {
+                        "type": "string",
+                        "description": "类名模式（可选，用于方法慢场景）"
+                    },
+                    "method_pattern": {
+                        "type": "string",
+                        "description": "方法名（可选，用于方法慢场景）"
+                    }
+                }
+            }
+        }
+    },
 ]
 
 # 默认系统提示词
@@ -442,6 +534,14 @@ def _execute_tool(name: str, arguments: dict, connection_id: str) -> str:
             return _get_pod_status(arguments.get('detail', 'basic'), connection_id)
         elif name == 'check_connection':
             return _check_connection_status(connection_id)
+        elif name == 'arthas_trace_method':
+            return _arthas_trace_method(arguments, connection_id)
+        elif name == 'arthas_get_dashboard':
+            return _arthas_get_dashboard(connection_id)
+        elif name == 'arthas_analyze_threads':
+            return _arthas_analyze_threads(arguments.get('top_n', 10), arguments.get('check_deadlock', True), connection_id)
+        elif name == 'arthas_diagnose_performance':
+            return _arthas_diagnose_performance(arguments.get('target', 'general'), arguments.get('class_pattern', ''), arguments.get('method_pattern', ''), connection_id)
         else:
             return json.dumps({"error": f"未知工具: {name}"})
     except Exception as e:
@@ -534,6 +634,275 @@ def _check_connection_status(connection_id: str) -> str:
         })
     except Exception:
         return json.dumps({"connected": False, "message": "连接已断开"})
+
+
+def _arthas_trace_method(args: dict, connection_id: str) -> str:
+    """快速方法耗时追踪，返回归一化耗时数据"""
+    import re
+    conn = _get_alive_connection(connection_id)
+    if not conn:
+        return json.dumps({"error": "Arthas 连接不可用"})
+
+    class_pattern = args.get('class_pattern', '')
+    method_pattern = args.get('method_pattern', '*')
+    skip_jdk = args.get('skip_jdk', True)
+    max_depth = args.get('max_depth', 3)
+    sample_count = args.get('sample_count', 5)
+
+    if not class_pattern:
+        return json.dumps({"error": "class_pattern 不能为空"})
+
+    # 构建 trace 命令
+    skip_flag = '--skipJDKMethod true' if skip_jdk else ''
+    cmd = f"trace {class_pattern} {method_pattern} -n {sample_count} --hack true '{skip_flag} #cost > .1' '#cost > .1'"
+
+    try:
+        result = conn.http_client.exec_once(cmd, timeout_ms=30000)
+        state = result.get('state', '')
+        body = result.get('body', [])
+
+        # 解析耗时数据
+        trace_lines = []
+        if isinstance(body, list):
+            for line in body:
+                line_str = str(line)
+                # 提取耗时信息
+                cost_match = re.findall(r'#(\d+)\s+[^\[]+\[(\d+(?:\.\d+)?)(ms|us|s)\]', line_str)
+                if cost_match:
+                    for seq, val, unit in cost_match:
+                        ms_val = float(val) * (1000 if unit == 's' else (1 if unit == 'ms' else 0.001))
+                        trace_lines.append({"seq": seq, "cost_ms": round(ms_val, 3), "unit": unit, "raw": line_str[:200]})
+
+        # 按耗时排序
+        trace_lines.sort(key=lambda x: x['cost_ms'], reverse=True)
+
+        return json.dumps({
+            "state": state,
+            "command": cmd,
+            "slow_methods": trace_lines[:10],
+            "total_sampled": len(trace_lines),
+            "summary": f"采样 {len(trace_lines)} 次，最高耗时 {trace_lines[0]['cost_ms']:.2f}ms" if trace_lines else "未采样到数据"
+        }, ensure_ascii=False)
+
+    except Exception as e:
+        return json.dumps({"error": f"trace 执行失败: {str(e)}"})
+
+
+def _arthas_get_dashboard(connection_id: str) -> str:
+    """获取 JVM 实时指标快照"""
+    import re
+    conn = _get_alive_connection(connection_id)
+    if not conn:
+        return json.dumps({"error": "Arthas 连接不可用"})
+
+    try:
+        # dashboard -n 1 只输出一次快照
+        result = conn.http_client.exec_once("dashboard -n 1", timeout_ms=15000)
+        state = result.get('state', '')
+        body = result.get('body', [])
+
+        lines = []
+        if isinstance(body, list):
+            lines = [str(l) for l in body]
+
+        raw_text = '\n'.join(lines)
+
+        # 解析关键指标
+        metrics = {}
+
+        # 内存信息
+        mem_match = re.findall(r'(Old|Young|Eden|Survivor|heap|non-heap)[^\d]*(\d+(?:\.\d+)?)\s*(MB|GB|%)', raw_text, re.I)
+        if mem_match:
+            metrics['memory'] = [{"area": a, "value": float(v), "unit": u} for a, v, u in mem_match[:6]]
+
+        # CPU 使用率
+        cpu_match = re.search(r'cpu\s*=\s*(\d+(?:\.\d+)?)\s*%', raw_text, re.I)
+        if cpu_match:
+            metrics['cpu_percent'] = round(float(cpu_match.group(1)), 2)
+
+        # GC 信息
+        gc_match = re.findall(r'(YGC|FGC|GCT)[^\d]*(\d+)', raw_text, re.I)
+        if gc_match:
+            metrics['gc'] = [{"type": t.upper(), "count": int(c)} for t, c in gc_match[:4]]
+
+        return json.dumps({
+            "state": state,
+            "metrics": metrics,
+            "raw_snippet": raw_text[:2000],
+            "timestamp": datetime.now().isoformat()
+        }, ensure_ascii=False)
+
+    except Exception as e:
+        return json.dumps({"error": f"dashboard 获取失败: {str(e)}"})
+
+
+def _arthas_analyze_threads(top_n: int, check_deadlock: bool, connection_id: str) -> str:
+    """线程快照 + 阻塞分析"""
+    conn = _get_alive_connection(connection_id)
+    if not conn:
+        return json.dumps({"error": "Arthas 连接不可用"})
+
+    try:
+        # 1. 获取耗时最高的 N 个线程
+        thread_resp = conn.http_client.exec_once(f"thread -n {top_n}", timeout_ms=30000)
+        thread_state = thread_resp.get('state', '')
+
+        threads = []
+        body = thread_resp.get('body', {})
+        if isinstance(body, dict):
+            for r in body.get('results', []):
+                busy = r.get('busyThreads') or r.get('threads') or []
+                for th in (busy if isinstance(busy, list) else []):
+                    threads.append({
+                        "name": th.get('name', '?'),
+                        "id": th.get('id', 0),
+                        "state": th.get('state', '?'),
+                        "cpu": th.get('cpu', 0),
+                        "deltaTime": th.get('deltaTime', 0),
+                        "blockedCount": th.get('blockedCount', 0),
+                        "waitedCount": th.get('waitedCount', 0),
+                    })
+
+        # 2. 死锁检测
+        deadlock_info = None
+        if check_deadlock:
+            try:
+                dl_resp = conn.http_client.exec_once("thread -b", timeout_ms=15000)
+                dl_body = dl_resp.get('body', {}) if isinstance(dl_resp, dict) else {}
+                bt = dl_body.get('blockingThread')
+                if bt and isinstance(bt, dict) and bt.get('threadName'):
+                    deadlock_info = json.dumps(dl_resp, ensure_ascii=False)[:500]
+            except Exception:
+                pass
+
+        # 3. 统计
+        blocked = [t for t in threads if t['state'] == 'BLOCKED']
+        waiting = [t for t in threads if t['state'] in ('WAITING', 'TIMED_WAITING')]
+
+        return json.dumps({
+            "state": thread_state,
+            "summary": {
+                "total_threads": len(threads),
+                "blocked_count": len(blocked),
+                "waiting_count": len(waiting),
+                "deadlock_detected": deadlock_info is not None
+            },
+            "top_threads": threads[:top_n],
+            "blocked_threads": blocked[:5],
+            "deadlock_info": deadlock_info
+        }, ensure_ascii=False)
+
+    except Exception as e:
+        return json.dumps({"error": f"线程分析失败: {str(e)}"})
+
+
+def _arthas_diagnose_performance(target: str, class_pattern: str, method_pattern: str, connection_id: str) -> str:
+    """
+    一键性能诊断核心入口。
+    组合 trace + dashboard + thread 采样 → 规则预筛 → 返回结构化诊断数据。
+    后续 LLM 基于此数据生成报告。
+    """
+    import re
+    conn = _get_alive_connection(connection_id)
+    if not conn:
+        return json.dumps({"error": "Arthas 连接不可用，请在界面重新连接"})
+
+    diagnosis = {
+        "target": target,
+        "timestamp": datetime.now().isoformat(),
+        "pod": conn.target.pod_name,
+        "namespace": conn.target.namespace,
+        "java_pid": conn.java_pid,
+        "rules_triggered": [],
+        "highlights": [],
+        "metrics": {},
+        "recommendations": []
+    }
+
+    try:
+        # 1. Dashboard 基线
+        try:
+            dash_resp = conn.http_client.exec_once("dashboard -n 1", timeout_ms=15000)
+            dash_raw = json.dumps(dash_resp, ensure_ascii=False)
+
+            # 规则预筛：Old区内存高
+            old_match = re.search(r'Old[^\d]*(\d+(?:\.\d+)?)\s*(MB|GB)', dash_raw, re.I)
+            if old_match:
+                val = float(old_match.group(1))
+                if old_match.group(2) == 'GB':
+                    val *= 1024
+                if val > 800:  # > 800MB Old区
+                    diagnosis['rules_triggered'].append("high_old_gen")
+                    diagnosis['recommendations'].append("Old区内存使用率偏高，关注可能的内存泄漏或大对象")
+
+            # 规则预筛：CPU 飙高
+            cpu_match = re.search(r'cpu\s*=\s*(\d+(?:\.\d+)?)\s*%', dash_raw, re.I)
+            if cpu_match and float(cpu_match.group(1)) > 80:
+                diagnosis['rules_triggered'].append("high_cpu")
+                diagnosis['recommendations'].append("CPU 使用率偏高，建议 thread -n 查看热点线程")
+
+            diagnosis['metrics']['dashboard'] = dash_raw[:1500]
+        except Exception as e:
+            diagnosis['metrics']['dashboard_error'] = str(e)
+
+        # 2. 线程快照
+        try:
+            thread_resp = conn.http_client.exec_once("thread -n 15", timeout_ms=20000)
+            threads_raw = json.dumps(thread_resp, ensure_ascii=False)
+
+            # 规则预筛：BLOCKED 线程多
+            blocked_count = threads_raw.lower().count('"state":"blocked"')
+            if blocked_count >= 3:
+                diagnosis['rules_triggered'].append("thread_blocked")
+                diagnosis['recommendations'].append(f"发现 {blocked_count} 个 BLOCKED 线程，建议执行 thread -b 检查死锁")
+
+            diagnosis['metrics']['threads'] = threads_raw[:1500]
+        except Exception as e:
+            pass
+
+        # 3. 方法慢场景：执行 trace
+        if target in ('method_slow', 'general') and class_pattern:
+            try:
+                skip_flag = '--skipJDKMethod true'
+                trace_cmd = f"trace {class_pattern} {method_pattern or '*'} -n 10 --hack true '{skip_flag} #cost > .5' '#cost > .1'"
+                trace_resp = conn.http_client.exec_once(trace_cmd, timeout_ms=30000)
+                trace_raw = json.dumps(trace_resp, ensure_ascii=False)
+
+                # 规则预筛：方法耗时 > 500ms
+                slow_methods = re.findall(r'(\d+(?:\.\d+)?)\s*(ms|s)\s*[^\[]+\[(\d+(?:\.\d+)?)(ms|us)', trace_raw)
+                for val, vunit, _, _ in slow_methods:
+                    ms = float(val) * (1000 if vunit == 's' else 1)
+                    if ms > 500:
+                        diagnosis['rules_triggered'].append("slow_method")
+                        diagnosis['highlights'].append(f"发现慢方法: {val}{vunit}")
+                        break
+
+                diagnosis['metrics']['trace'] = trace_raw[:1500]
+            except Exception:
+                pass
+
+        # 4. OOM 场景
+        if target == 'oom':
+            try:
+                heap_resp = conn.http_client.exec_once("heapdump --live /tmp/diag.hprof", timeout_ms=60000)
+                diagnosis['metrics']['heapdump_triggered'] = True
+                diagnosis['recommendations'].append("Heap dump 已触发，建议下载后使用 MAT 分析")
+            except Exception:
+                pass
+
+        # 5. 生成自然语言总结
+        triggered = diagnosis['rules_triggered']
+        if not triggered:
+            summary = "未检测到明显异常指标，JVM 运行正常"
+            diagnosis['summary'] = summary
+        else:
+            summary = f"检测到 {len(triggered)} 个异常信号: {', '.join(triggered)}"
+            diagnosis['summary'] = summary
+
+        return json.dumps(diagnosis, ensure_ascii=False)
+
+    except Exception as e:
+        return json.dumps({"error": f"诊断失败: {str(e)}"})
 
 
 def _get_alive_connection(connection_id: str):
