@@ -509,7 +509,7 @@
 
     // 检查是否配置了 AI
     if (!window._aiConfigured) {
-      aiAddSystemMessage('⚠️ 请先配置 AI 模型，点击右上角 ⚙️ 按钮');
+      aiAddSystemMessage('⚠️ 请先配置 AI 模型，点击顶部「⚙️ 配置大模型」');
       aiOpenSettings();
       return;
     }
