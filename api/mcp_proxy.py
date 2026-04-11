@@ -443,9 +443,293 @@ def _proxy_get(target_url: str):
         return flask_resp
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 性能诊断 MCP Tools 定义（本地处理，不转发到 Arthas MCP Server）
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# 性能诊断工具定义（MCP Tool Schema）
+PERF_MCP_TOOLS = [
+    {
+        "name": "arthas_trace_method",
+        "description": "快速追踪方法调用链耗时。返回归一化耗时数据，适合定位慢方法根因。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "class_pattern": {"type": "string", "description": "类名模式，如 com.example.service.*"},
+                "method_pattern": {"type": "string", "description": "方法名，支持 * 通配"},
+                "skip_jdk": {"type": "boolean", "default": True, "description": "跳过 JDK 自身方法"},
+                "max_depth": {"type": "integer", "default": 3},
+                "sample_count": {"type": "integer", "default": 5}
+            },
+            "required": ["class_pattern", "method_pattern"]
+        }
+    },
+    {
+        "name": "arthas_get_dashboard",
+        "description": "获取当前 JVM 实时指标快照（内存/GC/线程/cpu），返回归一化 JSON。",
+        "inputSchema": {"type": "object", "properties": {}}
+    },
+    {
+        "name": "arthas_analyze_threads",
+        "description": "线程快照 + 阻塞分析。返回所有线程状态、BLOCKED 线程列表和可能的死锁信息。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "top_n": {"type": "integer", "default": 10},
+                "check_deadlock": {"type": "boolean", "default": True}
+            }
+        }
+    },
+    {
+        "name": "arthas_diagnose_performance",
+        "description": "一键性能诊断核心入口。自动组合 trace + dashboard + thread 采样 → 规则预筛 → 结构化报告。直接返回根因、影响范围、优化建议。",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "target": {"type": "string", "enum": ["method_slow", "oom", "thread_block", "general"], "default": "general"},
+                "class_pattern": {"type": "string"},
+                "method_pattern": {"type": "string"}
+            }
+        }
+    },
+]
+
+
+def _handle_perf_mcp_tool(token_entry: dict, tool_name: str, arguments: dict) -> dict:
+    """在 Python 层本地处理性能诊断工具调用"""
+    connection_id = token_entry['connection_id']
+
+    # 获取连接
+    conn = _get_connection_obj(connection_id)
+    if not conn or not conn.is_alive():
+        return {
+            "content": [{"type": "text", "text": f"错误: Arthas 连接不可用，请先在 Web 界面连接目标 Pod"}]
+        }
+
+    try:
+        from api.performance_diagnose import _run_diagnosis
+        from backend.core.rule_engine import RuleEngine, extract_metrics_from_diagnosis
+    except ImportError:
+        pass
+
+    try:
+        # 分发到对应的诊断函数
+        if tool_name == "arthas_trace_method":
+            result = _exec_trace_method(conn, arguments)
+        elif tool_name == "arthas_get_dashboard":
+            result = _exec_dashboard(conn)
+        elif tool_name == "arthas_analyze_threads":
+            result = _exec_thread_analysis(conn, arguments.get('top_n', 10), arguments.get('check_deadlock', True))
+        elif tool_name == "arthas_diagnose_performance":
+            result = _run_diagnosis(
+                conn,
+                arguments.get('target', 'general'),
+                arguments.get('class_pattern', ''),
+                arguments.get('method_pattern', '')
+            )
+        else:
+            result = {"error": f"未知工具: {tool_name}"}
+
+        import json
+        return {
+            "content": [{"type": "text", "text": json.dumps(result, ensure_ascii=False, indent=2)}]
+        }
+
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error("Perf MCP tool error: %s", e, exc_info=True)
+        return {
+            "content": [{"type": "text", "text": f"工具执行失败: {str(e)}"}]
+        }
+
+
+def _exec_trace_method(conn, args: dict) -> dict:
+    """执行 trace 命令"""
+    import re
+    class_pattern = args.get('class_pattern', '')
+    method_pattern = args.get('method_pattern', '*')
+    skip_jdk = args.get('skip_jdk', True)
+    sample_count = args.get('sample_count', 5)
+
+    if not class_pattern:
+        return {"error": "class_pattern 不能为空"}
+
+    skip_flag = '--skipJDKMethod true' if skip_jdk else ''
+    cmd = f"trace {class_pattern} {method_pattern} -n {sample_count} '{skip_flag} #cost > .1'"
+    result = conn.http_client.exec_once(cmd, timeout_ms=30000)
+
+    body = result.get('body', [])
+    trace_lines = []
+    if isinstance(body, list):
+        for line in body:
+            cost_match = re.findall(r'#(\d+)\s+[^\[]+\[(\d+(?:\.\d+)?)(ms|us|s)\]', str(line))
+            for seq, val, unit in cost_match:
+                ms_val = float(val) * (1000 if unit == 's' else (1 if unit == 'ms' else 0.001))
+                trace_lines.append({"seq": seq, "cost_ms": round(ms_val, 3), "unit": unit})
+
+    trace_lines.sort(key=lambda x: x['cost_ms'], reverse=True)
+    return {
+        "command": cmd,
+        "slow_methods": trace_lines[:10],
+        "total_sampled": len(trace_lines),
+        "summary": f"采样 {len(trace_lines)} 次，最高耗时 {trace_lines[0]['cost_ms']:.2f}ms" if trace_lines else "未采样到数据"
+    }
+
+
+def _exec_dashboard(conn) -> dict:
+    """执行 dashboard 命令"""
+    import re
+    result = conn.http_client.exec_once("dashboard -n 1", timeout_ms=15000)
+    body = result.get('body', [])
+    raw = '\n'.join(str(l) for l in (body if isinstance(body, list) else [body]))
+
+    metrics = {}
+    cpu = re.search(r'cpu\s*=\s*(\d+(?:\.\d+)?)\s*%', raw, re.I)
+    if cpu:
+        metrics['cpu_percent'] = round(float(cpu.group(1)), 2)
+
+    mem = re.findall(r'(Old|Young|Eden|Survivor|heap)[^\d]*(\d+(?:\.\d+)?)\s*(MB|GB)', raw, re.I)
+    if mem:
+        metrics['memory'] = [{"area": a, "value": float(v), "unit": u} for a, v, u in mem[:6]]
+
+    gc = re.findall(r'(YGC|FGC|GCT)[^\d]*(\d+)', raw, re.I)
+    if gc:
+        metrics['gc'] = [{"type": t.upper(), "count": int(c)} for t, c in gc[:4]]
+
+    return {"metrics": metrics, "raw_snippet": raw[:2000], "timestamp": conn.target.pod_name}
+
+
+def _exec_thread_analysis(conn, top_n: int, check_deadlock: bool) -> dict:
+    """执行线程分析"""
+    thread_resp = conn.http_client.exec_once(f"thread -n {top_n}", timeout_ms=20000)
+    threads = []
+    body = thread_resp.get('body', {})
+    if isinstance(body, dict):
+        for r in body.get('results', []):
+            busy = r.get('busyThreads') or r.get('threads') or []
+            for th in (busy if isinstance(busy, list) else []):
+                threads.append({
+                    "name": th.get('name', '?'),
+                    "id": th.get('id', 0),
+                    "state": th.get('state', '?'),
+                    "cpu": th.get('cpu', 0),
+                    "deltaTime": th.get('deltaTime', 0),
+                })
+
+    deadlock_info = None
+    if check_deadlock:
+        try:
+            dl_resp = conn.http_client.exec_once("thread -b", timeout_ms=15000)
+            dl_body = dl_resp.get('body', {}) if isinstance(dl_resp, dict) else {}
+            bt = dl_body.get('blockingThread')
+            if bt and isinstance(bt, dict) and bt.get('threadName'):
+                deadlock_info = json.dumps(dl_resp, ensure_ascii=False)[:500]
+        except Exception:
+            pass
+
+    blocked = [t for t in threads if t['state'] == 'BLOCKED']
+    return {
+        "summary": {"total": len(threads), "blocked": len(blocked), "deadlock": deadlock_info is not None},
+        "top_threads": threads[:top_n],
+        "blocked_threads": blocked[:5],
+        "deadlock_info": deadlock_info
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 代理 POST 请求（拦截性能诊断工具）
+# ═══════════════════════════════════════════════════════════════════════════════
+
 def _proxy_post(target_url: str, original_request):
-    """代理 POST 请求（MCP JSON-RPC），支持 SSE 流式响应"""
+    """代理 POST 请求（MCP JSON-RPC），支持 SSE 流式响应，拦截性能诊断工具本地处理"""
     body = original_request.get_data()
+    import json as _json
+
+    # ── 尝试拦截性能诊断工具调用 ────────────────────────────────
+    try:
+        rpc_req = _json.loads(body.decode('utf-8'))
+        method = rpc_req.get('method', '')
+        params = rpc_req.get('params', {})
+
+        # 拦截 tools/call 类型的请求
+        if method in ('tools/call', 'tools/call/stream', 'mcp_tools_call'):
+            tool_calls = []
+            # 支持不同格式的 tool_calls
+            if 'tool_calls' in params:
+                tool_calls = params['tool_calls']
+            elif 'name' in params:
+                tool_calls = [params]
+            elif isinstance(params, list):
+                tool_calls = params
+
+            for tc in tool_calls:
+                tool_name = tc.get('name', '') or tc.get('function', {}).get('name', '')
+                arguments = tc.get('input', {}) or tc.get('arguments', {}) or {}
+
+                if tool_name in [t['name'] for t in PERF_MCP_TOOLS]:
+                    # 获取连接信息（从 mcp_proxy 调用上下文获取）
+                    # 这里通过 token 来获取，简化处理：直接用 connection_id
+                    token_val = original_request.view_args.get('token', '') if hasattr(original_request, 'view_args') else ''
+                    if token_val:
+                        token_entry = db.fetch_one('SELECT * FROM mcp_tokens WHERE token = ?', (token_val,))
+                    else:
+                        token_entry = None
+
+                    if not token_entry:
+                        result = {"content": [{"type": "text", "text": "错误: 无法获取连接信息"}]}
+                    else:
+                        result = _handle_perf_mcp_tool(token_entry, tool_name, arguments)
+
+                    resp_data = {
+                        "jsonrpc": "2.0",
+                        "result": result,
+                        "id": rpc_req.get('id')
+                    }
+                    return Response(
+                        _json.dumps(resp_data, ensure_ascii=False),
+                        status=200,
+                        content_type='application/json'
+                    )
+
+        # 拦截 tools/list 请求：追加性能诊断工具
+        if method == 'tools/list':
+            perf_result = {
+                "tools": PERF_MCP_TOOLS
+            }
+            # 转发到 Arthas 获取原生工具列表，然后合并
+            req = urllib.request.Request(target_url, data=body, method='POST')
+            req.add_header('Content-Type', original_request.content_type or 'application/json')
+            req.add_header('Accept', 'application/json, text/event-stream')
+            try:
+                resp = urllib.request.urlopen(req, timeout=30)
+                resp_body = resp.read()
+                resp.close()
+                # 合并工具列表
+                try:
+                    orig_result = _json.loads(resp_body)
+                    if 'result' in orig_result and 'tools' in orig_result['result']:
+                        orig_tools = orig_result['result']['tools']
+                        merged_tools = orig_tools + PERF_MCP_TOOLS
+                        orig_result['result']['tools'] = merged_tools
+                        resp_body = _json.dumps(orig_result, ensure_ascii=False)
+                except Exception:
+                    pass
+                flask_resp = Response(resp_body, status=200, content_type='application/json')
+                flask_resp.headers['Access-Control-Allow-Origin'] = '*'
+                return flask_resp
+            except Exception:
+                # Arthas MCP 不可用时，返回本地工具
+                resp_data = {"jsonrpc": "2.0", "result": perf_result, "id": rpc_req.get('id')}
+                return Response(
+                    _json.dumps(resp_data, ensure_ascii=False),
+                    status=200,
+                    content_type='application/json'
+                )
+
+    except Exception:
+        pass  # 非 JSON 格式或解析失败，走正常代理路径
+
+    # ── 正常代理到 Arthas MCP Server ────────────────────────────
 
     req = urllib.request.Request(target_url, data=body, method='POST')
     req.add_header('Content-Type', original_request.content_type or 'application/json')

@@ -90,6 +90,33 @@ let _pfTasksByConn = {}; // { connId: { taskId, startTime, duration, logLines, s
 let _metricsPolling = false, _metricsTimer = null;
 let _metricsCache = new Map();
 
+// ── Server Health Check ──────────────────────────────────────────────────
+async function checkServerHealth() {
+  const dot = document.getElementById('svDot');
+  const lbl = document.getElementById('svLbl');
+  const verTop = document.getElementById('arthasVerTop');
+  try {
+    const r = await fetch(`${API}/health`, { credentials: 'include' });
+    const d = await r.json();
+    if (d.ok) {
+      if (dot) { dot.className = 'dot live'; }
+      if (lbl) { lbl.textContent = '服务在线'; }
+      if (verTop && d.version) {
+        verTop.textContent = `v${d.version}`;
+        verTop.style.display = '';
+      }
+    } else {
+      if (dot) { dot.className = 'dot'; }
+      if (lbl) { lbl.textContent = '服务异常'; }
+      if (verTop) verTop.style.display = 'none';
+    }
+  } catch(e) {
+    if (dot) { dot.className = 'dot'; }
+    if (lbl) { lbl.textContent = '服务离线'; }
+    if (verTop) verTop.style.display = 'none';
+  }
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // esc, fmtSz, fmtTs, mkv, gRow, toast 已在 utils.js 中定义
 
@@ -647,10 +674,10 @@ function loadConnections() {
 function switchTab(n) {
   // 支持数字索引和字符串索引
   // 新 tab 顺序: profiler, console, terminal, monitor, filebrowser, ai, history
-  const tabMap = {0:'profiler', 1:'console', 2:'terminal', 3:'monitor', 4:'filebrowser', 5:'ai', 6:'history'};
+  const tabMap = {0:'profiler', 1:'console', 2:'terminal', 3:'monitor', 4:'filebrowser', 5:'ai', 6:'history', 7:'diag'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
 
-  ['console','profiler','monitor','filebrowser','terminal','ai','history'].forEach(x => {
+  ['console','profiler','monitor','filebrowser','terminal','ai','history','diag'].forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
     document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
   });
@@ -695,6 +722,7 @@ function switchTab(n) {
   }
   if(tab==='terminal') { setTimeout(()=>{ document.getElementById('termInput')?.focus(); },100); }
   if(tab==='ai') { setTimeout(()=>{ aiRefreshConnSelect(); document.getElementById('aiInput')?.focus(); },100); }
+  if(tab==='diag') { setTimeout(()=>{ if(typeof diagRefreshConn==='function') diagRefreshConn(); },100); }
   if(tab==='monitor') {
     // 切换到监控 tab 时：已有数据直接渲染，否则加载一次快照
     if (_snap && !_snap.error) {
