@@ -645,6 +645,13 @@ function saveConnections() {
   const user = getCurrentUser();
   const key = user ? `arthas_connections_${user.username}` : 'arthas_connections';
   localStorage.setItem(key, JSON.stringify(_connections));
+  // 保存当前活跃连接 ID，刷新后自动恢复
+  const activeKey = user ? `arthas_active_conn_${user.username}` : 'arthas_active_conn';
+  if (_currentConnId) {
+    localStorage.setItem(activeKey, _currentConnId);
+  } else {
+    localStorage.removeItem(activeKey);
+  }
   // 【关键修复】同步到 window
   _syncState();
 }
@@ -664,11 +671,111 @@ function loadConnections() {
     }
     // 【关键修复】同步到 window，供 ai-chat.js / MCP 弹窗等外部模块读取
     _syncState();
+
+    // 自动恢复上次活跃连接（延迟执行，不阻塞页面初始化）
+    const activeKey = user ? `arthas_active_conn_${user.username}` : 'arthas_active_conn';
+    const savedConnId = localStorage.getItem(activeKey);
+    if (savedConnId && _connections.find(c => c.id === savedConnId)) {
+      const conn = _connections.find(c => c.id === savedConnId);
+      if (conn) {
+        setTimeout(() => {
+          _restoreActiveConnection(conn).catch(e => {
+            console.warn('自动恢复连接失败:', e);
+            // 恢复失败不影响页面功能，仅清除无效的活跃连接标记
+            _currentConnId = null;
+            _syncState();
+            renderConnList();
+            localStorage.removeItem(activeKey);
+          });
+        }, 800);
+      }
+    }
   } catch(e) {
     console.error('加载连接失败:', e);
     _connections = [];
     _syncState();
   }
+}
+
+/**
+ * 安全恢复上次活跃连接
+ * 不走 switchConnection（会被 connId===_currentConnId 短路跳过），
+ * 而是直接发起后端 connect 请求重建 Arthas 通道。
+ */
+async function _restoreActiveConnection(conn) {
+  const t = {
+    cluster_name: conn.cluster_name,
+    namespace: conn.namespace,
+    pod_name: conn.pod_name,
+    container: conn.container,
+    arthas_jar: conn.arthas_jar
+  };
+
+  setConnStatus('dim', `正在恢复连接 ${conn.cluster_name} / ${conn.namespace} / ${conn.pod_name} ...`);
+
+  const r = await fetch(`${API}/arthas/connect`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    credentials: 'include',
+    body: JSON.stringify({...t, connection_id: conn.id})
+  });
+  const d = await r.json();
+
+  if (!d.ok) {
+    throw new Error(d.message || '连接失败');
+  }
+
+  // 连接成功，更新状态（复用 switchConnection 中的成功逻辑，但不走 switchConnection 本身）
+  _currentConnId = conn.id;
+  _connected = true;
+  _ap = t;
+  _connHealth[conn.id] = { alive: true, pod_exists: true, pod_phase: 'Running' };
+  conn.status = 'connected';
+  conn.local_port = d.local_port;
+  if (d.java_pid) conn.java_pid = d.java_pid;
+  if (d.arthas_version) conn.arthas_version = d.arthas_version;
+  if (d.arthas_address) conn.arthas_address = d.arthas_address;
+  if (d.http_url) conn.http_url = d.http_url;
+  if (d.mcp_available !== undefined) conn.mcp_available = d.mcp_available;
+
+  _syncState();
+  renderConnList();
+
+  // 更新 UI
+  const _addr = conn.arthas_address || conn.http_url || `http://127.0.0.1:${conn.local_port}`;
+  setConnStatus('ok', `<div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div style="flex:1;min-width:0"><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body"><div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div><div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_addr)}</span></div>${conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : ''}</div>`);
+  setCpSt('ok', `✓ 已恢复连接  (port:${conn.local_port})`);
+
+  // 更新 conTitle
+  const conTitle = document.getElementById('conTitle');
+  if (conTitle) {
+    const _mcpClass = conn.mcp_available ? 'live' : 'dead';
+    const _mcpText = conn.mcp_available ? '✓ 可用' : '✗ 不可用';
+    conTitle.innerHTML = `${esc(conn.cluster_name)}/${esc(conn.namespace)}/${esc(conn.pod_name)}<span class="ct-tip"><div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body"><div class="ct-tip-row"><span class="ct-tip-k">集群</span><span class="ct-tip-v">${esc(conn.cluster_name)}</span></div><div class="ct-tip-row"><span class="ct-tip-k">命名空间</span><span class="ct-tip-v">${esc(conn.namespace)}</span></div><div class="ct-tip-row"><span class="ct-tip-k">Pod</span><span class="ct-tip-v">${esc(conn.pod_name)}</span></div>${conn.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(conn.java_pid))}</span></div>` : ''}<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div><div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_addr)}</span></div>${conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : ''}<div class="ct-tip-row"><span class="ct-tip-k">MCP</span><span class="ct-tip-v ${_mcpClass}">${_mcpText}</span></div></div></span>`;
+  }
+
+  // 更新 Arthas 版本徽章
+  const verBadge = document.getElementById('arthasVerBadge');
+  if (verBadge) {
+    if (conn.arthas_version) {
+      verBadge.textContent = `Arthas v${conn.arthas_version}`;
+      verBadge.style.display = '';
+    } else {
+      verBadge.style.display = 'none';
+    }
+  }
+
+  document.getElementById('runBtn').disabled = false;
+
+  // 更新 Pod 目标选择器
+  const ptNs = document.getElementById('ptNs');
+  const ptPod = document.getElementById('ptPod');
+  if (ptNs && ptPod) {
+    ptNs.value = conn.namespace;
+    ptPod.value = conn.pod_name;
+  }
+
+  if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
 }
 
 function switchTab(n) {
