@@ -126,7 +126,7 @@ def create_cluster():
     return jsonify({'ok': True, 'id': cluster_id}), 201
 
 
-@clusters_bp.route('/clusters/<cluster_id>', methods=['PUT'])
+@clusters_bp.route('/clusters/<cluster_id>', methods=['PUT', 'POST'])
 @login_required
 @admin_required
 def update_cluster(cluster_id: str):

@@ -69,6 +69,33 @@ CORS(app, supports_credentials=True, resources={
     },
 })
 
+# 配置 logging
+import logging as _logging
+_logging.basicConfig(level=_logging.INFO, format='%(asctime)s %(levelname)s [%(threadName)s] %(message)s')
+
+# 自定义 werkzeug RequestHandler，在原生日志中追加耗时
+import time as _time
+from werkzeug.serving import WSGIRequestHandler as _BaseHandler
+
+class _TimedRequestHandler(_BaseHandler):
+    """覆盖 log_request / log，输出紧凑的单行请求日志含耗时"""
+    def handle_one_request(self):
+        self._req_start = _time.time()
+        super().handle_one_request()
+
+    def log_request(self, code='-', size='-'):
+        # 静态资源跳过，避免日志刷屏
+        if self.path.startswith('/static/') or self.path.startswith('/css/') or self.path.startswith('/js/'):
+            return
+        elapsed = (_time.time() - getattr(self, '_req_start', _time.time())) * 1000
+        _logging.getLogger('werkzeug').info(
+            '%s %s → %s  [%.0fms]', self.command, self.path, code, elapsed)
+
+    def log(self, type, message, *args):
+        # 覆盖父类 log()，去掉 werkzeug 硬编码的 "IP - - [时间]" 前缀
+        # 非请求日志（如 werkzeug 启动信息）仍需输出
+        getattr(_logging.getLogger('werkzeug'), type)(message, *args)
+
 # Flask-Login 配置
 login_manager = LoginManager(app)
 login_manager.login_view = 'login_page'
@@ -1794,4 +1821,4 @@ if __name__ == "__main__":
     # 校验生产环境安全配置
     Config.validate_production()
     print(f"🚀  K8s Arthas Tool v2026.03.23  →  http://{args.host}:{args.port}")
-    app.run(host=args.host, port=args.port, debug=True)
+    app.run(host=args.host, port=args.port, debug=True, request_handler=_TimedRequestHandler)
