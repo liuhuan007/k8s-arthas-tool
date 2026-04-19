@@ -6,13 +6,30 @@
   'use strict';
   try {
 
-  let _diagScene = 'general';
+  let _diagScene = 'system';
   let _diagData = null;   // 最近一次诊断结果
   let _diagConnId = null;
   let _diagConnOk = false;
-  let _diagQuickTool = null;  // 选中的快速工具: 'dashboard'|'threads'|'trace'|null
+  let _diagQuickTool = null;  // 选中的快速工具: 'dashboard'|'threads'|'trace'|'sys_cpu'|'sys_mem'|'sys_disk'|'sys_net'|'sys_proc'|null
   let _threadPageSize = 10; // 线程列表每页条数
   let _threadPages = {};   // 分页状态: key='dashboard'|'threads' → { page, all }
+
+  // ═══════════════════════════════════════════════════════════
+  // 连接层级判断（功能点2）
+  // ═══════════════════════════════════════════════════════════
+
+  /**
+   * 获取当前连接层级
+   * @returns {'arthas'|'pod'|'none'}
+   */
+  function diagGetConnectionLevel() {
+    // 优先使用 ConnectionGuard
+    if (window.ConnectionGuard) return ConnectionGuard.getCurrentLevel();
+    const cs = window._connState;
+    if (cs === 'arthas_ready') return 'arthas';
+    if (cs === 'pod_connected') return 'pod';
+    return 'none';
+  }
 
   // ═══════════════════════════════════════════════════════════
   // 初始化
@@ -50,30 +67,98 @@
   }
 
   window.diagRefreshConn = function() {
-    const connId = diagGetConn();
+    const level = diagGetConnectionLevel();
     const btn = document.getElementById('diagStartBtn');
 
+    if (level === 'none') {
+      _diagConnId = null;
+      _diagConnOk = false;
+      if (btn) btn.disabled = true;
+      _updateSceneVisibility(level);
+      return;
+    }
+
+    // Pod 或 Arthas 连接都可进入诊断 Tab
+    const connId = diagGetConn();
     _diagConnId = connId;
 
     if (!connId) {
       if (btn) btn.disabled = true;
       _diagConnOk = false;
-      return;
-    }
-
-    const conn = (window._connections || []).find(c => c.id === connId);
-    const health = window._connHealth && window._connHealth[connId];
-    // 没有健康记录时，按连接 status 字段判断（'connected' 视为存活）
-    const alive = health ? (health.alive !== false) : (conn && conn.status === 'connected');
-
-    if (alive) {
-      if (btn) btn.disabled = false;
-      _diagConnOk = true;
     } else {
-      if (btn) btn.disabled = true;
-      _diagConnOk = false;
+      const conn = (window._connections || []).find(c => c.id === connId);
+      const health = window._connHealth && window._connHealth[connId];
+      const alive = health ? (health.alive !== false) : (conn && conn.status === 'connected');
+      if (alive) {
+        if (btn) btn.disabled = false;
+        _diagConnOk = true;
+      } else {
+        if (btn) btn.disabled = true;
+        _diagConnOk = false;
+      }
     }
+    _updateSceneVisibility(level);
   };
+
+  /**
+   * 根据连接层级更新场景/工具的可见性
+   * @param {'arthas'|'pod'|'none'} level
+   */
+  function _updateSceneVisibility(level) {
+    // JVM 场景（通用诊断、方法慢、线程阻塞、OOM）
+    const jvmScenes = ['general', 'method_slow', 'thread_block', 'oom'];
+    // 系统诊断场景（Pod 级即可）
+    const sysScene = 'system';
+    // JVM 快速工具
+    const jvmTools = ['dashboard', 'threads', 'trace'];
+    // Pod 级快捷工具
+    const podTools = ['sys_cpu', 'sys_mem', 'sys_disk', 'sys_net', 'sys_proc'];
+
+    const isArthas = level === 'arthas';
+    const isPod = level === 'pod';
+
+    // 场景可见性
+    jvmScenes.forEach(s => {
+      const el = document.getElementById('ds-' + s);
+      if (el) {
+        el.style.display = isArthas ? '' : 'none';
+        // 如果当前选中的是 JVM 场景但不是 arthas，切换到 system
+        if (!isArthas && _diagScene === s) {
+          diagSelectScene(sysScene);
+        }
+      }
+    });
+
+    const sysEl = document.getElementById('ds-system');
+    if (sysEl) {
+      sysEl.style.display = (isPod || isArthas) ? '' : 'none';
+    }
+
+    // 快捷工具可见性
+    jvmTools.forEach(t => {
+      const el = document.getElementById('diagBtn' + t.charAt(0).toUpperCase() + t.slice(1));
+      if (el) el.style.display = isArthas ? '' : 'none';
+    });
+
+    podTools.forEach(t => {
+      const el = document.getElementById('diagBtn' + t.charAt(0).toUpperCase() + t.slice(1));
+      if (el) el.style.display = (isPod || isArthas) ? '' : 'none';
+    });
+
+    // 层级提示
+    const hintEl = document.getElementById('diagLevelHint');
+    if (hintEl) {
+      if (isPod) {
+        hintEl.style.display = '';
+        hintEl.innerHTML = '🖥️ Pod 连接模式 — 系统级诊断可用，JVM 深度诊断需启动 Arthas';
+      } else if (isArthas) {
+        hintEl.style.display = '';
+        hintEl.innerHTML = '⚡ Arthas 模式 — 全部诊断功能已解锁';
+      } else {
+        hintEl.style.display = 'none';
+      }
+    }
+  }
 
   // ═══════════════════════════════════════════════════════════
   // 场景选择
@@ -112,8 +197,28 @@
 
   window.diagQuickTool = function(tool) {
     if (!_diagConnId) {
-      diagShowError('请先在左侧连接 Arthas');
+      diagShowError('请先在左侧连接目标');
       return;
+    }
+
+    // 功能点5: 降级检查 — 统一走 ConnectionGuard
+    const jvmTools = ['dashboard', 'threads', 'trace'];
+    const podTools = ['sys_cpu', 'sys_mem', 'sys_disk', 'sys_net', 'sys_proc'];
+
+    if (window.ConnectionGuard) {
+      const feature = jvmTools.includes(tool) ? 'diag.jvm' : 'diag.pod';
+      if (!ConnectionGuard.guard(feature)) return;
+    } else {
+      // 降级：旧逻辑
+      const level = diagGetConnectionLevel();
+      if (jvmTools.includes(tool) && level !== 'arthas') {
+        diagShowError('此工具需要 Arthas 连接，请先启动 Arthas 诊断环境');
+        return;
+      }
+      if (podTools.includes(tool) && level === 'none') {
+        diagShowError('请先建立 Pod 连接');
+        return;
+      }
     }
 
     // 切换选中状态：再次点击同一个工具取消选中
@@ -151,8 +256,8 @@
     _updateStartBtn();
   };
 
-  const _toolNames = { dashboard: 'JVM 快照', threads: '线程分析', trace: '方法追踪' };
-  const _sceneNames = { general: '通用诊断', method_slow: '方法慢', thread_block: '线程阻塞', oom: '内存/OOM' };
+  const _toolNames = { dashboard: 'JVM 快照', threads: '线程分析', trace: '方法追踪', sys_cpu: 'CPU 概览', sys_mem: '内存概览', sys_disk: '磁盘概览', sys_net: '网络概览', sys_proc: '进程列表' };
+  const _sceneNames = { general: '通用诊断', method_slow: '方法慢', thread_block: '线程阻塞', oom: '内存/OOM', system: '系统诊断' };
 
   function _updateStartBtn() {
     const btn = document.getElementById('diagStartBtn');
@@ -162,6 +267,238 @@
     } else {
       btn.innerHTML = '&#128268; 开始诊断 · ' + (_sceneNames[_diagScene] || _diagScene);
     }
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  // Pod 级快捷工具（功能点4：无需 Arthas）
+  // ═══════════════════════════════════════════════════════════
+
+  async function _diagExecPodTool(tool) {
+    diagShowLoading('采集中...', '');
+    diagSetBtnsDisabled(true);
+
+    try {
+      const resp = await fetch('/api/pod/diagnose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          connection_id: _diagConnId,
+          tool: tool,
+        }),
+      });
+      const data = await resp.json();
+
+      if (data.error) {
+        diagShowError(data.error);
+        return false;
+      }
+
+      diagRenderPodToolResult(tool, data);
+      return true;
+    } catch (e) {
+      diagShowError('采集失败: ' + e.message);
+      return false;
+    } finally {
+      diagSetBtnsDisabled(false);
+      diagHideLoading();
+    }
+  }
+
+  /**
+   * 渲染 Pod 级工具结果
+   */
+  function diagRenderPodToolResult(tool, data) {
+    const empty = document.getElementById('diagEmptyState');
+    const content = document.getElementById('diagContent');
+    if (!content) return;
+    if (empty) empty.style.display = 'none';
+    content.style.display = 'block';
+
+    const titles = { sys_cpu: 'CPU 概览', sys_mem: '内存概览', sys_disk: '磁盘概览', sys_net: '网络概览', sys_proc: '进程列表' };
+    let html = '<div class="diag-result-section">';
+    html += `<div class="diag-section-title">&#128206; ${titles[tool] || tool}</div>`;
+
+    const d = data.data || data;
+    if (tool === 'sys_cpu') {
+      const cpu = d.cpu_percent || d.cpu || 0;
+      const cls = cpu < 50 ? 'ok' : cpu < 80 ? 'warn' : 'danger';
+      html += '<div style="margin-bottom:8px">';
+      html += `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span style="color:var(--tx2)">CPU 使用率</span><span class="diag-metric-val ${cls}">${cpu.toFixed ? cpu.toFixed(1) : cpu}%</span></div>`;
+      html += `<div class="diag-cpu-bar"><div class="diag-cpu-fill ${cls === 'ok' ? 'low' : cls === 'warn' ? 'mid' : 'danger'}" style="width:${Math.min(cpu, 100)}%"></div></div>`;
+      html += '</div>';
+      if (d.load_avg) html += `<div style="font-size:11px;color:var(--tx2)">负载均值: ${d.load_avg}</div>`;
+      if (d.cpu_count) html += `<div style="font-size:11px;color:var(--tx2)">CPU 核数: ${d.cpu_count}</div>`;
+    } else if (tool === 'sys_mem') {
+      const total = d.total || d.mem_total || 0;
+      const used = d.used || d.mem_used || 0;
+      const pct = total > 0 ? (used / total * 100) : 0;
+      const cls = pct < 70 ? 'ok' : pct < 90 ? 'warn' : 'danger';
+      html += '<div style="margin-bottom:8px">';
+      html += `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span style="color:var(--tx2)">内存使用率</span><span class="diag-metric-val ${cls}">${pct.toFixed(1)}%</span></div>`;
+      html += `<div class="diag-cpu-bar"><div class="diag-cpu-fill ${cls === 'ok' ? 'low' : cls === 'warn' ? 'mid' : 'danger'}" style="width:${Math.min(pct, 100)}%"></div></div>`;
+      html += '</div>';
+      html += `<div style="font-size:11px;color:var(--tx2)">已用: ${_fmtBytes(used)} / 总计: ${_fmtBytes(total)}</div>`;
+      if (d.available) html += `<div style="font-size:11px;color:var(--tx2)">可用: ${_fmtBytes(d.available)}</div>`;
+    } else if (tool === 'sys_disk') {
+      if (d.partitions && d.partitions.length > 0) {
+        d.partitions.forEach(p => {
+          const pct = p.percent || p.use_percent || 0;
+          const cls = pct < 70 ? 'ok' : pct < 90 ? 'warn' : 'danger';
+          html += `<div style="margin-bottom:6px;padding:6px 8px;background:var(--bg);border:1px solid var(--ln);border-radius:4px">`;
+          html += `<div style="display:flex;justify-content:space-between;font-size:11px"><span style="color:var(--tx)">${escapeHtml(p.mount || p.device || '?')}</span><span class="diag-metric-val ${cls}">${pct.toFixed ? pct.toFixed(1) : pct}%</span></div>`;
+          html += `<div style="font-size:10px;color:var(--tx3)">${_fmtBytes(p.used || 0)} / ${_fmtBytes(p.total || 0)}</div>`;
+          html += '</div>';
+        });
+      } else {
+        html += '<div style="color:var(--tx3);font-size:11px">未获取到磁盘数据</div>';
+      }
+    } else if (tool === 'sys_net') {
+      if (d.interfaces && d.interfaces.length > 0) {
+        d.interfaces.forEach(i => {
+          html += `<div style="margin-bottom:6px;padding:6px 8px;background:var(--bg);border:1px solid var(--ln);border-radius:4px;font-size:11px">`;
+          html += `<div style="color:var(--tx);font-weight:500">${escapeHtml(i.name || '?')}</div>`;
+          if (i.bytes_sent || i.bytes_recv) {
+            html += `<div style="font-size:10px;color:var(--tx3)">发送: ${_fmtBytes(i.bytes_sent || 0)} / 接收: ${_fmtBytes(i.bytes_recv || 0)}</div>`;
+          }
+          html += '</div>';
+        });
+      } else {
+        html += '<div style="color:var(--tx3);font-size:11px">未获取到网络数据</div>';
+      }
+    } else if (tool === 'sys_proc') {
+      if (d.processes && d.processes.length > 0) {
+        html += '<table class="ptbl"><tr><th>PID</th><th>名称</th><th>CPU%</th><th>MEM%</th><th>状态</th></tr>';
+        d.processes.slice(0, 20).forEach(p => {
+          const stCls = 'ps-' + (p.status || 'S').charAt(0);
+          html += `<tr><td class="ppid">${p.pid || '?'}</td><td>${escapeHtml(p.name || '?')}</td><td class="pc">${(p.cpu_percent || 0).toFixed ? p.cpu_percent.toFixed(1) : p.cpu_percent || 0}</td><td class="pmem">${(p.mem_percent || 0).toFixed ? p.mem_percent.toFixed(1) : p.mem_percent || 0}</td><td class="${stCls}">${escapeHtml(p.status || '?')}</td></tr>`;
+        });
+        html += '</table>';
+      } else {
+        html += '<div style="color:var(--tx3);font-size:11px">未获取到进程数据</div>';
+      }
+    }
+
+    html += '</div>';
+    content.innerHTML = html;
+    content.scrollTop = 0;
+  }
+
+  /**
+   * 系统诊断场景执行（功能点4：Pod 级一键诊断）
+   */
+  async function _diagExecSystemScene() {
+    diagShowLoading('系统诊断中...', 'CPU + 内存 + 磁盘 + 网络 + 进程 采集中');
+    diagSetBtnsDisabled(true);
+    diagHideError();
+
+    try {
+      const resp = await fetch('/api/pod/diagnose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          connection_id: _diagConnId,
+          tool: 'system_overview',
+        }),
+      });
+      const data = await resp.json();
+
+      if (data.error) {
+        diagShowError(data.error);
+        return;
+      }
+
+      _diagData = data;
+      diagRenderSystemResult(data);
+
+    } catch (e) {
+      diagShowError('诊断请求失败: ' + e.message);
+    } finally {
+      diagSetBtnsDisabled(false);
+      diagHideLoading();
+    }
+  }
+
+  /**
+   * 渲染系统诊断全景结果
+   */
+  function diagRenderSystemResult(data) {
+    const empty = document.getElementById('diagEmptyState');
+    const content = document.getElementById('diagContent');
+    if (!content) return;
+    if (empty) empty.style.display = 'none';
+    content.style.display = 'block';
+
+    const d = data.data || data;
+    let html = '';
+
+    // 概览标签
+    let statusColor = 'ok';
+    let statusLabel = '正常';
+    if (d.cpu && d.cpu.cpu_percent > 80 || d.memory && d.memory.percent > 90) {
+      statusColor = 'danger'; statusLabel = '异常';
+    } else if (d.cpu && d.cpu.cpu_percent > 50 || d.memory && d.memory.percent > 70) {
+      statusColor = 'warn'; statusLabel = '注意';
+    }
+
+    html += '<div class="diag-result-section">';
+    html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+    html += `<span class="diag-tag ${statusColor}">${statusLabel}</span>`;
+    html += `<span style="font-size:11px;color:var(--tx3)">${data.timestamp || ''}</span>`;
+    html += '</div>';
+    html += '</div>';
+
+    // CPU
+    if (d.cpu) {
+      const cpu = d.cpu.cpu_percent || 0;
+      const cls = cpu < 50 ? 'ok' : cpu < 80 ? 'warn' : 'danger';
+      html += '<div class="diag-result-section">';
+      html += '<div class="diag-section-title">&#128187; CPU</div>';
+      html += `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span style="color:var(--tx2)">使用率</span><span class="diag-metric-val ${cls}">${cpu.toFixed ? cpu.toFixed(1) : cpu}%</span></div>`;
+      html += `<div class="diag-cpu-bar"><div class="diag-cpu-fill ${cls === 'ok' ? 'low' : cls === 'warn' ? 'mid' : 'danger'}" style="width:${Math.min(cpu, 100)}%"></div></div>`;
+      if (d.cpu.load_avg) html += `<div style="font-size:11px;color:var(--tx2);margin-top:4px">负载: ${d.cpu.load_avg} | 核数: ${d.cpu.cpu_count || '?'}</div>`;
+      html += '</div>';
+    }
+
+    // 内存
+    if (d.memory) {
+      const pct = d.memory.percent || 0;
+      const cls = pct < 70 ? 'ok' : pct < 90 ? 'warn' : 'danger';
+      html += '<div class="diag-result-section">';
+      html += '<div class="diag-section-title">&#128230; 内存</div>';
+      html += `<div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:4px"><span style="color:var(--tx2)">使用率</span><span class="diag-metric-val ${cls}">${pct.toFixed ? pct.toFixed(1) : pct}%</span></div>`;
+      html += `<div class="diag-cpu-bar"><div class="diag-cpu-fill ${cls === 'ok' ? 'low' : cls === 'warn' ? 'mid' : 'danger'}" style="width:${Math.min(pct, 100)}%"></div></div>`;
+      html += `<div style="font-size:11px;color:var(--tx2);margin-top:4px">已用: ${_fmtBytes(d.memory.used || 0)} / 总计: ${_fmtBytes(d.memory.total || 0)}</div>`;
+      html += '</div>';
+    }
+
+    // 磁盘
+    if (d.disk && d.disk.partitions && d.disk.partitions.length > 0) {
+      html += '<div class="diag-result-section">';
+      html += '<div class="diag-section-title">&#128190; 磁盘</div>';
+      d.disk.partitions.forEach(p => {
+        const pct = p.percent || 0;
+        const cls = pct < 70 ? 'ok' : pct < 90 ? 'warn' : 'danger';
+        html += `<div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0"><span style="color:var(--tx)">${escapeHtml(p.mount || p.device || '?')}</span><span class="diag-metric-val ${cls}">${pct.toFixed ? pct.toFixed(1) : pct}%</span></div>`;
+      });
+      html += '</div>';
+    }
+
+    // 进程 TOP5
+    if (d.processes && d.processes.length > 0) {
+      html += '<div class="diag-result-section">';
+      html += '<div class="diag-section-title">&#9881; TOP 进程</div>';
+      html += '<table class="ptbl"><tr><th>PID</th><th>名称</th><th>CPU%</th><th>MEM%</th></tr>';
+      d.processes.slice(0, 5).forEach(p => {
+        html += `<tr><td class="ppid">${p.pid || '?'}</td><td>${escapeHtml(p.name || '?')}</td><td class="pc">${(p.cpu_percent || 0).toFixed ? p.cpu_percent.toFixed(1) : 0}</td><td class="pmem">${(p.mem_percent || 0).toFixed ? p.mem_percent.toFixed(1) : 0}</td></tr>`;
+      });
+      html += '</table>';
+      html += '</div>';
+    }
+
+    content.innerHTML = html;
+    content.scrollTop = 0;
   }
 
   // 执行快速工具采集（由 diagStart 调用）
@@ -236,14 +573,44 @@
 
   window.diagStart = async function() {
     if (!_diagConnId) {
-      diagShowError('请先在左侧连接 Arthas 实例');
+      diagShowError('请先在左侧连接目标');
       return;
     }
 
     // 如果选中了快速工具，走快速工具路径
     if (_diagQuickTool) {
+      // Pod 级快捷工具走独立路径
+      const podTools = ['sys_cpu', 'sys_mem', 'sys_disk', 'sys_net', 'sys_proc'];
+      if (podTools.includes(_diagQuickTool)) {
+        await _diagExecPodTool(_diagQuickTool);
+        return;
+      }
       await _diagExecQuickTool(_diagQuickTool);
       return;
+    }
+
+    // 功能点4: Pod-only 分支 — 系统诊断场景
+    if (_diagScene === 'system') {
+      if (window.ConnectionGuard) {
+        if (!ConnectionGuard.guard('diag.pod')) return;
+      } else {
+        if (diagGetConnectionLevel() === 'none') {
+          diagShowError('请先建立 Pod 连接');
+          return;
+        }
+      }
+      await _diagExecSystemScene();
+      return;
+    }
+
+    // JVM 场景需要 Arthas
+    if (window.ConnectionGuard) {
+      if (!ConnectionGuard.guard('diag.jvm')) return;
+    } else {
+      if (diagGetConnectionLevel() !== 'arthas') {
+        diagShowError('JVM 深度诊断需要 Arthas 连接，请先启动 Arthas');
+        return;
+      }
     }
 
     if (_diagScene === 'method_slow') {
@@ -352,6 +719,7 @@
     _diagData = null;
     _threadPages = {};  // 重置分页状态
     _diagQuickTool = null;  // 重置快速工具选中
+    _diagScene = 'system';  // 重置到系统诊断场景
     // 清除工具按钮高亮
     document.querySelectorAll('.diag-tool-btn').forEach(b => b.classList.remove('active'));
     _updateStartBtn();

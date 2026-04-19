@@ -54,6 +54,18 @@ document.addEventListener('DOMContentLoaded', function() {
 <!-- 应用入口 -->
 <script src="js/app-ui.js?v=20260411i"></script>
 <script src="js/app.js"></script>
+
+<!-- 两步连接流程组件 -->
+<script src="js/components/two-step-connection.js?v=20260419a"></script>
+
+<!-- 连接引导守卫 -->
+<script src="js/components/connection-guard.js?v=20260419a"></script>
+
+<!-- 连接信息提示条 -->
+<script src="js/components/conn-status-bar.js?v=20260419a"></script>
+
+<!-- 精准错误提示组件 -->
+<script src="js/components/error-notification.js?v=20260417a"></script>
 </head>
 <body>
 
@@ -130,9 +142,10 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="pt-sep"></div>
     <div class="pt-row">
       <button class="pt-btn ghost" onclick="checkPod()">🔍 检查</button>
-      <button class="pt-btn" id="ptConnBtn" onclick="arthasConnect()">⚡ 连接</button>
+      <button class="pt-btn" id="ptConnBtn" onclick="podConnect()">🔌 Pod 连接</button>
     </div>
     <div class="pt-stat" id="ptStat"></div>
+    <div id="runtimeInfo" style="display:none;margin-top:8px"></div>
     <div id="connStatus" style="display:none"></div>
   </div>
 </div>
@@ -150,6 +163,20 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="tb-tab"    id="tab-ai" onclick="switchTab('ai')">🤖 AI 助手</div>
     <div class="tb-tab"    id="tab-diag" onclick="switchTab('diag')">🔬 性能诊断</div>
     <div class="tb-tab"    id="tab-history" onclick="switchTab('history')">📋 历史记录</div>
+  </div>
+
+  <!-- 连接信息提示条：紧贴 Tab 栏下方，统一展示当前连接状态 -->
+  <div class="conn-status-bar" id="connStatusBar">
+    <div class="csb-left">
+      <span class="csb-dot" id="csbDot"></span>
+      <span class="csb-level" id="csbLevel">未连接</span>
+      <span class="csb-sep">|</span>
+      <span class="csb-target" id="csbTarget">—</span>
+    </div>
+    <div class="csb-right">
+      <span class="csb-runtime" id="csbRuntime"></span>
+      <button class="csb-action" id="csbAction" onclick="csbHandleAction()"></button>
+    </div>
   </div>
 
   <div class="panels">
@@ -550,28 +577,37 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="diag-cfg">
           <div class="sec-lbl">诊断场景</div>
           <div class="diag-scenes">
-            <div class="diag-sc on" id="ds-general" onclick="diagSelectScene('general')">
+            <!-- 系统诊断场景（Pod 级即可用） -->
+            <div class="diag-sc on" id="ds-system" onclick="diagSelectScene('system')">
+              <div class="diag-sc-icon">&#128187;</div>
+              <div class="diag-sc-text">
+                <div class="diag-sc-title">系统诊断</div>
+                <div class="diag-sc-desc">CPU/内存/磁盘/网络/进程，无需 Arthas</div>
+              </div>
+            </div>
+            <!-- 以下为 JVM 场景，需 Arthas 连接 -->
+            <div class="diag-sc" id="ds-general" onclick="diagSelectScene('general')" style="display:none">
               <div class="diag-sc-icon">&#128269;</div>
               <div class="diag-sc-text">
                 <div class="diag-sc-title">通用诊断</div>
                 <div class="diag-sc-desc">全面扫描 CPU/内存/线程/JVM 基线</div>
               </div>
             </div>
-            <div class="diag-sc" id="ds-method_slow" onclick="diagSelectScene('method_slow')">
+            <div class="diag-sc" id="ds-method_slow" onclick="diagSelectScene('method_slow')" style="display:none">
               <div class="diag-sc-icon">&#9201;</div>
               <div class="diag-sc-text">
                 <div class="diag-sc-title">方法慢</div>
                 <div class="diag-sc-desc">trace 追踪，定位慢方法根因</div>
               </div>
             </div>
-            <div class="diag-sc" id="ds-thread_block" onclick="diagSelectScene('thread_block')">
+            <div class="diag-sc" id="ds-thread_block" onclick="diagSelectScene('thread_block')" style="display:none">
               <div class="diag-sc-icon">&#128274;</div>
               <div class="diag-sc-text">
                 <div class="diag-sc-title">线程阻塞</div>
                 <div class="diag-sc-desc">线程快照 + 死锁检测</div>
               </div>
             </div>
-            <div class="diag-sc" id="ds-oom" onclick="diagSelectScene('oom')">
+            <div class="diag-sc" id="ds-oom" onclick="diagSelectScene('oom')" style="display:none">
               <div class="diag-sc-icon">&#128190;</div>
               <div class="diag-sc-text">
                 <div class="diag-sc-title">内存/OOM</div>
@@ -579,16 +615,35 @@ document.addEventListener('DOMContentLoaded', function() {
               </div>
             </div>
           </div>
+          <!-- 连接层级提示 -->
+          <div id="diagLevelHint" class="diag-level-hint" style="display:none"></div>
           <div class="divider" style="margin:12px 0"></div>
           <div class="sec-lbl">快速工具</div>
           <div style="display:flex;flex-direction:column;gap:6px">
-            <button class="diag-tool-btn" onclick="diagQuickTool('dashboard')" id="diagBtnDashboard">
+            <!-- Pod 级快捷工具（Pod 连接即可用） -->
+            <button class="diag-tool-btn" onclick="diagQuickTool('sys_cpu')" id="diagBtnSys_cpu">
+              <span>&#128187;</span><span>CPU 概览</span><span class="diag-tool-hint">负载/核数</span>
+            </button>
+            <button class="diag-tool-btn" onclick="diagQuickTool('sys_mem')" id="diagBtnSys_mem">
+              <span>&#128230;</span><span>内存概览</span><span class="diag-tool-hint">使用率/可用</span>
+            </button>
+            <button class="diag-tool-btn" onclick="diagQuickTool('sys_disk')" id="diagBtnSys_disk">
+              <span>&#128190;</span><span>磁盘概览</span><span class="diag-tool-hint">分区/IO</span>
+            </button>
+            <button class="diag-tool-btn" onclick="diagQuickTool('sys_net')" id="diagBtnSys_net">
+              <span>&#127760;</span><span>网络概览</span><span class="diag-tool-hint">流量/连接</span>
+            </button>
+            <button class="diag-tool-btn" onclick="diagQuickTool('sys_proc')" id="diagBtnSys_proc">
+              <span>&#9881;</span><span>进程列表</span><span class="diag-tool-hint">TOP 进程</span>
+            </button>
+            <!-- JVM 快捷工具（需 Arthas 连接） -->
+            <button class="diag-tool-btn" onclick="diagQuickTool('dashboard')" id="diagBtnDashboard" style="display:none">
               <span>&#128202;</span><span>JVM 快照</span><span class="diag-tool-hint">内存/CPU/GC</span>
             </button>
-            <button class="diag-tool-btn" onclick="diagQuickTool('threads')" id="diagBtnThreads">
+            <button class="diag-tool-btn" onclick="diagQuickTool('threads')" id="diagBtnThreads" style="display:none">
               <span>&#129534;</span><span>线程分析</span><span class="diag-tool-hint">BLOCKED/死锁</span>
             </button>
-            <button class="diag-tool-btn" onclick="diagQuickTool('trace')" id="diagBtnTrace">
+            <button class="diag-tool-btn" onclick="diagQuickTool('trace')" id="diagBtnTrace" style="display:none">
               <span>&#128206;</span><span>方法追踪</span><span class="diag-tool-hint">耗时采样</span>
             </button>
             <!-- 追踪参数 — "方法慢"场景或"方法追踪"工具时展开 -->

@@ -73,6 +73,7 @@ function termUpdatePrompt() {
 
 // ── Connection ─────────────────────────────────────────────────────────────────
 async function termInit() {
+  if(window.ConnectionGuard && !ConnectionGuard.guard('terminal')) return;
   const t = getT();
   if(!t.cluster_name || !t.pod_name) {
     toast('请先在左侧配置集群和 Pod','warn');

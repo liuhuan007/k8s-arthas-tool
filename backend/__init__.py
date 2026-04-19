@@ -11,6 +11,7 @@ from .core.models import ClusterConfig, PodTarget, ARTHAS_DEFAULT_JAR, ARTHAS_HT
 from .core.kubectl import KubectlExecutor
 from .core.arthas_agent import ArthasAgentManager
 from .core.arthas_client import ArthasHttpClient
+from .core.pod_connection import PodConnection, RuntimeInfo
 from .core.connection import ArthasConnection, PF_BASE_PORT
 from .core.profiler import ProfilerWorkflow
 
@@ -35,6 +36,8 @@ __all__ = [
     'KubectlExecutor',
     'ArthasAgentManager',
     'ArthasHttpClient',
+    'PodConnection',
+    'RuntimeInfo',
     'ArthasConnection',
     'PF_BASE_PORT',
     'ProfilerWorkflow',

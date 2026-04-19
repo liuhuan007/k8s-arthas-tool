@@ -43,6 +43,7 @@ from api import register_blueprints
 from backend import (
     ClusterConfig, PodTarget, KubectlExecutor,
     ArthasAgentManager, ArthasConnection, ProfilerWorkflow,
+    PodConnection, RuntimeInfo,
     ARTHAS_DEFAULT_JAR,
     collect_pod_snapshot,
     get_metrics_history, start_metrics_polling, stop_metrics_polling,
@@ -327,6 +328,11 @@ _connections: Dict[str, dict] = {}
 _connections_lock = threading.Lock()
 
 
+# 注册 Pod 连接 API（轻量级，无需 Arthas）
+from api.pod_apis import register_pod_apis
+register_pod_apis(app, db, _make_runner, _connections_lock, _connections)
+
+
 def _check_conn_owner(conn_id: str) -> bool:
     """检查当前用户是否是连接的拥有者（admin 拥有所有权限）"""
     if current_user.is_admin:
@@ -384,6 +390,7 @@ def arthas_connect():
         now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         if db.exists('connections', 'id = ?', (conn_id,)):
             db.update('connections', {
+                'level': 'arthas',
                 'local_port': conn.local_port,
                 'user_id': current_user.id,
                 'updated_at': now_ts,
@@ -394,6 +401,7 @@ def arthas_connect():
                 'cluster_name': cluster_name,
                 'namespace': namespace,
                 'pod_name': pod,
+                'level': 'arthas',
                 'local_port': conn.local_port,
                 'user_id': current_user.id,
                 'updated_at': now_ts,
@@ -505,6 +513,7 @@ def _ensure_connection(conn_id: str, d: dict):
             now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             if db.exists('connections', 'id = ?', (conn_id,)):
                 db.update('connections', {
+                    'level': 'arthas',
                     'local_port': conn.local_port,
                     'user_id': current_user.id,
                     'updated_at': now_ts,
@@ -515,6 +524,7 @@ def _ensure_connection(conn_id: str, d: dict):
                     'cluster_name': cluster_name,
                     'namespace': namespace,
                     'pod_name': pod,
+                    'level': 'arthas',
                     'local_port': conn.local_port,
                     'user_id': current_user.id,
                     'updated_at': now_ts,

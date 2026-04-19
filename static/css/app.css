@@ -82,9 +82,22 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .pt-btn.ghost{background:none;color:var(--tx2);border:1px solid var(--ln);font-weight:400}
 .pt-btn.ghost:hover{border-color:var(--a);color:var(--a)}
 .pt-btn.dc{background:rgba(248,113,113,.12);color:var(--a5);border:1px solid rgba(248,113,113,.3)}
+.pt-btn.success{background:var(--a3);color:#fff}
+.pt-btn:disabled{opacity:.5;cursor:not-allowed}
 .pt-stat{margin-top:8px;padding:10px 12px;border-radius:8px;font-size:11px;display:none;line-height:1.6;position:relative}
 .pt-stat::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;opacity:.5}
 .pt-stat.ok::before{background:linear-gradient(90deg,var(--a3),#34d399)}
+
+/* 两步连接流程样式 */
+.feature-tag{
+  display: inline-block;
+  padding: 2px 8px;
+  background: rgba(56,189,248,0.1);
+  border: 1px solid rgba(56,189,248,0.3);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--a);
+}
 .pt-stat.fail::before{background:linear-gradient(90deg,var(--a5),#f87171)}
 .pt-stat.info::before{background:linear-gradient(90deg,var(--a),#60a5fa)}
 .pt-stat.ok{background:linear-gradient(180deg,rgba(52,211,153,.06) 0%,rgba(52,211,153,.02) 100%);border:1px solid rgba(52,211,153,.18);color:var(--a3)}
@@ -99,6 +112,78 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .tb-tab{display:flex;align-items:center;gap:5px;padding:0 14px;height:40px;cursor:pointer;color:var(--tx2);font-size:12px;border-bottom:2px solid transparent;transition:all.15s;white-space:nowrap;flex-shrink:0}
 .tb-tab:hover{color:var(--tx)}.tb-tab.on{color:var(--a);border-bottom-color:var(--a)}
 .tb-tab .cnt{background:var(--bg3);border-radius:10px;padding:1px 6px;font-size:10px}
+.tb-tab.disabled{opacity:.4;cursor:pointer}
+/* 功能点8: 连接解耦 Tab 三态样式 */
+.tb-tab.partial{opacity:.85;cursor:pointer;color:var(--a6);border-bottom-color:var(--a6)}
+.tb-tab.partial:hover{color:var(--a6);filter:brightness(1.2)}
+.tb-tab.partial::after{content:'⬡';font-size:8px;margin-left:4px;opacity:.6;vertical-align:super}
+.tb-tab.locked{opacity:.6;cursor:pointer}
+
+/* ═══ ConnectionGuard 引导面板 ═══ */
+.cg-container{margin:12px 16px;animation:cgFadeIn .25s ease;position:relative;z-index:60}
+.cg-container.cg-floating{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:9999;margin:0;width:340px}
+@keyframes cgFadeIn{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+.cg-card{display:flex;gap:14px;padding:18px 20px;background:linear-gradient(180deg,rgba(56,189,248,.06) 0%,rgba(56,189,248,.02) 100%);border:1px solid rgba(56,189,248,.2);border-radius:10px;backdrop-filter:blur(4px)}
+.cg-icon{font-size:28px;flex-shrink:0;line-height:1}
+.cg-body{flex:1;min-width:0}
+.cg-title{font-size:13px;font-weight:600;color:var(--tx);margin-bottom:6px}
+.cg-desc{font-size:12px;color:var(--tx2);line-height:1.6;margin-bottom:12px}
+.cg-btn{display:inline-block;padding:7px 18px;border:none;border-radius:6px;font-size:12px;font-weight:500;cursor:pointer;transition:all .15s}
+.cg-btn-primary{background:linear-gradient(135deg,var(--a),var(--a6));color:#fff;box-shadow:0 2px 8px rgba(56,189,248,.25)}
+.cg-btn-primary:hover{filter:brightness(1.15);box-shadow:0 4px 12px rgba(56,189,248,.35)}
+/* 连接列表 level 标识 */
+.conn-level{display:inline-block;font-size:9px;padding:1px 5px;border-radius:3px;font-weight:600;margin-left:4px;vertical-align:middle}
+.conn-level.pod{background:rgba(56,189,248,.12);color:var(--a);border:1px solid rgba(56,189,248,.25)}
+.conn-level.arthas{background:rgba(52,211,153,.12);color:var(--a3);border:1px solid rgba(52,211,153,.25)}
+.conn-runtime{font-size:10px;color:var(--tx3);margin-top:2px}
+.conn-upgrade-btn{display:inline-block;font-size:10px;padding:2px 8px;border:1px solid rgba(56,189,248,.3);border-radius:4px;background:rgba(56,189,248,.08);color:var(--a);cursor:pointer;transition:all .15s;margin-top:4px}
+.conn-upgrade-btn:hover{background:rgba(56,189,248,.18);border-color:rgba(56,189,248,.5)}
+.tb-tab.locked::after{content:'🔒';font-size:8px;margin-left:4px;opacity:.5;vertical-align:super}
+/* ── 连接信息提示条 (ConnStatusBar) ── */
+.conn-status-bar{
+  flex-shrink:0;
+  display:flex;align-items:center;justify-content:space-between;
+  height:32px;padding:0 14px;
+  background:var(--bg2);border-bottom:1px solid var(--ln);
+  font-size:11px;color:var(--tx2);gap:12px;
+  animation:csbFadeIn .2s ease;
+}
+@keyframes csbFadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.csb-left,.csb-right{display:flex;align-items:center;gap:8px;overflow:hidden;min-width:0}
+.csb-right{flex-shrink:0}
+/* 圆点 */
+.csb-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;transition:background .2s,box-shadow .2s}
+.csb-dot.dim{background:var(--tx3)}
+.csb-dot.pod{background:var(--a);box-shadow:0 0 6px rgba(56,189,248,.35)}
+.csb-dot.arthas{background:var(--a3);box-shadow:0 0 6px rgba(52,211,153,.4);animation:csbPulse 2s infinite}
+@keyframes csbPulse{0%,100%{opacity:1}50%{opacity:.55}}
+/* 层级标签 */
+.csb-level{font-weight:600;font-size:11px;white-space:nowrap;transition:color .2s}
+.csb-level.dim{color:var(--tx3)}
+.csb-level.pod{color:var(--a)}
+.csb-level.arthas{color:var(--a3)}
+/* 分隔符 */
+.csb-sep{color:var(--tx3);opacity:.3;flex-shrink:0}
+/* 目标信息 */
+.csb-target{color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono)}
+/* 运行时 */
+.csb-runtime{color:var(--tx2);font-size:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:280px}
+/* 操作按钮 */
+.csb-action{
+  border:none;border-radius:4px;font-family:var(--mono);font-size:10px;font-weight:600;
+  cursor:pointer;padding:3px 10px;transition:all .15s;white-space:nowrap;
+}
+.csb-action-connect{background:rgba(56,189,248,.12);color:var(--a);border:1px solid rgba(56,189,248,.3)}
+.csb-action-connect:hover{background:rgba(56,189,248,.22);border-color:rgba(56,189,248,.5)}
+.csb-action-upgrade{background:rgba(52,211,153,.1);color:var(--a3);border:1px solid rgba(52,211,153,.25)}
+.csb-action-upgrade:hover{background:rgba(52,211,153,.2);border-color:rgba(52,211,153,.45)}
+.csb-action-connected{background:rgba(107,127,160,.08);color:var(--tx3);border:1px solid var(--ln);cursor:default}
+
+/* 层级提示条 */
+.diag-level-hint{padding:8px 10px;margin:8px 0;border-radius:5px;font-size:11px;line-height:1.5;background:rgba(56,189,248,.06);border:1px solid rgba(56,189,248,.15);color:var(--a)}
+/* 面板锁定态：内容区半透明 + 禁止交互 */
+.panel-locked{position:relative}
+.panel-locked::after{content:'';position:absolute;inset:0;background:rgba(0,0,0,.35);z-index:50;pointer-events:none;border-radius:inherit}
 .tb-tab.on .cnt{background:rgba(56,189,248,.15);color:var(--a)}
 .tb-tab-sep{width:1px;height:20px;background:var(--ln);margin:0 4px;align-self:center;flex-shrink:0}
 .panels{flex:1;overflow:hidden;display:flex;flex-direction:column}
@@ -560,3 +645,115 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 .diag-ai-report h2,.diag-ai-report h3,.diag-ai-report h4{color:var(--tx)}
 .diag-ai-report pre{background:var(--bg);border:1px solid var(--ln);border-radius:5px;padding:10px;font-size:11px;font-family:var(--mono);white-space:pre-wrap;word-break:break-all;max-height:300px;overflow-y:auto;color:var(--tx2);margin:8px 0}
 .diag-ai-report code{background:var(--bg3);padding:1px 5px;border-radius:3px;font-family:var(--mono);font-size:11px;color:var(--a)}
+
+/* 精准错误提示系统 */
+.error-notification-container{
+  position: fixed;
+  top: 60px;
+  right: 20px;
+  z-index: 10000;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-width: 450px;
+}
+
+.error-notification{
+  background: var(--bg2);
+  border: 1px solid var(--ln);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  animation: slideIn 0.3s ease-out;
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+@keyframes slideIn {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.error-notification-header{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--ln);
+}
+
+.error-icon{
+  font-size: 18px;
+}
+
+.error-title{
+  flex: 1;
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--tx);
+}
+
+.error-close{
+  background: none;
+  border: none;
+  color: var(--tx2);
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+  transition: color 0.15s;
+}
+
+.error-close:hover{
+  color: var(--tx);
+}
+
+.error-notification-body{
+  padding: 12px 16px;
+}
+
+.error-message{
+  font-size: 12px;
+  color: var(--tx);
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+
+.error-suggestion{
+  font-size: 11px;
+  color: var(--tx2);
+  padding: 8px 12px;
+  background: rgba(56,189,248,0.05);
+  border-left: 3px solid var(--a);
+  border-radius: 4px;
+  line-height: 1.5;
+}
+
+.error-details{
+  font-size: 10px;
+  color: var(--tx3);
+  margin-top: 8px;
+  padding: 6px 10px;
+  background: var(--bg);
+  border-radius: 4px;
+  font-family: var(--mono);
+  word-break: break-all;
+}
+
+/* 错误类型样式 */
+.error-notification.error-error{
+  border-left: 4px solid var(--a5);
+}
+
+.error-notification.error-warning{
+  border-left: 4px solid var(--a6);
+}
+
+.error-notification.error-info{
+  border-left: 4px solid var(--a);
+}

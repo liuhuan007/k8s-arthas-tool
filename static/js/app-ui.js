@@ -77,6 +77,13 @@ function _syncState() {
   window._connections  = _connections;
   window._currentConnId = _currentConnId;
   window._connHealth   = _connHealth;
+  // P0-1: 同步两步连接状态，供 diagnose.js 等外部模块判断连接层级
+  if (typeof getConnectionState === 'function') {
+    window._connState   = getConnectionState();
+  }
+  if (typeof _runtimeInfo !== 'undefined') {
+    window._runtimeInfo = _runtimeInfo;
+  }
 }
 let _sid = null, _cid = null, _pollTimer = null, _polling = false;
 let _cmdHist = [], _histIdx = -1, _selCmd = null;
@@ -130,6 +137,26 @@ function togglePodTarget() {
 }
 
 // ── Connection Management ─────────────────────────────────────────────────────
+// 连接层级辅助
+function _inferLevel(c) {
+  if (c.level) return c.level;
+  if (c.local_port || c.arthas_version || c.java_pid) return 'arthas';
+  if (c.runtime_type || c.runtime) return 'pod';
+  if (c.status === 'connected') return 'arthas'; // 兼容旧数据
+  return 'pod';
+}
+function _getRt(c) {
+  if (c.runtime && typeof c.runtime === 'object') {
+    // 后端 RuntimeInfo.__dict__ 字段为 runtime_type/version，前端统一为 type/version
+    const rt = c.runtime;
+    return { type: rt.type || rt.runtime_type, version: rt.version || rt.runtime_version || '' };
+  }
+  if (c.runtime_type) return { type: c.runtime_type, version: c.runtime_version || '' };
+  return null;
+}
+function _rtIcon(t) { return {java:'☕',node:'🟢',python:'🐍',go:'🔵',dotnet:'🟣',unknown:'❓'}[t]||'❓'; }
+function _canUpgrade(c) { return _inferLevel(c)==='pod' && _getRt(c)?.type==='java'; }
+
 function renderConnList() {
   const el = document.getElementById('connList');
   if (_connections.length === 0) {
@@ -139,7 +166,35 @@ function renderConnList() {
   let html = '';
   _connections.forEach(c => {
     const isActive = c.id === _currentConnId;
+    const level = _inferLevel(c);
+    const rt = _getRt(c);
     const h = _connHealth[c.id];
+
+    // 层级标识
+    const levelIcon = level === 'arthas' ? '⚡' : '🔵';
+    const levelBadge = `<span class="conn-level ${level}">${level === 'arthas' ? 'Arthas连接' : 'Pod连接'}</span>`;
+
+    // 运行时信息行（补充：从当前连接状态获取，以防旧缓存中缺失）
+    let runtimeLine = '';
+    if (rt) {
+      runtimeLine = `<div class="conn-runtime">${_rtIcon(rt.type)} ${rt.type}${rt.version ? ' ' + rt.version : ''}${c.java_pid ? ' · PID ' + c.java_pid : ''}</div>`;
+    } else if (isActive && window._runtimeInfo) {
+      // 旧连接缓存中无运行时，但从当前连接状态补充
+      const ri = window._runtimeInfo;
+      if (ri.runtime_type || ri.type) {
+        const rt2type = ri.type || ri.runtime_type;
+        const rt2ver = ri.version || ri.runtime_version || '';
+        const rt2pid = ri.java_pid || '';
+        runtimeLine = `<div class="conn-runtime">${_rtIcon(rt2type)} ${rt2type}${rt2ver ? ' ' + rt2ver : ''}${rt2pid ? ' · PID ' + rt2pid : ''}</div>`;
+      }
+    }
+
+    // 升级按钮
+    let upgradeBtn = '';
+    if (_canUpgrade(c)) {
+      upgradeBtn = `<div class="conn-upgrade-btn" onclick="event.stopPropagation();upgradeConnectionFromList('${esc(c.id)}')">⚡ 启动 Arthas</div>`;
+    }
+
     // 健康状态图标与样式
     let statusIcon = '', statusStyle = '', statusHint = '';
     if (h) {
@@ -147,19 +202,24 @@ function renderConnList() {
         statusIcon = '⚠'; statusStyle = 'color:var(--a5)'; statusHint = 'Pod 不存在，建议删除';
       } else if (h.reason && h.reason.startsWith('pod_')) {
         statusIcon = '◉'; statusStyle = 'color:#f59e0b'; statusHint = `Pod 状态: ${h.pod_phase || h.reason}`;
+      } else if (h.alive === false && level === 'arthas') {
+        statusIcon = '◉'; statusStyle = 'color:#f59e0b'; statusHint = 'Arthas 已断开，Pod 连接可能仍可用';
       } else if (h.alive === false) {
-        statusIcon = '◈'; statusStyle = 'color:#f59e0b'; statusHint = 'Arthas 连接已断开，点击可重连';
+        statusIcon = '◈'; statusStyle = 'color:#f59e0b'; statusHint = '连接已断开，点击可重连';
       } else if (h.pod_exists === true && h.alive !== false) {
         statusIcon = '●'; statusStyle = 'color:var(--a3)'; statusHint = '连接正常';
       } else if (h.reason === 'cluster_unavailable') {
         statusIcon = '⊘'; statusStyle = 'color:var(--a5)'; statusHint = '集群不可用';
       }
     }
+
     html += `
-      <div class="conn-itm ${isActive?'on':''}" onclick="switchConnection('${c.id}')" title="集群: ${esc(c.cluster_name)}\n环境: ${c.namespace}\nPod: ${c.pod_name}\n端口: ${c.local_port}${c.arthas_version ? '\nArthas: ' + c.arthas_version : ''}${c.arthas_address ? '\n地址: ' + c.arthas_address : ''}${statusHint ? '\n' + statusHint : ''}">
+      <div class="conn-itm ${isActive?'on':''}" onclick="switchConnection('${c.id}')" title="集群: ${esc(c.cluster_name)}\n环境: ${c.namespace}\nPod: ${c.pod_name}\n连接类型: ${level === 'arthas' ? 'Arthas连接' : 'Pod连接'}${c.local_port ? '\n端口: ' + c.local_port : ''}${c.arthas_version ? '\nArthas: ' + c.arthas_version : ''}${c.arthas_address ? '\n地址: ' + c.arthas_address : ''}${statusHint ? '\n' + statusHint : ''}">
         <div class="conn-info">
-          <div class="conn-cluster">${statusIcon ? `<span style="font-size:9px;${statusStyle};margin-right:3px" title="${statusHint}">${statusIcon}</span>` : '<span style="font-size:11px">🔹</span>'} ${esc(c.cluster_name)}</div>
+          <div class="conn-cluster">${statusIcon ? `<span style="font-size:9px;${statusStyle};margin-right:3px" title="${statusHint}">${statusIcon}</span>` : `<span style="font-size:11px">${levelIcon}</span>`} ${esc(c.cluster_name)}${levelBadge}</div>
           <div class="conn-pod"><span class="conn-ns">${c.namespace}</span><span class="conn-slash">/</span><span class="conn-name">${esc(c.pod_name)}</span></div>
+          ${runtimeLine}
+          ${upgradeBtn}
         </div>
         <button class="del-conn" onclick="event.stopPropagation();deleteConnection('${c.id}')" title="删除连接">✕</button>
       </div>
@@ -198,7 +258,7 @@ async function switchConnection(connId) {
   const conn = _connections.find(c => c.id === connId);
   if (!conn) return;
 
-  // 构建连接参数
+  const level = _inferLevel(conn);
   const t = {
     cluster_name: conn.cluster_name,
     namespace: conn.namespace,
@@ -211,22 +271,118 @@ async function switchConnection(connId) {
   setConnStatus('dim', `正在切换到 ${conn.cluster_name} / ${conn.namespace} / ${conn.pod_name} ...`);
 
   try {
-    // 调用后端 connect 接口重新建立连接
-    const r = await fetch(`${API}/arthas/connect`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({...t, connection_id: connId})
-    });
-    const d = await r.json();
+    // ── 连接复用逻辑 ──
+    // level=pod: 尝试复用后端已有 Pod 连接，不存在则重建
+    // level=arthas: 尝试复用已有 Arthas 连接，不可用则降级为 pod 或重建
 
-    if (d.ok) {
+    let d = null;  // 连接响应数据
+
+    if (level === 'pod') {
+      // 先检查后端 Pod 连接是否存活
+      try {
+        const checkR = await fetch(`${API}/pod/connections`, { credentials: 'include' });
+        const checkD = await checkR.json();
+        const existing = (checkD.connections || []).find(c => c.id === connId && c.alive);
+        if (existing) {
+          // 后端连接存活，直接复用，不需要重新连接
+          d = { ok: true, connection_id: connId, reused: true, runtime: { runtime_type: existing.runtime, version: existing.runtime_version }, pod_phase: existing.pod_phase };
+        }
+      } catch (e) {
+        console.warn('Pod 连接存活检查失败，将重新连接:', e);
+      }
+
+      // 后端无存活连接，重新建立 Pod 连接
+      if (!d) {
+        const r = await fetch(`${API}/pod/connect`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          credentials: 'include',
+          body: JSON.stringify({
+            cluster_name: t.cluster_name,
+            namespace: t.namespace,
+            pod_name: t.pod_name,
+            container: t.container
+          })
+        });
+        d = await r.json();
+        if (!d.ok) {
+          throw new Error(d.error || 'Pod 连接失败');
+        }
+        // 同步两步连接状态
+        if (typeof _podConnId !== 'undefined') { _podConnId = d.connection_id; }
+        if (typeof _runtimeInfo !== 'undefined') { _runtimeInfo = d.runtime; }
+        if (typeof _podPhase !== 'undefined') { _podPhase = d.pod_phase; }
+      }
+    } else {
+      // level=arthas: 尝试复用已有 Arthas 连接
+      // 先检查 Arthas 端口是否可达
+      try {
+        const checkR = await fetch(`${API}/arthas/connections/check`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          credentials: 'same-origin',
+          body: JSON.stringify({connections: [{id: connId, cluster_name: t.cluster_name, namespace: t.namespace, pod_name: t.pod_name}]}),
+          signal: AbortSignal.timeout(8000)
+        });
+        const checkD = await checkR.json();
+        const h = checkD.results && checkD.results[connId];
+
+        if (h && h.alive && h.pod_exists !== false) {
+          // Arthas 连接存活，直接复用
+          d = { ok: true, connection_id: connId, reused: true, local_port: conn.local_port, java_pid: conn.java_pid, arthas_version: conn.arthas_version, arthas_address: conn.arthas_address, mcp_available: conn.mcp_available };
+        } else if (h && h.pod_exists === true && h.alive === false) {
+          // Arthas 断了但 Pod 还在 → 降级为 pod level
+          conn.level = 'pod';
+          delete conn.local_port;
+          delete conn.java_pid;
+          delete conn.arthas_version;
+          delete conn.arthas_address;
+          saveConnections();
+          // 重新走 pod 连接逻辑
+          const podR = await fetch(`${API}/pod/connect`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'include',
+            body: JSON.stringify({
+              cluster_name: t.cluster_name,
+              namespace: t.namespace,
+              pod_name: t.pod_name,
+              container: t.container
+            })
+          });
+          d = await podR.json();
+          if (!d.ok) throw new Error(d.error || 'Pod 连接失败');
+          toast('Arthas 连接已断开，已降级为 Pod 连接', 'warn');
+          if (typeof _podConnId !== 'undefined') { _podConnId = d.connection_id; }
+          if (typeof _runtimeInfo !== 'undefined') { _runtimeInfo = d.runtime; }
+          if (typeof _podPhase !== 'undefined') { _podPhase = d.pod_phase; }
+        } else {
+          // Pod 也不在了，需要重建
+          d = null;
+        }
+      } catch (e) {
+        console.warn('Arthas 连接检查失败，尝试重建:', e);
+      }
+
+      // 无法复用，走原有 arthas/connect 重建
+      if (!d) {
+        const r = await fetch(`${API}/arthas/connect`, {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({...t, connection_id: connId})
+        });
+        d = await r.json();
+      }
+    }
+
+    if (d && d.ok) {
       // 保存旧连接的采样任务状态（必须在设置 _currentConnId 之前）
       const oldConnId = _currentConnId;
       const hadRunningTask = _pfTaskId && _pfPollTimer;
       if (oldConnId && hadRunningTask) {
         _pfTasksByConn[oldConnId] = {
           taskId: _pfTaskId,
-          pollTimer: null,  // 不保存定时器引用
+          pollTimer: null,
           startTime: _pfStart,
           duration: _pfDur,
           logLines: _pfLL,
@@ -235,27 +391,44 @@ async function switchConnection(connId) {
           event: _pfTaskInfo.event
         };
       } else if (oldConnId) {
-        // 如果任务已完成或没有运行，清除旧连接的缓存状态
         delete _pfTasksByConn[oldConnId];
       }
 
-      // 现在可以设置新的当前连接
+      // 设置新的当前连接
       _currentConnId = connId;
       _connected = true;
       _ap = t;
 
-      // 切换成功后，立即标记为健康状态
-      _connHealth[connId] = { alive: true, pod_exists: true, pod_phase: 'Running' };
-      // 更新连接对象的状态 + 后端返回的元数据
+      // 更新连接层级
+      const newLevel = _inferLevel(conn);
+      _connHealth[connId] = { alive: true, pod_exists: true, pod_phase: d.pod_phase || 'Running' };
+
+      // 更新连接对象状态 + 后端返回的元数据
       conn.status = 'connected';
-      conn.local_port = d.local_port;
+      if (d.connection_id) conn.pod_conn_id = d.connection_id;
+      if (d.runtime) conn.runtime = d.runtime;
+      if (d.local_port) conn.local_port = d.local_port;
       if (d.java_pid) conn.java_pid = d.java_pid;
       if (d.arthas_version) conn.arthas_version = d.arthas_version;
       if (d.arthas_address) conn.arthas_address = d.arthas_address;
       if (d.http_url) conn.http_url = d.http_url;
       if (d.mcp_available !== undefined) conn.mcp_available = d.mcp_available;
 
-      // 【关键修复】同步状态到 window
+      // 同步两步连接状态
+      if (newLevel === 'pod') {
+        window._connState = ConnectionState.POD_CONNECTED;
+        window._runtimeInfo = d.runtime || _getRt(conn);
+        if (typeof _podConnId !== 'undefined') _podConnId = d.connection_id || connId;
+        if (typeof _podPhase !== 'undefined') _podPhase = d.pod_phase;
+        _connected = false; // Pod 连接不代表 Arthas 可用
+      } else {
+        window._connState = ConnectionState.ARTHAS_READY;
+        if (typeof _runtimeInfo !== 'undefined' && d.runtime) _runtimeInfo = d.runtime;
+        _connected = true;
+        _currentConnId = connId;
+      }
+
+      // 同步状态到 window
       _syncState();
       renderConnList();
       if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
@@ -275,17 +448,25 @@ async function switchConnection(connId) {
       _pfTaskId = null;
       _pfLL = 0;
 
-      // 更新 UI
-      renderConnList();
-      const _switchAddr = conn.arthas_address || conn.http_url || `http://127.0.0.1:${conn.local_port}`;
-      const _switchRows = [
-        conn.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(conn.java_pid))}</span></div>` : '',
-        `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div>`,
-        `<div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_switchAddr)}</span></div>`,
-        conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : '',
-      ].filter(Boolean).join('');
-      setConnStatus('ok', `<div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div style="flex:1;min-width:0"><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body">${_switchRows}</div>`);
-      setCpSt('ok', `✓ 已连接  (port:${conn.local_port})`);
+      // 更新 UI — 根据层级显示不同信息
+      if (newLevel === 'arthas' && conn.local_port) {
+        const _switchAddr = conn.arthas_address || conn.http_url || `http://127.0.0.1:${conn.local_port}`;
+        const _switchRows = [
+          conn.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(conn.java_pid))}</span></div>` : '',
+          `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div>`,
+          `<div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_switchAddr)}</span></div>`,
+          conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : '',
+        ].filter(Boolean).join('');
+        setConnStatus('ok', `<div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div style="flex:1;min-width:0"><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body">${_switchRows}</div>`);
+        setCpSt('ok', `✓ 已连接  (port:${conn.local_port})`);
+      } else {
+        // Pod 层级
+        const rt = _getRt(conn);
+        const rtInfo = rt ? `${_rtIcon(rt.type)} ${rt.type}${rt.version ? ' ' + rt.version : ''}` : 'Pod';
+        setConnStatus('ok', `<div class="ct-tip-hd"><div class="ct-tip-icon">🔵</div><div style="flex:1;min-width:0"><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body"><div class="ct-tip-row"><span class="ct-tip-k">连接类型</span><span class="ct-tip-v">Pod连接</span></div><div class="ct-tip-row"><span class="ct-tip-k">运行时</span><span class="ct-tip-v">${rtInfo}</span></div></div>`);
+        setCpSt('ok', `✓ Pod 已连接 (${rtInfo})`);
+      }
+
       // 切换连接时设置 conTitle（含悬浮 tooltip）
       const _switchConTitle = document.getElementById('conTitle');
       if (_switchConTitle) {
@@ -295,15 +476,17 @@ async function switchConnection(connId) {
           `<div class="ct-tip-row"><span class="ct-tip-k">集群</span><span class="ct-tip-v">${esc(conn.cluster_name)}</span></div>`,
           `<div class="ct-tip-row"><span class="ct-tip-k">命名空间</span><span class="ct-tip-v">${esc(conn.namespace)}</span></div>`,
           `<div class="ct-tip-row"><span class="ct-tip-k">Pod</span><span class="ct-tip-v">${esc(conn.pod_name)}</span></div>`,
+          `<div class="ct-tip-row"><span class="ct-tip-k">连接类型</span><span class="ct-tip-v">${newLevel === 'arthas' ? 'Arthas连接' : 'Pod连接'}</span></div>`,
           conn.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(conn.java_pid))}</span></div>` : '',
-          `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div>`,
-          `<div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_switchAddr)}</span></div>`,
+          conn.local_port ? `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div>` : '',
           conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : '',
-          `<div class="ct-tip-row"><span class="ct-tip-k">MCP</span><span class="ct-tip-v ${_mcpClass}">${_mcpText}</span></div>`,
+          conn.mcp_available !== undefined ? `<div class="ct-tip-row"><span class="ct-tip-k">MCP</span><span class="ct-tip-v ${_mcpClass}">${_mcpText}</span></div>` : '',
         ].filter(Boolean).join('');
-        _switchConTitle.innerHTML = `${esc(conn.cluster_name)}/${esc(conn.namespace)}/${esc(conn.pod_name)}<span class="ct-tip"><div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body">${_switchTipRows}</div></span>`;
+        const titleIcon = newLevel === 'arthas' ? '⚡' : '🔵';
+        _switchConTitle.innerHTML = `${esc(conn.cluster_name)}/${esc(conn.namespace)}/${esc(conn.pod_name)}<span class="ct-tip"><div class="ct-tip-hd"><div class="ct-tip-icon">${titleIcon}</div><div><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body">${_switchTipRows}</div></span>`;
       }
-      // 切换连接时更新 Arthas 版本徽章
+
+      // 更新 Arthas 版本徽章
       const _verBadgeSwitch = document.getElementById('arthasVerBadge');
       if (_verBadgeSwitch) {
         if (conn.arthas_version) {
@@ -313,6 +496,14 @@ async function switchConnection(connId) {
           _verBadgeSwitch.style.display = 'none';
         }
       }
+
+      // 更新连接按钮状态
+      if (typeof updateConnectionButton === 'function') updateConnectionButton();
+      if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
+      if (typeof updateRuntimeDisplay === 'function') updateRuntimeDisplay();
+      // 刷新连接信息提示条
+      if (typeof csbRefresh === 'function') csbRefresh();
+
       document.getElementById('runBtn').disabled = false;
 
       // 切换连接后自动折叠 Pod 目标区
@@ -567,33 +758,75 @@ function deleteConnection(connId) {
   if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
 }
 
-// 批量检查所有连接的健康状态
+// 批量检查所有连接的健康状态（区分 level）
 async function checkConnectionsHealth() {
   if (_connections.length === 0) return;
   try {
-    const r = await fetch(`${API}/arthas/connections/check`, {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      credentials: 'same-origin',
-      body: JSON.stringify({connections: _connections.map(c => ({
-        id: c.id, cluster_name: c.cluster_name, namespace: c.namespace, pod_name: c.pod_name
-      }))}),
-      signal: AbortSignal.timeout(15000)
-    });
-    const d = await r.json();
-    if (d.results) {
-      _connHealth = d.results;
-      // 同步健康状态到连接对象的 status 字段
-      for (const c of _connections) {
-        const h = _connHealth[c.id];
-        if (h) {
-          c.status = (h.alive && h.pod_exists !== false) ? 'connected' : 'disconnected';
+    const podConns = _connections.filter(c => _inferLevel(c) === 'pod');
+    const arthasConns = _connections.filter(c => _inferLevel(c) === 'arthas');
+
+    // Arthas 连接健康检测
+    if (arthasConns.length > 0) {
+      const r = await fetch(`${API}/arthas/connections/check`, {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        credentials: 'same-origin',
+        body: JSON.stringify({connections: arthasConns.map(c => ({
+          id: c.id, cluster_name: c.cluster_name, namespace: c.namespace, pod_name: c.pod_name
+        }))}),
+        signal: AbortSignal.timeout(15000)
+      });
+      const d = await r.json();
+      if (d.results) {
+        Object.assign(_connHealth, d.results);
+        // Arthas 断线但 Pod 存活 → 自动降级
+        for (const c of arthasConns) {
+          const h = d.results[c.id];
+          if (h && h.alive === false && h.pod_exists === true) {
+            c.level = 'pod';
+            delete c.local_port;
+            delete c.java_pid;
+            delete c.arthas_version;
+            delete c.arthas_address;
+            if (c.id === _currentConnId) {
+              window._connState = 'pod_connected';
+              if (typeof updateConnectionButton === 'function') updateConnectionButton();
+              if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
+              if (typeof updateRuntimeDisplay === 'function') updateRuntimeDisplay();
+              if (typeof csbRefresh === 'function') csbRefresh();
+              toast('Arthas 连接已断开，已降级为 Pod 连接', 'warn');
+            }
+          }
         }
       }
-      renderConnList();
-      _syncState();  // 【关键修复】同步到 window
-      if (typeof aiUpdateConnIndicator === 'function') aiUpdateConnIndicator();
     }
+
+    // Pod 连接存活检测（轻量级）
+    if (podConns.length > 0) {
+      try {
+        const podCheckR = await fetch(`${API}/pod/connections`, { credentials: 'include' });
+        const podCheckD = await podCheckR.json();
+        const aliveIds = new Set((podCheckD.connections || []).filter(c => c.alive).map(c => c.id));
+        for (const c of podConns) {
+          const isAlive = aliveIds.has(c.id);
+          _connHealth[c.id] = { alive: isAlive, pod_exists: isAlive };
+        }
+      } catch (e) {
+        console.warn('Pod 连接健康检测失败:', e);
+      }
+    }
+
+    // 同步健康状态到连接对象的 status 字段
+    for (const c of _connections) {
+      const h = _connHealth[c.id];
+      if (h) {
+        c.status = (h.alive && h.pod_exists !== false) ? 'connected' : 'disconnected';
+      }
+    }
+    renderConnList();
+    _syncState();
+    if (typeof aiUpdateConnIndicator === 'function') aiUpdateConnIndicator();
+    if (typeof csbRefresh === 'function') csbRefresh();
   } catch(e) {
     console.warn('连接健康检查失败:', e);
   }
@@ -713,6 +946,95 @@ async function _restoreActiveConnection(conn) {
 
   setConnStatus('dim', `正在恢复连接 ${conn.cluster_name} / ${conn.namespace} / ${conn.pod_name} ...`);
 
+  // P0-3: Pod-first 恢复流程 — 先尝试 Pod 连接，再按需升级 Arthas
+  // Step 1: 尝试 Pod 连接
+  let podOk = false;
+  try {
+    const podR = await fetch(`${API}/pod/connect`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'include',
+      body: JSON.stringify({
+        cluster_name: t.cluster_name,
+        namespace: t.namespace,
+        pod_name: t.pod_name,
+        container: t.container
+      })
+    });
+    const podD = await podR.json();
+    if (podD.ok) {
+      podOk = true;
+      // 更新 two-step-connection 状态
+      if (typeof _connState !== 'undefined') {
+        // 直接调用 podConnect 不行（会重复请求），手动更新状态
+        // 通过 two-step-connection 暴露的变量同步
+        window._connState = 'pod_connected';
+        window._runtimeInfo = podD.runtime;
+      }
+      // 同步到全局状态
+      _currentConnId = conn.id;
+      _connected = false; // Pod 连接不算 _connected（这是 Arthas 标志）
+      _ap = t;
+      _connHealth[conn.id] = { alive: true, pod_exists: true, pod_phase: podD.pod_phase || 'Running' };
+      conn.status = 'connected';
+      _syncState();
+      renderConnList();
+
+      // 更新 two-step-connection 内部状态
+      if (typeof updateConnectionButton === 'function') updateConnectionButton();
+      if (typeof updateRuntimeDisplay === 'function') updateRuntimeDisplay();
+      if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
+
+      setConnStatus('ok', `✓ Pod 连接已恢复 (${podD.runtime?.runtime_type || 'unknown'})`);
+      toast(`Pod 连接已恢复 (${podD.runtime?.runtime_type || 'unknown'})`, 'success');
+
+      // Step 2: 如果原来是 Arthas 连接，且当前是 Java 应用，自动升级
+      if (conn.arthas_version && podD.runtime?.runtime_type === 'java') {
+        setConnStatus('dim', `正在恢复 Arthas 诊断环境...`);
+        try {
+          const arthasR = await fetch(`${API}/pod/upgrade-to-arthas`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            credentials: 'include',
+            body: JSON.stringify({
+              connection_id: conn.id,
+              java_pid: conn.java_pid || null
+            })
+          });
+          const arthasD = await arthasR.json();
+          if (arthasD.ok) {
+            // Arthas 升级成功
+            window._connState = 'arthas_ready';
+            _connected = true;
+            _currentConnId = conn.id;
+            conn.local_port = arthasD.local_port;
+            conn.java_pid = arthasD.java_pid;
+            conn.arthas_version = arthasD.arthas_version;
+            conn.arthas_address = arthasD.arthas_address;
+            conn.http_url = arthasD.http_url;
+            conn.mcp_available = arthasD.mcp_available;
+            _syncState();
+            renderConnList();
+            if (typeof updateConnectionButton === 'function') updateConnectionButton();
+            if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
+
+            const _addr = conn.arthas_address || conn.http_url || `http://127.0.0.1:${conn.local_port}`;
+            setConnStatus('ok', `<div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div style="flex:1;min-width:0"><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body"><div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div><div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_addr)}</span></div>${conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : ''}</div>`);
+            setCpSt('ok', `✓ Arthas 已恢复 (port:${conn.local_port})`);
+            toast('Arthas 诊断环境已恢复', 'success');
+            return;
+          }
+        } catch (e) {
+          console.warn('Arthas 恢复失败，保持 Pod 连接:', e.message);
+        }
+      }
+      return; // Pod 连接成功即返回
+    }
+  } catch (e) {
+    console.warn('Pod 连接恢复失败，尝试直接 Arthas 连接:', e.message);
+  }
+
+  // Step 3: 回退到原有 Arthas 直接连接（兼容旧流程）
   const r = await fetch(`${API}/arthas/connect`, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
@@ -784,30 +1106,73 @@ function switchTab(n) {
   const tabMap = {0:'profiler', 1:'console', 2:'terminal', 3:'monitor', 4:'filebrowser', 5:'ai', 6:'history', 7:'diag'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
 
-  ['console','profiler','monitor','filebrowser','terminal','ai','history','diag'].forEach(x => {
+  // 先切 Tab（允许切换到任何 Tab）
+  const allTabs = ['console','profiler','monitor','filebrowser','terminal','ai','history','diag'];
+  allTabs.forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
     document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
+    // 切走时清除旧面板的锁定态和引导
+    if (x !== tab) {
+      document.getElementById('panel-'+x)?.classList.remove('panel-locked');
+    }
   });
+
+  // 连接引导检查：允许切 Tab，但不满足要求时显示引导面板 + 禁用操作区
+  if (window.ConnectionGuard) {
+    const result = ConnectionGuard.check(tab);
+    if (!result.ok) {
+      // 显示引导面板，禁用面板内的操作
+      ConnectionGuard.showGuide(tab, result.current, result.required);
+      // 给面板加禁用遮罩（引导面板在遮罩上层，可点击引导按钮）
+      const panel = document.getElementById('panel-'+tab);
+      if (panel) panel.classList.add('panel-locked');
+    } else {
+      // 满足要求，隐藏引导 + 移除禁用
+      ConnectionGuard.hideGuide();
+      const panel = document.getElementById('panel-'+tab);
+      if (panel) panel.classList.remove('panel-locked');
+    }
+  } else {
+    // 降级：兼容旧逻辑
+    const cs = window._connState;
+    const hasPod = cs === 'pod_connected' || cs === 'arthas_ready';
+    const hasArthas = cs === 'arthas_ready';
+    const arthasOnlyTabs = ['console', 'profiler'];
+    if (arthasOnlyTabs.includes(tab) && !hasArthas) {
+      if (hasPod) { toast('此功能需要启动 Arthas 诊断环境', 'warn'); }
+      else { toast('请先建立 Pod 连接', 'warn'); }
+    }
+    if (['monitor','filebrowser','terminal'].includes(tab) && !hasPod) {
+      toast('请先建立 Pod 连接', 'warn');
+    }
+  }
 
   // Show Arthas JAR path only for Arthas/JProfiler tabs
   const needsArthas = ['console','profiler'].includes(tab);
   const jarWrap = document.getElementById('ptArthasWrap');
   if(jarWrap) jarWrap.style.display = needsArthas ? 'block' : 'none';
 
-  // Adapt connect button: Arthas tabs show "⚡ 连接", others show "🖥️ 终端连接"
+  // Adapt connect button based on connection state + ConnectionGuard
   const connBtn = document.getElementById('ptConnBtn');
+  const currentLevel = window.ConnectionGuard ? ConnectionGuard.getCurrentLevel() : 'none';
   if(connBtn) {
-    if(tab === 'terminal') {
+    if(currentLevel === 'arthas') {
+      if(typeof updateConnectionButton === 'function') updateConnectionButton();
+    } else if(tab === 'terminal') {
       connBtn.textContent = '🖥️ 终端连接';
       connBtn.onclick = () => { termInit(); };
-    } else {
-      // Restore default Arthas connect if not already connected
-      if(!_connected) connBtn.textContent = '⚡ 连接';
-      connBtn.onclick = () => arthasConnect();
+    } else if(currentLevel === 'pod' && typeof canUpgradeToArthas === 'function' && canUpgradeToArthas()) {
+      connBtn.textContent = '⚡ 启动 Arthas';
+      connBtn.onclick = () => { if(typeof upgradeToArthas === 'function') upgradeToArthas(); };
+    } else if(currentLevel === 'none') {
+      connBtn.textContent = '🔌 Pod 连接';
+      connBtn.onclick = () => { if(typeof podConnect === 'function') podConnect(); };
     }
   }
 
   if(tab==='history') loadHistory();
+  // 刷新连接信息提示条
+  if(typeof csbRefresh === 'function') csbRefresh();
   // 离开监控 tab 时清理 history 轮询
   if(tab!=='monitor') {
     clearInterval(window._histTimer);
@@ -1283,7 +1648,11 @@ const CMDS = [
     { id:'thread', name:'thread', icon:'🧵', type:'once',
       desc:'线程列表 + CPU 占用（-n 最忙N个，-b 检测死锁）',
       tip:`输出所有线程或指定线程的状态和 CPU 占用。\n-n N：输出 CPU 最高的前N个线程及堆栈，排查 CPU 飙高的核心命令。\n-b：检测处于 BLOCKED 的线程，定位死锁。\ntid：指定线程ID查看完整调用栈。`,
-      example:`thread\nthread -n 3\nthread 12\nthread -b\nthread --state BLOCKED`,
+      example:`thread
+thread -n 3
+thread 12
+thread -b
+thread --state BLOCKED`,
       doc:`https://arthas.aliyun.com/en/doc/thread.html`,
       params:[
         {k:'-n', ph:'最忙前N个线程', def:''},
@@ -1745,6 +2114,7 @@ function autoResize(ta) {
 }
 
 async function runCmd() {
+  if(window.ConnectionGuard && !ConnectionGuard.guard('console')) return;
   if(!_connected) { toast('请先连接 Arthas','warn'); return; }
   const ta = document.getElementById('cmdTa'); const command = ta.value.trim(); if(!command) return;
   ta.value=''; autoResize(ta); _cmdHist.push(command); _histIdx=-1;
@@ -2383,6 +2753,7 @@ function pfSetDur(s) {
 }
 
 async function pfStart() {
+  if(window.ConnectionGuard && !ConnectionGuard.guard('profiler')) return;
   const t = getT();
   if(!t.cluster_name || !t.pod_name) { toast('请先配置集群和 Pod','warn'); return; }
 
@@ -3061,6 +3432,7 @@ async function loadConnectionProfilerLogs(connId) {
 
 // ── Pod Monitor ───────────────────────────────────────────────────────────────
 async function loadSnap(silent = false) {
+  if(window.ConnectionGuard && !ConnectionGuard.guard('monitor')) return;
   const t = getT();
   if(!t.cluster_name || !t.pod_name) { toast('请先配置集群和 Pod','warn'); return; }
   // 静默刷新时不显示 loading，避免闪烁
@@ -3920,6 +4292,11 @@ document.addEventListener('DOMContentLoaded', function() {
   loadClusters();
   loadLocalFiles();
   
+  // 初始化两步连接流程组件
+  if (typeof initTwoStepConnection === 'function') {
+    initTwoStepConnection();
+  }
+  
   // Pre-load history counts after a short delay
   setTimeout(loadHistory, 1500);
 });
@@ -3960,6 +4337,8 @@ window.switchConnection = switchConnection;
 window.deleteConnection = deleteConnection;
 window.checkPod = checkPod;
 window.arthasConnect = arthasConnect;
+
+// 两步连接流程函数在 two-step-connection.js 中暴露
 
 // 标签页切换
 window.switchTab = switchTab;

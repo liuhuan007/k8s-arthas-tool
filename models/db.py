@@ -137,6 +137,7 @@ class Database:
                     cluster_name TEXT NOT NULL,
                     namespace TEXT NOT NULL,
                     pod_name TEXT NOT NULL,
+                    level TEXT NOT NULL DEFAULT 'arthas',
                     local_port INTEGER,
                     user_id INTEGER,
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -199,6 +200,14 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
                 )
             ''')
+            
+            # ── Schema 迁移：为已有表添加新字段 ──────────────────────────────────
+            # connections 表增加 level 字段（pod / arthas）
+            try:
+                cursor.execute("SELECT level FROM connections LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE connections ADD COLUMN level TEXT NOT NULL DEFAULT 'arthas'")
+                log.info("Schema migrated: connections.level added")
             
             # 创建默认 admin 账户
             cursor.execute('SELECT COUNT(*) FROM users')

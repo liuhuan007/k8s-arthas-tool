@@ -42,20 +42,33 @@ function fbDblClickEl(el) {
   }
 }
 
+// 获取当前连接的目标信息
+function fbGetConnTarget(conn) {
+  return {
+    cluster_name: conn.cluster_name || conn.cluster || '',
+    namespace: conn.namespace || 'default',
+    pod_name: conn.pod_name || conn.pod || '',
+    container: conn.container || ''
+  };
+}
+
 // 导航到指定路径
 async function fbNavTo(path) {
+  if (window.ConnectionGuard && !ConnectionGuard.guard('filebrowser')) return;
   const conn = getCurrentConnection();
   if (!conn) {
     toast('请先选择连接', 'error');
     return;
   }
+  const target = fbGetConnTarget(conn);
+  if (!target.cluster_name || !target.pod_name) {
+    toast('当前连接信息不完整，无法浏览文件', 'error');
+    return;
+  }
   
   try {
     const resp = await safePost('/api/pod/files', {
-      cluster_name: conn.cluster,
-      namespace: conn.namespace,
-      pod_name: conn.pod,
-      container: conn.container || '',
+      ...target,
       path: path
     });
     
@@ -111,18 +124,21 @@ function renderFileBrowser(files, curPath) {
 
 // 下载文件
 async function downloadPodFile(filePath) {
+  if (window.ConnectionGuard && !ConnectionGuard.guard('filebrowser')) return;
   const conn = getCurrentConnection();
   if (!conn) return;
+  const target = fbGetConnTarget(conn);
+  if (!target.cluster_name || !target.pod_name) {
+    toast('当前连接信息不完整，无法下载文件', 'error');
+    return;
+  }
   
   const filename = filePath.split('/').pop();
   
   try {
     // 使用 POST 接口下载
     const resp = await safePost('/api/pod/files/download', {
-      cluster_name: conn.cluster,
-      namespace: conn.namespace,
-      pod_name: conn.pod,
-      container: conn.container || '',
+      ...target,
       path: filePath
     });
     
