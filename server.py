@@ -37,6 +37,7 @@ from flask_login import LoginManager, login_required, current_user
 # 导入配置和模型
 from backend import Config
 from models import db, User
+from services.authorization_service import AuthorizationService
 from api import register_blueprints
 
 # 导入后端模块
@@ -137,8 +138,14 @@ init_mcp_tables()
 from api.ai_chat import init_ai_tables
 init_ai_tables()
 
+# 初始化任务中心数据库表
+from api.task_center import init_task_tables, start_task_scheduler
+init_task_tables()
+start_task_scheduler()
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 辅助函数
+
 # ═══════════════════════════════════════════════════════════════════════════════
 
 OUTPUT_DIR = Path(Config.OUTPUT_DIR)
@@ -361,6 +368,9 @@ def arthas_connect():
     runner, err = _make_runner(cluster_name)
     if err:
         return jsonify({"error": err}), 400
+    auth_err, auth_code = AuthorizationService.require_namespace_access(current_user, cluster_name, namespace)
+    if auth_err:
+        return jsonify(auth_err), auth_code
     
     conn_id = f"{cluster_name}/{namespace}/{pod}"
     # 非 admin 的连接 ID 带上 user_id，避免与 admin 或其他用户的连接冲突
@@ -381,7 +391,7 @@ def arthas_connect():
             return jsonify({"ok": False, "error": msg}), 400
         
         # 检测 MCP 端点是否可用
-        mcp_available = conn.agent_mgr._check_mcp_available(conn.local_port)
+        mcp_available = conn.agent_mgr._check_mcp_available(conn.target.arthas_http_port)
         
         with _connections_lock:
             _connections[conn_id] = {"conn": conn, "user_id": current_user.id, "mcp_available": mcp_available}
@@ -1239,6 +1249,9 @@ def monitor_pod():
     runner, err = _make_runner(cluster)
     if err:
         return jsonify({"error": err}), 400
+    auth_err, auth_code = AuthorizationService.require_namespace_access(current_user, cluster, ns)
+    if auth_err:
+        return jsonify(auth_err), auth_code
     
     container = d.get('container', '')
     try:
@@ -1263,6 +1276,9 @@ def get_pod_logs():
     runner, err = _make_runner(cluster_name)
     if err:
         return jsonify({"error": err}), 400
+    auth_err, auth_code = AuthorizationService.require_namespace_access(current_user, cluster_name, namespace)
+    if auth_err:
+        return jsonify(auth_err), auth_code
     
     try:
         logs_text = runner.get_logs(namespace, pod_name, tail=tail, container=container, since=since)

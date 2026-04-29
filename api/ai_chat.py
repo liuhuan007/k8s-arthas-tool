@@ -511,7 +511,6 @@ def _get_connection_info(connection_id: str) -> str:
         return f"连接 {connection_id} 无效。"
 
     alive = conn.is_alive()
-    mcp_status = entry.get('mcp_available', False)
     info = f"- 集群: {conn.target.cluster_name}\n"
     info += f"- 命名空间: {conn.target.namespace}\n"
     info += f"- Pod: {conn.target.pod_name}\n"
@@ -519,8 +518,7 @@ def _get_connection_info(connection_id: str) -> str:
         info += f"- 容器: {conn.target.container}\n"
     info += f"- Java PID: {conn.java_pid or '未知'}\n"
     info += f"- Arthas HTTP 端口: {conn.local_port or '未建立'}\n"
-    info += f"- 连接状态: {'活跃' if alive else '已断开'}\n"
-    info += f"- MCP 端点: {'可用 (Arthas 4.1.8+)' if mcp_status else '不可用 (需 Arthas 4.1.8+)'}"
+    info += f"- 连接状态: {'活跃' if alive else '已断开'}"
 
     return info
 

@@ -115,16 +115,27 @@ function renderProcs(snap) {
     el.innerHTML = '<tr><td colspan="6" class="empty-state">无进程数据</td></tr>';
     return;
   }
+  const normProc = p => ({
+    pid: p.pid || '?',
+    user: p.user || '—',
+    cpu: p.cpu ?? p.cpu_percent ?? 0,
+    mem: p.mem ?? p.mem_percent ?? 0,
+    stat: p.stat || p.status || '—',
+    cmd: p.cmd || p.name || '—',
+  });
   
-  el.innerHTML = procs.slice(0, 20).map(p => `
+  el.innerHTML = procs.slice(0, 20).map(raw => {
+    const p = normProc(raw);
+    return `
     <tr>
-      <td style="font-family:monospace;color:var(--a)">${esc(p.pid || '?')}</td>
-      <td>${esc(p.user || '—')}</td>
-      <td>${esc(p.cpu || '0')}%</td>
-      <td>${esc(p.mem || '0')}%</td>
-      <td>${esc(p.stat || '—')}</td>
-      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.cmd || '')}">${esc(p.cmd || '—')}</td>
-    </tr>`).join('');
+      <td style="font-family:monospace;color:var(--a)">${esc(p.pid)}</td>
+      <td>${esc(p.user)}</td>
+      <td>${esc(p.cpu)}%</td>
+      <td>${esc(p.mem)}%</td>
+      <td>${esc(p.stat)}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis" title="${esc(p.cmd)}">${esc(p.cmd)}</td>
+    </tr>`;
+  }).join('');
 }
 
 // 导出

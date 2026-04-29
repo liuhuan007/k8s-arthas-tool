@@ -203,13 +203,11 @@ function addConnection(conn) {
     // 确保 level 字段
     conn.level = inferConnLevel(conn);
     conn.status = conn.status || 'connected';
-    conn.mcp_available = conn.mcp_available || false;
     window._connections.push(conn);
     saveConnections();
   } else {
     // 更新现有连接的状态信息
     exists.status = conn.status || 'connected';
-    exists.mcp_available = conn.mcp_available !== undefined ? conn.mcp_available : exists.mcp_available;
     // 更新 level
     if (conn.level) exists.level = conn.level;
     // 更新运行时信息

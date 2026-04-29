@@ -446,7 +446,6 @@ async function upgradeToArthas() {
       conn.arthas_version = d.arthas_version;
       conn.arthas_address = d.arthas_address;
       conn.http_url = d.http_url;
-      conn.mcp_available = d.mcp_available;
       conn.status = 'connected';
     }
 
@@ -454,9 +453,10 @@ async function upgradeToArthas() {
     updateConnectionButton();
     updateFeatureTabs();
 
+    const reused = Boolean(d.reused);
     const verSuffix = d.arthas_version ? ` Arthas ${d.arthas_version}` : '';
     updateConnectionStatus(
-      `✓ Arthas 诊断环境就绪${verSuffix} - ${d.message}`,
+      `✓ Arthas 诊断环境就绪${verSuffix}${reused ? '（复用已有进程）' : ''} - ${d.message}`,
       'success'
     );
 
@@ -557,8 +557,6 @@ function updateConTitle(data) {
   if (!conTitleEl) return;
 
   const t = getT();
-  const mcpClass = data.mcp_available ? 'live' : 'dead';
-  const mcpText = data.mcp_available ? '✓ 可用' : '✗ 不可用';
   const addrInfo = data.arthas_address || data.http_url || `http://127.0.0.1:${data.local_port}`;
 
   const tipRows = [
@@ -569,7 +567,6 @@ function updateConTitle(data) {
     `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(data.local_port))}</span></div>`,
     `<div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(addrInfo)}</span></div>`,
     data.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(data.arthas_version)}</span></div>` : '',
-    `<div class="ct-tip-row"><span class="ct-tip-k">MCP</span><span class="ct-tip-v ${mcpClass}">${mcpText}</span></div>`,
   ].filter(Boolean).join('');
 
   conTitleEl.innerHTML = `${esc(t.cluster_name)}/${esc(t.namespace)}/${esc(t.pod_name)}<span class="ct-tip"><div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div><div class="ct-tip-pod">${esc(t.pod_name)}</div><div class="ct-tip-ns">${esc(t.cluster_name)} / ${esc(t.namespace)}</div></div></div><div class="ct-tip-body">${tipRows}</div></span>`;

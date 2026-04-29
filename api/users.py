@@ -174,3 +174,103 @@ def remove_cluster_by_user_cluster():
     
     db.delete('user_clusters', 'user_id = ? AND cluster_id = ?', (user_id, cluster_id))
     return jsonify({'ok': True})
+
+
+@users_bp.route('/user-namespaces/<int:user_id>', methods=['GET'])
+@login_required
+def get_user_namespaces(user_id: int):
+    """获取用户 namespace 授权。"""
+    if not current_user.is_admin and current_user.id != user_id:
+        return jsonify({'error': '需要管理员权限'}), 403
+    rows = db.fetch_all(
+        'SELECT id, cluster_id, namespace FROM user_namespaces WHERE user_id = ? ORDER BY cluster_id, namespace',
+        (user_id,),
+    )
+    return jsonify({'namespaces': [dict(r) for r in rows]})
+
+
+@users_bp.route('/user-namespaces', methods=['POST'])
+@login_required
+@admin_required
+def assign_namespace():
+    """给用户授权指定 cluster/namespace（仅 admin）。"""
+    data = request.json or {}
+    user_id = data.get('user_id')
+    cluster_id = (data.get('cluster_id') or '').strip()
+    namespace = (data.get('namespace') or '').strip()
+    if not user_id or not cluster_id or not namespace:
+        return jsonify({'error': 'user_id、cluster_id 和 namespace 必填'}), 400
+    if db.exists(
+        'user_namespaces',
+        'user_id = ? AND cluster_id = ? AND namespace = ?',
+        (user_id, cluster_id, namespace),
+    ):
+        return jsonify({'error': '该 namespace 授权已存在'}), 400
+    assignment_id = db.insert('user_namespaces', {
+        'user_id': user_id,
+        'cluster_id': cluster_id,
+        'namespace': namespace,
+    })
+    try:
+        from services.audit_service import AuditService
+        AuditService._log_raw(
+            current_user.id,
+            'namespace_permission_granted',
+            'user_namespace',
+            f'{user_id}:{cluster_id}:{namespace}',
+            f'授权用户 {user_id} 操作 {cluster_id}/{namespace}',
+        )
+    except Exception:
+        pass
+    return jsonify({'ok': True, 'id': assignment_id}), 201
+
+
+@users_bp.route('/user-namespaces/<int:assignment_id>', methods=['DELETE'])
+@login_required
+@admin_required
+def remove_namespace(assignment_id: int):
+    """删除 namespace 授权（仅 admin）。"""
+    row = db.fetch_one('SELECT * FROM user_namespaces WHERE id = ?', (assignment_id,))
+    db.delete('user_namespaces', 'id = ?', (assignment_id,))
+    if row:
+        try:
+            from services.audit_service import AuditService
+            AuditService._log_raw(
+                current_user.id,
+                'namespace_permission_revoked',
+                'user_namespace',
+                f"{row['user_id']}:{row['cluster_id']}:{row['namespace']}",
+                f"取消用户 {row['user_id']} 对 {row['cluster_id']}/{row['namespace']} 的授权",
+            )
+        except Exception:
+            pass
+    return jsonify({'ok': True})
+
+
+@users_bp.route('/user-namespaces/by-user-cluster-namespace', methods=['DELETE'])
+@login_required
+@admin_required
+def remove_namespace_by_user_cluster_namespace():
+    """按 user_id、cluster_id 和 namespace 删除授权（仅 admin）。"""
+    user_id = request.args.get('user_id', type=int)
+    cluster_id = (request.args.get('cluster_id') or '').strip()
+    namespace = (request.args.get('namespace') or '').strip()
+    if not user_id or not cluster_id or not namespace:
+        return jsonify({'error': 'user_id、cluster_id 和 namespace 必填'}), 400
+    db.delete(
+        'user_namespaces',
+        'user_id = ? AND cluster_id = ? AND namespace = ?',
+        (user_id, cluster_id, namespace),
+    )
+    try:
+        from services.audit_service import AuditService
+        AuditService._log_raw(
+            current_user.id,
+            'namespace_permission_revoked',
+            'user_namespace',
+            f'{user_id}:{cluster_id}:{namespace}',
+            f'取消用户 {user_id} 对 {cluster_id}/{namespace} 的授权',
+        )
+    except Exception:
+        pass
+    return jsonify({'ok': True})

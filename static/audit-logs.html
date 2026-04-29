@@ -68,9 +68,18 @@
         .pagination .page-info{font-size:11px;color:var(--tx3)}
 
         .empty-msg{text-align:center;padding:40px;color:var(--tx3);font-size:12px}
+        body.embed { overflow:hidden }
+        body.embed .admin-page{min-height:100vh}
+        body.embed .topbar{display:none}
+        body.embed .admin-content{max-width:none;padding:18px 20px}
     </style>
 </head>
 <body>
+    <script>
+        if (new URLSearchParams(window.location.search).get('embed') === '1') {
+            document.body.classList.add('embed');
+        }
+    </script>
     <div class="admin-page">
         <!-- Topbar -->
         <div class="topbar">

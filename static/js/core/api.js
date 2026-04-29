@@ -128,7 +128,79 @@ async function downloadFile(url, filename) {
   URL.revokeObjectURL(blobUrl);
 }
 
+/**
+ * 安全 PUT 请求
+ * @param {string} url - 请求 URL
+ * @param {object} body - 请求体
+ * @param {number} timeoutMs - 超时时间
+ */
+async function safePut(url, body, timeoutMs = 15000) {
+  const fullUrl = url.startsWith('http') ? url : `${API}${url}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(fullUrl, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+      credentials: 'include',
+    });
+    clearTimeout(timer);
+    if (r.status === 401) { window.location.replace('/login.html'); throw new Error('会话已过期'); }
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) throw new Error(`服务器返回非JSON响应 (HTTP ${r.status})`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || d.message || `请求失败 (${r.status})`);
+    return d;
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new Error(`请求超时 (${timeoutMs / 1000}s)`);
+    throw e;
+  }
+}
+
+/**
+ * 安全 DELETE 请求
+ * @param {string} url - 请求 URL
+ * @param {number} timeoutMs - 超时时间
+ */
+async function safeDelete(url, timeoutMs = 15000) {
+  const fullUrl = url.startsWith('http') ? url : `${API}${url}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(fullUrl, {
+      method: 'DELETE',
+      signal: controller.signal,
+      credentials: 'include',
+    });
+    clearTimeout(timer);
+    if (r.status === 401) { window.location.replace('/login.html'); throw new Error('会话已过期'); }
+    if (r.status === 204) return {};
+    const ct = r.headers.get('content-type') || '';
+    if (!ct.includes('application/json')) throw new Error(`服务器返回非JSON响应 (HTTP ${r.status})`);
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || d.message || `请求失败 (${r.status})`);
+    return d;
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new Error(`请求超时 (${timeoutMs / 1000}s)`);
+    throw e;
+  }
+}
+
+// 导出浏览器全局变量，供 inline onclick 和非模块脚本使用
+if (typeof window !== 'undefined') {
+  window.API = API;
+  window.safePost = safePost;
+  window.safeGet = safeGet;
+  window.safePut = safePut;
+  window.safeDelete = safeDelete;
+  window.downloadFile = downloadFile;
+}
+
 // 导出给其他模块使用
 if (typeof module !== 'undefined' && module.exports) {
-  module.exports = { API, safePost, safeGet, downloadFile };
+  module.exports = { API, safePost, safeGet, safePut, safeDelete, downloadFile };
 }

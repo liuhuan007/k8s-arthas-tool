@@ -20,8 +20,15 @@ const ConnectionGuard = (function () {
     'terminal':    'pod',      // 🖥️ 终端
     'diag.pod':    'pod',      // 🔬 系统诊断 (sys_cpu/mem/disk/net/proc/system_overview)
     'diag':        'pod',      // 🔬 性能诊断 Tab 整体
+    'connections': 'none',     // 🔌 连接中心
     'ai':          'none',     // 🤖 AI 助手
+    'model-config': 'none',    // ⚙️ 模型配置
+    'mcp-center':  'none',     // 🔌 MCP 接入
+    'task-center': 'none',     // ⏱️ 任务中心
+    'toolchain-center': 'none', // 🧰 工具链
     'history':     'none',     // 📋 历史记录
+    'user-management': 'none', // 👥 用户管理
+    'audit-logs':  'none',     // 📋 审计日志
   };
 
   // 层级排序

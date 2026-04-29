@@ -73,30 +73,20 @@ document.addEventListener('DOMContentLoaded', function() {
 <div class="topbar">
   <div class="tb-logo"><div class="tb-hex"></div><span class="tb-title">Arthas <em>K8s</em></span></div>
   <div class="tb-links">
-    <div class="tb-dropdown">
-      <a class="tb-lnk" href="javascript:void(0)">📖 文档 ▾</a>
-      <div class="tb-dropdown-menu">
-        <a href="https://arthas.aliyun.com/en/doc/" target="_blank">📖 Arthas 官方文档</a>
-        <a href="https://arthas.aliyun.com/en/doc/commands.html" target="_blank">📋 命令手册</a>
-      </div>
+    <div class="tb-context">
+      <span class="tb-page-title">诊断工作台</span>
     </div>
-    <a class="tb-lnk admin-only" href="user-management.html">👥 用户管理</a>
-    <a class="tb-lnk admin-only" href="audit-logs.html">📋 审计日志</a>
-    <a class="tb-lnk" href="javascript:void(0)" onclick="aiOpenSettings()">⚙️ 配置大模型</a>
-    <a class="tb-lnk" href="javascript:void(0)" onclick="openMcpModal()">🔌 MCP 接入</a>
   </div>
-  <div class="tb-right" style="display:flex;align-items:center;gap:10px">
+  <div class="tb-right">
     <div class="tb-srv"><div class="dot" id="svDot"></div><span id="svLbl">连接中...</span></div>
     <span id="arthasVerTop" class="ver-badge-top" style="display:none"></span>
-    <div style="display:flex;align-items:center;gap:8px;border-left:1px solid rgba(255,255,255,.2);padding-left:12px">
-      <span style="font-size:12px;color:rgba(255,255,255,.8)">
-        👤 <span id="loginUser">—</span>
-      </span>
-      <button onclick="doLogout()" title="退出登录"
-        style="background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);border-radius:4px;
-               color:#fff;padding:3px 10px;font-size:11px;cursor:pointer;font-family:var(--mono)">
-        退出
-      </button>
+    <div class="tb-user tb-dropdown">
+      <a class="tb-lnk tb-user-link" href="javascript:void(0)">👤 <span id="loginUser">—</span> ▾</a>
+      <div class="tb-dropdown-menu tb-dropdown-menu-right">
+        <div class="tb-menu-title">账号</div>
+        <a href="javascript:void(0)" onclick="openChangePasswordModal()">🔑 修改密码</a>
+        <a href="javascript:void(0)" onclick="doLogout()">🚪 退出登录</a>
+      </div>
     </div>
   </div>
 </div>
@@ -105,55 +95,72 @@ document.addEventListener('DOMContentLoaded', function() {
 
 <!-- ── Sidebar ── -->
 <div class="sidebar">
-  <!-- Arthas Connections -->
-  <div class="sb-hd"><span>Arthas 连接</span><div style="display:flex;gap:2px"><button onclick="checkConnectionsHealth()" title="检查连接健康状态">♥</button><button onclick="cleanupStaleConnections()" title="清理失效连接">🗑</button><button onclick="renderConnList()" title="刷新">↻</button></div></div>
-  <div class="conn-list" id="connList">
-    <div class="sb-empty">暂无连接<br>使用下方添加</div>
-  </div>
-  <div class="pt-sep"></div>
-
-  <!-- Cluster Selection -->
-  <div class="sb-hd"><span>集群</span><button onclick="openAddCluster()" title="添加集群">＋</button></div>
-  <div class="sb-cls" id="sbCls"><div class="sb-empty">暂无集群<br>点击 ＋ 添加</div></div>
-
-  <!-- Pod Target: collapsible section -->
-  <div class="pt-collapse-hd" id="ptCollapseHd" onclick="togglePodTarget()">
-    <span style="font-size:10px;font-weight:600;color:var(--tx3);letter-spacing:1.5px;text-transform:uppercase">目标 Pod</span>
-    <span class="pt-collapse-arrow" id="ptCollapseArrow">▾</span>
-  </div>
-  <div class="pod-target" id="podTarget">
-    <div class="pt-lbl">Namespace</div>
-    <input class="pt-inp" id="ptNs" value="default" placeholder="default">
-    <div class="pt-lbl">Pod</div>
-    <div style="display:flex;gap:5px">
-      <input class="pt-inp" id="ptPod" placeholder="pod-name-xxxxx" style="flex:1">
-      <button class="pt-btn ghost" onclick="loadPods()" style="flex:0 0 28px;padding:0;font-size:14px" title="加载 Pod 列表">↻</button>
+  <div class="side-nav">
+    <div class="side-nav-group" data-side-group="base">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>基础能力</span><span class="side-nav-arrow">▾</span></button>
+      <div class="side-nav-items">
+        <button class="side-nav-item primary" data-nav-tab="connections" onclick="openConnectionCenter()"><span>🔌</span><span>连接中心</span></button>
+      </div>
     </div>
-    <select class="pt-sel" id="ptPodSel" style="display:none;margin-top:5px" onchange="onPodSel(this.value)">
-      <option value="">— 选择 Pod —</option>
-    </select>
-    <div class="pt-lbl">Container</div>
-    <select class="pt-sel" id="ptCtr"><option value="">默认容器</option></select>
-    <!-- Arthas JAR: only shown when Arthas/JProfiler tab is active -->
-    <div id="ptArthasWrap" style="display:block">
-      <div class="pt-lbl">Arthas JAR 路径</div>
-      <input class="pt-inp" id="ptArthas" value="/app/arthas/arthas-boot.jar">
+    <div class="side-nav-group" data-side-group="diagnosis">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>诊断工作台</span><span class="side-nav-arrow">▾</span></button>
+      <div class="side-nav-items">
+        <button class="side-nav-item" data-nav-tab="profiler" onclick="switchTab('profiler')"><span>🔥</span><span>采样工具</span></button>
+        <button class="side-nav-item" data-nav-tab="console" onclick="switchTab('console')"><span>⚡</span><span>Arthas命令</span></button>
+        <button class="side-nav-item" data-nav-tab="terminal" onclick="switchTab('terminal')"><span>🖥️</span><span>终端</span></button>
+        <button class="side-nav-item" data-nav-tab="monitor" onclick="switchTab('monitor')"><span>📊</span><span>Pod 监控</span></button>
+        <button class="side-nav-item" data-nav-tab="filebrowser" onclick="switchTab('filebrowser')"><span>📂</span><span>文件下载</span></button>
+        <button class="side-nav-item" data-nav-tab="diag" onclick="switchTab('diag')"><span>🔬</span><span>性能诊断</span></button>
+        <button class="side-nav-item" data-nav-tab="history" onclick="switchTab('history')"><span>📋</span><span>历史记录</span></button>
+      </div>
     </div>
-    <div class="pt-sep"></div>
-    <div class="pt-row">
-      <button class="pt-btn ghost" onclick="checkPod()">🔍 检查</button>
-      <button class="pt-btn" id="ptConnBtn" onclick="podConnect()">🔌 Pod 连接</button>
+    <div class="side-nav-group" data-side-group="ai">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>AI 能力</span><span class="side-nav-arrow">▾</span></button>
+      <div class="side-nav-items">
+        <button class="side-nav-item" data-nav-tab="ai" onclick="switchTab('ai')"><span>🤖</span><span>AI 助手</span></button>
+        <button class="side-nav-item" data-nav-tab="model-config" onclick="switchTab('model-config')"><span>⚙️</span><span>模型配置</span></button>
+        <button class="side-nav-item" data-nav-tab="mcp-center" onclick="switchTab('mcp-center')"><span>🔌</span><span>MCP 接入</span></button>
+      </div>
     </div>
-    <div class="pt-stat" id="ptStat"></div>
-    <div id="runtimeInfo" style="display:none;margin-top:8px"></div>
-    <div id="connStatus" style="display:none"></div>
+    <div class="side-nav-group" data-side-group="extension">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>扩展能力</span><span class="side-nav-arrow">▾</span></button>
+      <div class="side-nav-items">
+        <button class="side-nav-item" data-nav-tab="task-center" onclick="openTaskCenter()"><span>⏱️</span><span>任务中心</span></button>
+        <button class="side-nav-item" data-nav-tab="toolchain-center" onclick="openToolchainCenter()"><span>🧰</span><span>工具链</span></button>
+      </div>
+    </div>
+    <div class="side-nav-group admin-only" data-side-group="system">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>系统管理</span><span class="side-nav-arrow">▾</span></button>
+      <div class="side-nav-items">
+        <button class="side-nav-item" data-nav-tab="user-management" onclick="switchTab('user-management')"><span>👥</span><span>用户管理</span></button>
+        <button class="side-nav-item" data-nav-tab="audit-logs" onclick="switchTab('audit-logs')"><span>📋</span><span>审计日志</span></button>
+      </div>
+    </div>
+    <div class="side-nav-group" data-side-group="help">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>帮助文档</span><span class="side-nav-arrow">▾</span></button>
+      <div class="side-nav-items">
+        <button class="side-nav-item" onclick="window.open('https://arthas.aliyun.com/en/doc/','_blank')"><span>📖</span><span>Arthas 官方文档</span></button>
+        <button class="side-nav-item" onclick="window.open('https://arthas.aliyun.com/en/doc/commands.html','_blank')"><span>📋</span><span>命令手册</span></button>
+      </div>
+    </div>
   </div>
 </div>
 
 <!-- ── Main ── -->
 <div class="main">
-  <div class="tabbar">
-    <div class="tb-tab on" id="tab-profiler" onclick="switchTab('profiler')">🔥 采样工具</div>
+  <div class="workspace-head">
+    <div>
+      <div class="workspace-kicker" id="workspaceKicker">Connection Center</div>
+      <div class="workspace-title" id="workspaceTitle">连接中心</div>
+      <div class="workspace-sub" id="workspaceSub">管理 Pod 连接、Arthas 升级与最近连接记录</div>
+    </div>
+    <div class="workspace-actions" id="workspaceActions"></div>
+  </div>
+
+  <!-- 原主区页签已降级为隐藏的兼容锚点，左侧菜单是唯一主导航 -->
+  <div class="tabbar" aria-hidden="true">
+    <div class="tb-tab on" id="tab-connections" onclick="switchTab('connections')">🔌 连接中心</div>
+    <div class="tb-tab" id="tab-profiler" onclick="switchTab('profiler')">🔥 采样工具</div>
     <div class="tb-tab"    id="tab-console"  onclick="switchTab('console')">⚡ Arthas命令</div>
     <div class="tb-tab"    id="tab-terminal" onclick="switchTab('terminal')">🖥️ 终端</div>
     <div class="tb-tab-sep"></div>
@@ -161,6 +168,10 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="tb-tab"    id="tab-filebrowser" onclick="switchTab('filebrowser')">📂 文件下载</div>
     <div class="tb-tab-sep"></div>
     <div class="tb-tab"    id="tab-ai" onclick="switchTab('ai')">🤖 AI 助手</div>
+    <div class="tb-tab" id="tab-model-config" onclick="switchTab('model-config')">⚙️ 模型配置</div>
+    <div class="tb-tab" id="tab-mcp-center" onclick="switchTab('mcp-center')">🔌 MCP 接入</div>
+    <div class="tb-tab" id="tab-task-center" onclick="switchTab('task-center')">⏱️ 任务中心</div>
+    <div class="tb-tab" id="tab-toolchain-center" onclick="switchTab('toolchain-center')">🧰 工具链</div>
     <div class="tb-tab"    id="tab-diag" onclick="switchTab('diag')">🔬 性能诊断</div>
     <div class="tb-tab"    id="tab-history" onclick="switchTab('history')">📋 历史记录</div>
   </div>
@@ -180,6 +191,435 @@ document.addEventListener('DOMContentLoaded', function() {
   </div>
 
   <div class="panels">
+
+    <!-- Connection Center -->
+    <div class="panel on" id="panel-connections">
+      <div class="conn-center">
+        <div class="conn-hero">
+          <div>
+            <div class="conn-kicker">Connection Center</div>
+            <h1>先连接 Pod，再按需启动 Arthas</h1>
+            <p>Pod 连接承载终端、文件、监控等基础能力；Arthas 连接只在需要 JVM 深度诊断、采样和命令执行时升级。</p>
+          </div>
+          <div class="conn-hero-actions">
+            <button class="ib" onclick="checkConnectionsHealth()">♥ 健康检查</button>
+            <button class="ib danger" onclick="cleanupStaleConnections()">🗑 清理失效</button>
+            <button class="ib" onclick="renderConnList()">↻ 刷新列表</button>
+          </div>
+        </div>
+
+        <div class="conn-center-grid">
+          <section class="conn-card conn-card-builder">
+            <div class="conn-card-hd">
+              <div>
+                <div class="conn-card-title">连接配置</div>
+                <div class="conn-card-sub">按“选择集群 → 选择目标 → 建立 Pod 连接 → 按需升级 Arthas”的顺序操作</div>
+              </div>
+            </div>
+            <div class="conn-builder-body">
+              <div class="conn-step">
+                <div class="conn-step-no">1</div>
+                <div class="conn-step-main">
+                  <div class="conn-step-title">选择集群</div>
+                  <div class="conn-step-sub">当前诊断入口，支持后续扩展用户级集群权限</div>
+                </div>
+                <button class="mini-action" onclick="openAddCluster()" title="添加集群">＋</button>
+              </div>
+              <div class="sb-cls sb-cls-main" id="sbCls"><div class="sb-empty">暂无集群<br>点击 ＋ 添加</div></div>
+
+              <div class="conn-step conn-step-gap">
+                <div class="conn-step-no">2</div>
+                <div class="conn-step-main">
+                  <div class="conn-step-title">选择目标 Pod</div>
+                  <div class="conn-step-sub">Pod 连接是基础能力，Arthas 可后续升级</div>
+                </div>
+              </div>
+              <div class="pod-target pod-target-main" id="podTarget">
+                <div class="pt-lbl">Namespace</div>
+                <input class="pt-inp" id="ptNs" value="default" placeholder="default">
+                <div class="pt-lbl">Pod</div>
+                <div style="display:flex;gap:5px">
+                  <input class="pt-inp" id="ptPod" placeholder="pod-name-xxxxx" style="flex:1">
+                  <button class="pt-btn ghost" onclick="loadPods()" style="flex:0 0 28px;padding:0;font-size:14px" title="加载 Pod 列表">↻</button>
+                </div>
+                <select class="pt-sel" id="ptPodSel" style="display:none;margin-top:5px" onchange="onPodSel(this.value)">
+                  <option value="">— 选择 Pod —</option>
+                </select>
+                <div class="pt-lbl">Container</div>
+                <select class="pt-sel" id="ptCtr"><option value="">默认容器</option></select>
+                <div id="ptArthasWrap" style="display:block">
+                  <div class="pt-lbl">Arthas JAR 路径</div>
+                  <input class="pt-inp" id="ptArthas" value="/app/arthas/arthas-boot.jar">
+                </div>
+              <div class="conn-step conn-step-gap">
+                <div class="conn-step-no">3</div>
+                <div class="conn-step-main">
+                  <div class="conn-step-title">建立 Pod 连接</div>
+                  <div class="conn-step-sub">连接后即可使用终端、文件下载、Pod 监控和系统诊断</div>
+                </div>
+              </div>
+              <div class="conn-step-action">
+                <button class="pt-btn" id="ptConnBtn" onclick="podConnect()">🔌 Pod 连接</button>
+                <button class="pt-btn ghost" onclick="checkPod()">🔍 检查 Pod / JVM</button>
+              </div>
+              <div class="conn-step-note">Pod 连接成功后，Pod 监控、终端、文件下载会立即可用；不会自动启动 Arthas。</div>
+
+              <div class="conn-step conn-step-gap">
+                <div class="conn-step-no">4</div>
+                <div class="conn-step-main">
+                  <div class="conn-step-title">按需升级 Arthas</div>
+                  <div class="conn-step-sub">仅 Java Pod 可升级；采样工具和 Arthas 命令需要 Arthas-ready</div>
+                </div>
+              </div>
+              <div class="conn-step-action">
+                <button class="pt-btn success" onclick="upgradeToArthas()">⚡ 启动 Arthas</button>
+              </div>
+              <div class="conn-step-note arthas">非 Java Pod 可保持 Pod 连接；Java Pod 需要深度诊断时再升级。</div>
+              <div class="pt-stat" id="ptStat"></div>
+              <div id="runtimeInfo" style="display:none;margin-top:8px"></div>
+              <div id="connStatus" style="display:none"></div>
+              </div>
+            </div>
+          </section>
+
+          <section class="conn-card conn-card-wide">
+            <div class="conn-card-hd">
+              <div>
+                <div class="conn-card-title">连接记录</div>
+                <div class="conn-card-sub">最近连接、Pod-only 与 Arthas-ready 状态统一在这里管理</div>
+              </div>
+            </div>
+            <div class="conn-list conn-list-main" id="connList">
+              <div class="sb-empty">暂无连接<br>使用左侧连接配置创建连接</div>
+            </div>
+          </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Embedded Admin Pages -->
+    <div class="panel" id="panel-task-center">
+      <div class="ops-page task-center-page">
+        <div class="ops-hero">
+          <div>
+            <div class="ops-kicker">Task Center</div>
+            <h2>通用脚本 / 工具任务中心</h2>
+            <p>提供通用脚本任务平台，当前 M1 支持 Node 本机和 Pod 内手动执行、日志采集和执行历史；定时调度、OSS 同步后续扩展。</p>
+          </div>
+          <div class="task-actions">
+            <button class="btn btn-g" onclick="loadTaskCenter()">刷新</button>
+            <button class="btn btn-p" onclick="createTaskDefinitionFromForm()">创建任务</button>
+          </div>
+        </div>
+
+        <div class="task-summary" id="taskSummary">
+          <div class="task-stat"><span>模板</span><b>-</b></div>
+          <div class="task-stat"><span>任务</span><b>-</b></div>
+          <div class="task-stat"><span>执行</span><b>-</b></div>
+          <div class="task-stat"><span>运行中</span><b>-</b></div>
+          <div class="task-stat"><span>调度</span><b>-</b></div>
+        </div>
+
+        <div class="task-layout">
+          <section class="task-card task-form-card">
+            <div class="task-form-shell">
+              <div class="task-form-head">
+                <div>
+                  <div class="task-card-title">创建脚本任务</div>
+                  <div class="task-card-sub">先选执行位置，再选择脚本来源；创建后可手动执行或绑定定时调度。</div>
+                </div>
+                <span class="task-form-badge">M1</span>
+              </div>
+
+              <div class="task-form-section">
+                <div class="task-form-section-title"><span>1</span>基础信息</div>
+                <label class="fl">任务名称</label>
+                <input id="taskName" class="inp" placeholder="例如：Pod 环境巡检">
+              </div>
+
+              <div class="task-form-section">
+                <div class="task-form-section-title"><span>2</span>执行位置</div>
+                <select id="taskExecutionMode" class="inp task-mode-select" onchange="toggleTaskTargetFields()">
+                  <option value="node">Node 本机执行</option>
+                  <option value="pod">Pod 内执行</option>
+                </select>
+                <div class="task-mode-hints">
+                  <div class="task-mode-option"><b>Node 本机</b><span>适合执行平台节点巡检、kubectl/本地工具调用。</span></div>
+                  <div class="task-mode-option"><b>Pod 内执行</b><span>适合进入目标容器执行脚本，采集容器内结果。</span></div>
+                </div>
+                <div id="taskPodTargetBox" class="task-pod-target" style="display:none">
+                  <div class="task-row">
+                    <div>
+                      <label class="fl">集群</label>
+                      <input id="taskCluster" class="inp" placeholder="cluster name">
+                    </div>
+                    <div>
+                      <label class="fl">命名空间</label>
+                      <input id="taskNamespace" class="inp" value="default">
+                    </div>
+                  </div>
+                  <div class="task-row">
+                    <div>
+                      <label class="fl">Pod</label>
+                      <input id="taskPod" class="inp" placeholder="pod name">
+                    </div>
+                    <div>
+                      <label class="fl">容器</label>
+                      <input id="taskContainer" class="inp" placeholder="可选">
+                    </div>
+                  </div>
+                  <button class="btn btn-g task-fill-btn" type="button" onclick="fillTaskPodTargetFromCurrent()">从当前 Pod 连接填充</button>
+                </div>
+              </div>
+
+              <div class="task-form-section">
+                <div class="task-form-section-title"><span>3</span>脚本来源</div>
+                <label class="fl">脚本模板</label>
+                <select id="taskTemplate" class="inp" onchange="syncTaskTemplateRuntime()"></select>
+                <label class="fl">内联脚本（可选，留空则使用模板脚本）</label>
+                <textarea id="taskScript" class="inp task-script" spellcheck="false" placeholder="print('hello task center')"></textarea>
+              </div>
+
+              <div class="task-form-section task-form-compact">
+                <div class="task-form-section-title"><span>4</span>执行参数</div>
+                <div class="task-row">
+                  <div>
+                    <label class="fl">运行时</label>
+                    <select id="taskRuntime" class="inp">
+                      <option value="python">python</option>
+                      <option value="shell">shell</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label class="fl">超时秒数</label>
+                    <input id="taskTimeout" class="inp" type="number" min="1" max="600" value="60">
+                  </div>
+                </div>
+              </div>
+
+              <div class="task-form-footer">
+                <div class="task-help">Node 本机适合平台节点巡检；Pod 内执行会通过 kubectl exec 将脚本临时写入目标容器 /tmp 后执行。</div>
+                <button class="btn btn-p task-form-submit" type="button" onclick="createTaskDefinitionFromForm()">创建任务</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="task-card">
+            <div class="task-card-hd">
+              <div>
+                <div class="task-card-title">任务定义</div>
+                <div class="task-card-sub">当前用户创建的脚本任务</div>
+              </div>
+            </div>
+            <div id="taskDefinitionList" class="task-list"><div class="sb-empty">暂无任务</div></div>
+          </section>
+        </div>
+
+        <section class="task-card task-runs-card">
+          <div class="task-card-hd">
+            <div>
+              <div class="task-card-title">执行记录</div>
+              <div class="task-card-sub">最近 50 次执行结果，点击“日志”查看 stdout / stderr</div>
+            </div>
+          </div>
+          <div id="taskRunList" class="task-run-list"><div class="sb-empty">暂无执行记录</div></div>
+        </section>
+
+        <!-- 调度管理 -->
+        <section class="task-card task-schedule-card">
+          <div class="task-card-hd">
+            <div>
+              <div class="task-card-title">定时调度</div>
+              <div class="task-card-sub">为任务绑定 interval 定时调度，后台每 5 秒轮询到期任务自动执行</div>
+            </div>
+            <button class="btn btn-p" onclick="openCreateScheduleModal()">+ 新建调度</button>
+          </div>
+          <div id="taskScheduleList" class="task-list"><div class="sb-empty">暂无调度</div></div>
+        </section>
+      </div>
+    </div>
+
+    <!-- 新建调度对话框 -->
+    <div class="modal-bg" id="modalCreateSchedule" style="display:none" onclick="if(event.target===this)closeCreateScheduleModal()">
+      <div class="modal-box" style="max-width:460px">
+        <div class="modal-hd">新建定时调度</div>
+        <label class="fl">绑定任务</label>
+        <select id="scheduleTaskId" class="inp"></select>
+        <label class="fl">调度名称</label>
+        <input id="scheduleName" class="inp" placeholder="例如：每小时巡检">
+        <label class="fl">执行间隔（秒，最小 60，最大 86400）</label>
+        <input id="scheduleInterval" class="inp" type="number" min="60" max="86400" value="3600">
+        <div class="modal-ft">
+          <button class="btn btn-g" onclick="closeCreateScheduleModal()">取消</button>
+          <button class="btn btn-p" onclick="submitCreateSchedule()">创建</button>
+        </div>
+      </div>
+    </div>
+
+
+    <div class="panel" id="panel-toolchain-center">
+      <div class="ops-page toolchain-page">
+        <div class="ops-hero">
+          <div>
+            <div class="ops-kicker">Toolchain</div>
+            <h2>诊断工具链管理</h2>
+            <p>上传 Arthas JAR 等离线工具，校验本地缓存，并在 Pod 未预装 Arthas 时一键分发到目标容器。</p>
+          </div>
+          <div class="toolchain-hero-actions">
+            <button class="btn btn-g" onclick="loadToolchainCenter()">刷新</button>
+            <button class="btn btn-p" onclick="uploadToolPackageFromForm()">上传离线工具</button>
+            <button class="btn btn-g" onclick="openTaskCenterFromToolchain()">进入任务中心配置</button>
+          </div>
+        </div>
+
+        <div class="task-summary toolchain-summary" id="toolchainSummary">
+          <div class="task-stat"><span>工具包</span><b>-</b></div>
+          <div class="task-stat"><span>可用</span><b>-</b></div>
+          <div class="task-stat"><span>Arthas</span><b>-</b></div>
+          <div class="task-stat"><span>已上传</span><b>-</b></div>
+        </div>
+
+        <div class="toolchain-grid">
+          <section class="task-card toolchain-focus-card">
+            <div class="task-card-hd">
+              <div>
+                <div class="task-card-title">Arthas 离线分发</div>
+                <div class="task-card-sub">默认本地路径 /app/arthas/arthas-boot.jar，默认 Pod 安装路径 /tmp/arthas/arthas-boot.jar</div>
+              </div>
+              <span class="task-status running">离线 JAR → Pod</span>
+            </div>
+            <div class="toolchain-distribute-box">
+              <div class="task-row">
+                <div><label class="fl">集群</label><input id="toolTargetCluster" class="inp" placeholder="cluster name"></div>
+                <div><label class="fl">命名空间</label><input id="toolTargetNamespace" class="inp" value="default"></div>
+              </div>
+              <div class="task-row">
+                <div><label class="fl">Pod</label><input id="toolTargetPod" class="inp" placeholder="pod name"></div>
+                <div><label class="fl">容器</label><input id="toolTargetContainer" class="inp" placeholder="可选"></div>
+              </div>
+              <label class="fl">Pod 安装路径</label>
+              <input id="toolTargetInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
+              <button class="btn btn-g task-fill-btn" type="button" onclick="fillToolchainPodTargetFromCurrent()">从当前 Pod 连接填充</button>
+              <div class="task-help">工具包列表中的“分发到 Pod”会调用 distributeToolPackage(packageId)，使用上方目标信息。</div>
+            </div>
+          </section>
+
+          <section class="task-card toolchain-upload-card">
+            <div class="task-card-hd">
+              <div>
+                <div class="task-card-title">上传离线工具二进制</div>
+                <div class="task-card-sub">上传 arthas-boot.jar、async-profiler 或 jattach，并登记为任务中心可用工具包。</div>
+              </div>
+            </div>
+            <label class="fl">工具名称</label>
+            <input id="toolPackageName" class="inp" placeholder="例如：arthas-boot-3.7.2">
+            <div class="task-row">
+              <div><label class="fl">工具类型</label><select id="toolPackageType" class="inp"><option value="arthas">Arthas</option><option value="async-profiler">async-profiler</option><option value="jattach">jattach</option><option value="generic">通用工具</option></select></div>
+              <div><label class="fl">版本</label><input id="toolPackageVersion" class="inp" placeholder="例如：3.7.2"></div>
+            </div>
+            <label class="fl">默认安装路径</label>
+            <input id="toolPackageInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
+            <label class="fl">二进制文件</label>
+            <div class="toolchain-file-picker">
+              <input id="toolPackageFile" class="inp toolchain-file-input" type="file" onchange="document.getElementById('toolPackageFileName').textContent = this.files?.[0]?.name || '未选择文件'">
+              <button class="btn btn-g" type="button" onclick="document.getElementById('toolPackageFile')?.click()">选择文件</button>
+              <span id="toolPackageFileName">未选择文件</span>
+            </div>
+            <label class="fl">描述</label>
+            <textarea id="toolPackageDesc" class="inp" rows="3" placeholder="说明工具来源、用途和适用场景"></textarea>
+            <div class="task-form-footer">
+              <div class="task-help">上传后会计算 SHA256；分发到 Pod 前可先校验本地文件。</div>
+              <div class="task-item-actions">
+                <button class="btn btn-g" onclick="createToolPackageFromForm()">仅登记</button>
+                <button class="btn btn-p" onclick="uploadToolPackageFromForm()">上传并登记</button>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <section class="task-card task-runs-card">
+          <div class="task-card-hd">
+            <div>
+              <div class="task-card-title">快速工具规划</div>
+              <div class="task-card-sub">常用一次性工具：jad/retransform 热更新、上传源码覆盖、Pod Python 文件下载服务。</div>
+            </div>
+          </div>
+          <div id="toolQuickPlanList" class="tool-quick-plan-list"><div class="sb-empty">加载任务模板后展示快速工具规划</div></div>
+          <div class="toolchain-source-upload">
+            <div class="task-card-title">上传 Java 源码到 Pod</div>
+            <div class="task-card-sub">把修改后的 .java 上传到 /tmp/arthas-sources，随后在 Arthas 中执行 mc + retransform。</div>
+            <div class="task-row">
+              <div><label class="fl">源码目录</label><input id="arthasSourceDir" class="inp" value="/tmp/arthas-sources"></div>
+              <div><label class="fl">Java 源码</label><input id="arthasSourceFile" class="inp toolchain-file-input" type="file" accept=".java"></div>
+            </div>
+            <button class="btn btn-p" onclick="uploadArthasSourceFromForm()">上传源码到当前 Pod</button>
+          </div>
+        </section>
+
+        <section class="task-card task-runs-card arthas-user-case-card">
+          <div class="task-card-hd">
+            <div>
+              <div class="task-card-title">Arthas 最佳实践 → 产品工具能力</div>
+              <div class="task-card-sub">来自 GitHub user-case 与 Spectre retransform 工作流，沉淀为可点击的诊断/热替换能力。</div>
+            </div>
+          </div>
+          <div id="arthasUserCaseList" class="arthas-user-case-list"><div class="sb-empty">正在加载 Arthas user-case 能力图谱</div></div>
+        </section>
+
+        <section class="task-card task-runs-card">
+          <div class="task-card-hd">
+            <div>
+              <div class="task-card-title">离线工具包</div>
+              <div class="task-card-sub">支持校验、启停、删除，以及自动把 Arthas JAR 分发到当前 Pod。</div>
+            </div>
+          </div>
+          <div id="toolPackageList" class="toolchain-package-list"><div class="sb-empty">暂无工具包</div></div>
+        </section>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-model-config">
+      <div class="ops-page">
+        <div class="ops-hero">
+          <div>
+            <div class="ops-kicker">Model Config</div>
+            <h2>大模型配置</h2>
+            <p>保留平台内模型配置能力，用于配置 Base URL、模型名称、API Key 和系统提示词；配置数据不进入默认诊断上下文。</p>
+          </div>
+          <button class="ib" onclick="aiOpenSettings()">⚙️ 打开配置弹窗</button>
+        </div>
+        <div class="ops-grid">
+          <div class="ops-card">
+            <div class="ops-card-title">模型供应商</div>
+            <div class="ops-card-desc">支持 OpenAI 兼容接口、DeepSeek、通义千问、月之暗面和 Ollama 本地模型等配置。</div>
+            <div class="ops-meta">入口：大模型配置弹窗</div>
+          </div>
+          <div class="ops-card">
+            <div class="ops-card-title">上下文策略</div>
+            <div class="ops-card-desc">默认只注入当前连接的精简诊断摘要，不注入 MCP Token、客户端 JSON 或长配置。</div>
+            <div class="ops-meta">目标：降低默认上下文体积</div>
+          </div>
+          <div class="ops-card">
+            <div class="ops-card-title">安全边界</div>
+            <div class="ops-card-desc">API Key 后端保存并脱敏返回；前端只在配置弹窗中编辑，不在聊天上下文中输出。</div>
+            <div class="ops-meta">状态：已保留</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel" id="panel-mcp-center">
+      <iframe class="admin-frame" src="mcp-config.html?embed=1" title="MCP 接入"></iframe>
+    </div>
+
+    <!-- Embedded Admin Pages -->
+    <div class="panel" id="panel-user-management">
+      <iframe class="admin-frame" src="user-management.html?embed=1" title="用户管理"></iframe>
+    </div>
+
+    <div class="panel" id="panel-audit-logs">
+      <iframe class="admin-frame" src="audit-logs.html?embed=1" title="审计日志"></iframe>
+    </div>
 
     <!-- Arthas Console -->
     <div class="panel" id="panel-console">
@@ -201,7 +641,7 @@ document.addEventListener('DOMContentLoaded', function() {
           </div>
           <div class="con-out" id="conOut">
             <div class="o-dim">── Arthas K8s 诊断台 ─────────────────────────────────────────────────────</div>
-            <div class="o-dim">左侧配置集群和 Pod，点击「⚡ 连接」建立 Arthas HTTP API 会话</div>
+            <div class="o-dim">左侧配置集群和 Pod，点击「⚡ 连接」建立 Arthas 诊断会话</div>
             <div class="o-dim">命令面板支持 30+ 诊断命令，watch/trace/dashboard 支持持续输出 Session</div>
           </div>
           <div class="bldr" id="cmdBldr" style="display:none">
@@ -219,7 +659,7 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
 
     <!-- JProfiler -->
-    <div class="panel on" id="panel-profiler">
+    <div class="panel" id="panel-profiler">
       <div class="pf-grid">
         <div class="pf-cfg">
           <!-- 采样工具选择 -->
@@ -792,74 +1232,25 @@ document.addEventListener('DOMContentLoaded', function() {
 
 <div id="toast"></div>
 
-<!-- MCP Config Modal -->
-<div class="modal-bg" id="mcpModal">
-  <div class="modal" style="width:700px;max-height:85vh;display:flex;flex-direction:column">
-    <div class="mhd"><span class="m-tt">🤖 MCP 接入配置</span><button class="m-cl" onclick="closeMcpModal()">✕</button></div>
-    <div class="mbd" style="overflow-y:auto;flex:1">
-      <!-- 说明 -->
-      <div style="padding:8px 10px;background:var(--bg3);border-radius:6px;font-size:11px;color:var(--tx2);line-height:1.7;margin-bottom:12px">
-        通过 MCP 协议让 AI 客户端（Claude Desktop / Cherry Studio / Cline 等）直接调用 Arthas 诊断工具，实现自动诊断 Java 应用问题。
+<!-- Change Password Modal -->
+<div class="modal-bg" id="pwdModal">
+  <div class="modal" style="width:420px">
+    <div class="mhd"><span class="m-tt">🔑 修改密码</span><button class="m-cl" onclick="closeChangePasswordModal()">✕</button></div>
+    <div class="mbd">
+      <div style="padding:8px 10px;background:var(--bg3);border:1px solid var(--ln);border-radius:6px;font-size:11px;color:var(--tx2);line-height:1.6;margin-bottom:12px">
+        修改后请使用新密码重新登录。建议设置不少于 6 位的密码。
       </div>
-      <!-- 创建 Token -->
-      <div class="fg">
-        <div style="display:flex;align-items:center;gap:8px">
-          <label class="fl" style="margin-bottom:0">选择 Arthas 连接</label>
-          <button class="ib" style="font-size:10px;padding:2px 8px;margin-left:auto" onclick="mcpUseCurrentConn()">📌 使用当前连接</button>
-        </div>
-        <div id="mcp-conn-list" style="display:flex;flex-direction:column;gap:6px;max-height:160px;overflow-y:auto">
-          <div style="text-align:center;padding:16px;color:var(--tx3);font-size:12px">加载中...</div>
-        </div>
-      </div>
-      <div class="fg">
-        <div style="display:flex;gap:8px;align-items:flex-end">
-          <div style="flex:1"><label class="fl">Token 名称</label><input class="fi" id="mcpTokenName" placeholder="如：my-app-diag"></div>
-          <button class="btn btn-p" onclick="mcpCreateToken()" style="white-space:nowrap;padding:6px 16px">生成 Token</button>
-        </div>
-      </div>
-      <!-- Token 列表 -->
-      <div class="fg">
-        <label class="fl">已有 Token</label>
-        <div id="mcp-token-list" style="display:flex;flex-direction:column;gap:6px">
-          <div style="text-align:center;padding:12px;color:var(--tx3);font-size:12px">暂无 Token</div>
-        </div>
-      </div>
-      <!-- 配置 JSON（选中后显示） -->
-      <div id="mcp-config-section" style="display:none">
-        <div id="mcp-config-hint" style="display:none;padding:8px 10px;background:var(--bg3);border-radius:6px;font-size:11px;line-height:1.6;margin-bottom:8px"></div>
-        <div class="fg">
-          <label class="fl">AI 客户端配置</label>
-          <div style="display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap">
-            <button class="ib mcp-ct on" data-client="cherry_studio_cline" onclick="mcpSwitchClient(this)">Cherry Studio (HTTP)</button>
-            <button class="ib mcp-ct" data-client="cherry_studio_sse" onclick="mcpSwitchClient(this)">Cherry Studio (SSE)</button>
-            <button class="ib mcp-ct" data-client="claude_desktop" onclick="mcpSwitchClient(this)">Claude Desktop</button>
-            <button class="ib mcp-ct" data-client="cursor" onclick="mcpSwitchClient(this)">Cursor</button>
-          </div>
-          <div style="position:relative">
-            <button class="btn btn-g" style="position:absolute;top:6px;right:6px;padding:2px 8px;font-size:10px;z-index:1" onclick="mcpCopyConfig()">📋 复制</button>
-            <pre id="mcpConfigJson" style="background:var(--bg);border:1px solid var(--ln);border-radius:6px;padding:12px;font-size:11px;line-height:1.6;overflow-x:auto;font-family:var(--mono);color:var(--tx2);max-height:250px;overflow-y:auto"></pre>
-          </div>
-        </div>
-      </div>
+      <div class="fg"><label class="fl">当前密码</label><input class="fi" id="pwdOld" type="password" autocomplete="current-password" placeholder="输入当前密码"></div>
+      <div class="fg"><label class="fl">新密码</label><input class="fi" id="pwdNew" type="password" autocomplete="new-password" placeholder="至少 6 位"></div>
+      <div class="fg"><label class="fl">确认新密码</label><input class="fi" id="pwdConfirm" type="password" autocomplete="new-password" placeholder="再次输入新密码"></div>
+      <div id="pwdModalErr" style="color:var(--a5);font-size:11px;margin-top:6px;display:none"></div>
+    </div>
+    <div class="mft">
+      <button class="btn btn-g" onclick="closeChangePasswordModal()">取消</button>
+      <button class="btn btn-p" onclick="submitChangePassword()">保存</button>
     </div>
   </div>
 </div>
 
-<style>
-.mcp-ct { padding:4px 10px; font-size:11px; border-radius:4px; background:var(--bg3); border:1px solid var(--bd); cursor:pointer; color:var(--tx2); }
-.mcp-ct.on { background:rgba(122,162,247,.15); color:var(--a); border-color:var(--a); }
-.mcp-conn-opt { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--bg2); border:1px solid var(--bd); border-radius:6px; cursor:pointer; transition:all .15s; }
-.mcp-conn-opt:hover { border-color:var(--a); }
-.mcp-conn-opt.sel { border-color:var(--a); background:rgba(122,162,247,.08); }
-.mcp-conn-opt .dot { width:8px; height:8px; border-radius:50%; flex-shrink:0; }
-.mcp-conn-opt .dot.alive { background:var(--a3); }
-.mcp-conn-opt .dot.dead { background:var(--a5); }
-.mcp-token-row { display:flex; align-items:center; gap:8px; padding:8px 10px; background:var(--bg2); border:1px solid var(--bd); border-radius:6px; font-size:12px; }
-.mcp-token-row .name { font-weight:500; min-width:80px; }
-.mcp-token-row .conn { color:var(--tx3); font-family:var(--mono); font-size:10px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.mcp-token-row .badge { font-size:10px; padding:2px 6px; border-radius:8px; }
-.mcp-token-row .badge.active { background:rgba(63,185,80,.15); color:var(--a3); }
-.mcp-token-row .badge.inactive { background:rgba(139,148,158,.1); color:var(--tx3); }
-</style>
 </body>
 </html>

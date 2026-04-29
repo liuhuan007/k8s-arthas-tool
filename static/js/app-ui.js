@@ -53,6 +53,722 @@ function initUserDisplay() {
   });
 }
 
+// ── Topbar Global Menu ────────────────────────────────────────────────────────
+function openConnectionCenter() {
+  switchTab('connections');
+}
+
+const PAGE_SCENE_META = {
+  connections: { required: 'none', showConnBar: true },
+  profiler: { required: 'arthas', showConnBar: true },
+  console: { required: 'arthas', showConnBar: true },
+  terminal: { required: 'pod', showConnBar: true },
+  monitor: { required: 'pod', showConnBar: true },
+  filebrowser: { required: 'pod', showConnBar: true },
+  diag: { required: 'pod', showConnBar: true },
+  ai: { required: 'none', showConnBar: true },
+  history: { required: 'none', showConnBar: true },
+  'model-config': { required: 'none', showConnBar: false },
+  'mcp-center': { required: 'none', showConnBar: false },
+  'task-center': { required: 'none', showConnBar: false },
+  'toolchain-center': { required: 'none', showConnBar: false },
+  'user-management': { required: 'none', showConnBar: false },
+  'audit-logs': { required: 'none', showConnBar: false },
+};
+
+function updateConnectionBarVisibility(tab) {
+  const meta = PAGE_SCENE_META[tab] || { showConnBar: true };
+  window.__hideConnStatusBar = meta.showConnBar === false;
+  const bar = document.getElementById('connStatusBar');
+  if (bar) bar.style.display = window.__hideConnStatusBar ? 'none' : '';
+}
+
+function openTaskCenter() {
+  switchTab('task-center');
+}
+
+function openToolchainCenter() {
+  switchTab('toolchain-center');
+  loadToolchainCenter();
+}
+
+function openModelConfig() {
+  switchTab('model-config');
+}
+
+function openMcpCenter() {
+  switchTab('mcp-center');
+}
+
+// ── Toolchain Center ─────────────────────────────────────────────────────────
+let _toolPackages = [];
+let _toolchainLoading = false;
+
+const ARTHAS_USER_CASE_CAPABILITIES = [
+  { name: 'CPU 高负载一键诊断', issue: '#1202/#569', stage: 'M1', cmd: 'thread/profiler/trace', desc: '高 CPU 线程定位、热点方法与采样报告组合。' },
+  { name: 'Trace 调用链耗时分析', issue: '#597/#764/#729', stage: 'M1', cmd: 'trace', desc: '方法调用树、慢调用和 Controller/Service/DAO 分层耗时。' },
+  { name: 'Watch 方法现场观测', issue: '#764/#772', stage: 'M1', cmd: 'watch/ognl', desc: '观察入参、返回值、异常和对象字段。' },
+  { name: 'Controller 请求入口定位', issue: '#729', stage: 'M1', cmd: 'stack/trace', desc: '定位请求进入的 Controller、Interceptor 与 Service。' },
+  { name: 'TraceId 上下文提取', issue: '#1244', stage: 'M2', cmd: 'ognl/MDC', desc: '从 MDC、ThreadLocal 或 RPC 上下文提取 traceId。' },
+  { name: 'Spring 事务配置生效诊断', issue: '#764', stage: 'M1', cmd: 'sc/trace/watch', desc: '验证事务代理、超时和传播行为是否真的生效。' },
+  { name: 'Logger 动态日志级别调整', issue: '#849', stage: 'M1', cmd: 'logger', desc: '在线查看与调整日志级别，排查后恢复。' },
+  { name: 'Heapdump 内存快照工具', issue: '#849', stage: 'M1', cmd: 'heapdump', desc: '生成堆快照并配合文件下载服务导出。' },
+  { name: 'VMOption 运行时参数查看', issue: '#849', stage: 'M1', cmd: 'vmoption', desc: '查看/调整 HotSpot Diagnostic Options。' },
+  { name: 'ClassLoader 类冲突排查', issue: '#763/#1003', stage: 'M1', cmd: 'sc/classloader/jad', desc: '定位类来源、ClassLoader hash 和线上实际字节码。' },
+  { name: 'Spectre 热替换工作台', issue: 'spectre', stage: 'M2', cmd: 'jad/mc/retransform', desc: '借鉴 Spectre，把反编译、编辑、编译、热替换做成工作台。' },
+];
+
+function renderArthasUserCaseCapabilities() {
+  const el = document.getElementById('arthasUserCaseList');
+  if (!el) return;
+  el.innerHTML = ARTHAS_USER_CASE_CAPABILITIES.map(item => {
+    const tpl = _taskTemplates.find(t => t.name === item.name || (item.name === 'Spectre 热替换工作台' && t.name === 'Arthas jad/retransform 热更新工作流'));
+    const action = tpl ? `createTaskFromTemplateQuick(${tpl.id})` : 'openTaskCenterFromToolchain()';
+    return `<div class="arthas-user-case-item">
+      <div class="arthas-user-case-top"><b>${escapeHtml(item.name)}</b><span>${escapeHtml(item.stage)} · ${escapeHtml(item.issue)}</span></div>
+      <div class="arthas-user-case-desc">${escapeHtml(item.desc)}</div>
+      <div class="arthas-user-case-cmd">${escapeHtml(item.cmd)}</div>
+      <button class="btn btn-g" onclick="${action}">${tpl ? '创建工具任务' : '查看任务中心'}</button>
+    </div>`;
+  }).join('');
+}
+
+async function safeUploadToolPackage(url, form, timeoutMs = 300000) {
+  const fullUrl = url.startsWith('http') ? url : `${API}${url}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const r = await fetch(fullUrl, { method: 'POST', body: form, signal: controller.signal, credentials: 'include' });
+    clearTimeout(timer);
+    if (r.status === 401) {
+      window.location.replace('/login.html');
+      throw new Error('会话已过期，请重新登录');
+    }
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.error || data.message || `上传失败 (${r.status})`);
+    return data;
+  } catch (e) {
+    clearTimeout(timer);
+    if (e.name === 'AbortError') throw new Error(`上传超时 (${timeoutMs / 1000}s)`);
+    throw e;
+  }
+}
+
+function renderToolQuickPlans() {
+  const el = document.getElementById('toolQuickPlanList');
+  if (!el) return;
+  const names = ['Arthas jad/retransform 热更新工作流', 'Arthas 上传源码覆盖并 retransform', 'Pod Python 文件下载服务'];
+  el.innerHTML = names.map(name => {
+    const tpl = _taskTemplates.find(t => t.name === name);
+    const action = tpl ? `createTaskFromTemplateQuick(${tpl.id})` : 'openTaskCenterFromToolchain()';
+    return `<div class="tool-quick-plan"><div><b>${escapeHtml(name)}</b><span>${tpl ? escapeHtml(tpl.description || '') : '请先刷新任务中心模板'}</span></div><button class="btn btn-g" onclick="${action}">${tpl ? '创建任务' : '查看模板'}</button></div>`;
+  }).join('');
+}
+
+async function createTaskFromTemplateQuick(templateId) {
+  switchTab('task-center');
+  await loadTaskCenter();
+  const sel = document.getElementById('taskTemplate');
+  if (sel) {
+    sel.value = String(templateId);
+    syncTaskTemplateRuntime();
+  }
+  toast('已切换到任务中心，可基于该模板创建任务', 'ok');
+}
+
+async function uploadArthasSourceFromForm() {
+  const fileEl = document.getElementById('arthasSourceFile');
+  const file = fileEl?.files?.[0];
+  const target = getToolchainTargetFromForm();
+  if (!file) return toast('请选择 .java 源码文件', 'warn');
+  if (!target.cluster_name || !target.pod_name) return toast('请填写 Pod 分发目标', 'warn');
+  const form = new FormData();
+  form.append('file', file);
+  form.append('cluster_name', target.cluster_name);
+  form.append('namespace', target.namespace);
+  form.append('pod_name', target.pod_name);
+  form.append('container', target.container);
+  form.append('source_dir', document.getElementById('arthasSourceDir')?.value?.trim() || '/tmp/arthas-sources');
+  try {
+    await safeUploadToolPackage('/tasks/arthas/source-upload', form, 300000);
+    toast('Java 源码已上传到 Pod，可执行 mc + retransform', 'ok');
+    fileEl.value = '';
+  } catch (e) {
+    toast(`源码上传失败：${e.message}`, 'err');
+  }
+}
+
+function toolStatusLabel(status) {
+  const map = { active: '可用', inactive: '未就绪', missing: '缺失', disabled: '停用' };
+  return map[status] || status || '-';
+}
+
+function toolTypeLabel(type) {
+  const map = { arthas: 'Arthas', 'async-profiler': 'async-profiler', jattach: 'jattach', generic: '通用工具' };
+  return map[type] || type || '通用工具';
+}
+
+function renderToolchainSummary() {
+  const el = document.getElementById('toolchainSummary');
+  if (!el) return;
+  const total = _toolPackages.length;
+  const active = _toolPackages.filter(p => p.status === 'active').length;
+  const arthas = _toolPackages.filter(p => p.tool_type === 'arthas').length;
+  const uploaded = _toolPackages.filter(p => p.source_type === 'upload').length;
+  const items = [['工具包', total], ['可用', active], ['Arthas', arthas], ['已上传', uploaded]];
+  el.innerHTML = items.map(([label, value]) => `<div class="task-stat"><span>${label}</span><b>${value}</b></div>`).join('');
+}
+
+function getToolchainTargetFromForm() {
+  return {
+    cluster_name: document.getElementById('toolTargetCluster')?.value?.trim() || '',
+    namespace: document.getElementById('toolTargetNamespace')?.value?.trim() || 'default',
+    pod_name: document.getElementById('toolTargetPod')?.value?.trim() || '',
+    container: document.getElementById('toolTargetContainer')?.value?.trim() || '',
+    install_path: document.getElementById('toolTargetInstallPath')?.value?.trim() || '/tmp/arthas/arthas-boot.jar',
+  };
+}
+
+function fillToolchainPodTargetFromCurrent() {
+  const target = typeof getCurrentPodTarget === 'function' ? getCurrentPodTarget() : {};
+  const map = {
+    toolTargetCluster: target.cluster_name || '',
+    toolTargetNamespace: target.namespace || 'default',
+    toolTargetPod: target.pod_name || '',
+    toolTargetContainer: target.container || '',
+  };
+  Object.entries(map).forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  });
+  if (!target.cluster_name || !target.pod_name) toast('当前没有可填充的 Pod 连接，请手动填写目标', 'warn');
+}
+
+function renderToolPackages() {
+  renderToolchainSummary();
+  const list = document.getElementById('toolPackageList');
+  if (!list) return;
+  if (!_toolPackages.length) {
+    list.innerHTML = '<div class="sb-empty">暂无工具包<br>可上传 arthas-boot.jar 或使用内置 Arthas 离线工具。</div>';
+    return;
+  }
+  list.innerHTML = _toolPackages.map(p => {
+    const sha = p.sha256 ? `${escapeHtml(p.sha256.slice(0, 12))}…${escapeHtml(p.sha256.slice(-8))}` : '未校验';
+    const size = p.file_size ? fmtSz(p.file_size) : '-';
+    const active = p.status === 'active';
+    return `<div class="toolchain-package-item">
+      <div class="toolchain-package-main">
+        <div>
+          <div class="task-item-name">${escapeHtml(p.name)} ${p.is_builtin ? '<span class="task-status running">内置</span>' : ''}</div>
+          <div class="task-item-meta">类型：${toolTypeLabel(p.tool_type)} · 版本：${escapeHtml(p.version || '-')} · 文件：${escapeHtml(p.file_name || p.file_path || '-')} · 大小：${size} · 模板：${p.template_count || 0}</div>
+          <div class="toolchain-hash">SHA256 ${sha} · Pod 安装路径 ${escapeHtml(p.install_path || '-')}</div>
+        </div>
+        <div class="task-item-actions">
+          <span class="task-status ${escapeHtml(p.status || '')}">${toolStatusLabel(p.status)}</span>
+          <button class="btn btn-g" onclick="verifyToolPackage(${p.id})">校验</button>
+          <button class="btn btn-p" onclick="distributeToolPackage(${p.id})">分发到 Pod</button>
+          <button class="btn btn-g" onclick="toggleToolPackageStatus(${p.id}, '${active ? 'disabled' : 'active'}')">${active ? '停用' : '启用'}</button>
+          ${p.is_builtin ? '' : `<button class="btn btn-g danger-text" onclick="deleteToolPackage(${p.id})">删除</button>`}
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+async function loadToolchainCenter() {
+  if (_toolchainLoading) return;
+  _toolchainLoading = true;
+  try {
+    const data = await safeGet('/tasks/tool-packages');
+    _toolPackages = data.packages || [];
+    renderToolPackages();
+    if (!_taskTemplates.length) {
+      try {
+        const tpl = await safeGet('/tasks/templates');
+        _taskTemplates = tpl.templates || [];
+      } catch (_) {}
+    }
+    renderToolQuickPlans();
+    renderArthasUserCaseCapabilities();
+  } catch (e) {
+    toast(`工具链加载失败：${e.message}`, 'err');
+  } finally {
+    _toolchainLoading = false;
+  }
+}
+
+async function createToolPackageFromForm() {
+  const body = {
+    name: document.getElementById('toolPackageName')?.value?.trim() || '',
+    tool_type: document.getElementById('toolPackageType')?.value || 'arthas',
+    version: document.getElementById('toolPackageVersion')?.value?.trim() || '',
+    install_path: document.getElementById('toolPackageInstallPath')?.value?.trim() || '/tmp/arthas/arthas-boot.jar',
+    description: document.getElementById('toolPackageDesc')?.value?.trim() || '',
+  };
+  if (!body.name) return toast('请填写工具名称', 'warn');
+  try {
+    await safePost('/tasks/tool-packages', body);
+    toast('工具包已创建', 'ok');
+    await loadToolchainCenter();
+  } catch (e) {
+    toast(`创建工具包失败：${e.message}`, 'err');
+  }
+}
+
+async function uploadToolPackageFromForm() {
+  const fileEl = document.getElementById('toolPackageFile');
+  const file = fileEl?.files?.[0];
+  if (!file) return toast('请选择离线工具文件', 'warn');
+  const form = new FormData();
+  form.append('file', file);
+  form.append('name', document.getElementById('toolPackageName')?.value?.trim() || file.name);
+  form.append('tool_type', document.getElementById('toolPackageType')?.value || 'arthas');
+  form.append('version', document.getElementById('toolPackageVersion')?.value?.trim() || '');
+  form.append('install_path', document.getElementById('toolPackageInstallPath')?.value?.trim() || '/tmp/arthas/arthas-boot.jar');
+  form.append('description', document.getElementById('toolPackageDesc')?.value?.trim() || '');
+  try {
+    await safeUploadToolPackage('/tasks/tool-packages/upload', form, 300000);
+    toast('离线工具已上传', 'ok');
+    fileEl.value = '';
+    await loadToolchainCenter();
+  } catch (e) {
+    toast(`上传失败：${e.message}`, 'err');
+  }
+}
+
+async function verifyToolPackage(packageId) {
+  try {
+    const data = await safePost(`/tasks/tool-packages/${packageId}/verify`, {});
+    toast(data.ok ? '工具文件校验通过' : '工具文件不存在或不可用', data.ok ? 'ok' : 'warn');
+    await loadToolchainCenter();
+  } catch (e) {
+    toast(`校验失败：${e.message}`, 'err');
+  }
+}
+
+async function distributeToolPackage(packageId) {
+  const target = getToolchainTargetFromForm();
+  if (!target.cluster_name || !target.pod_name) return toast('请填写 Pod 分发目标', 'warn');
+  try {
+    toast('开始分发离线工具到 Pod...', 'info');
+    await safePost(`/tasks/tool-packages/${packageId}/distribute`, target, 300000);
+    toast('离线工具已分发到 Pod', 'ok');
+  } catch (e) {
+    toast(`分发失败：${e.message}`, 'err');
+  }
+}
+
+async function toggleToolPackageStatus(packageId, status) {
+  try {
+    await safePut(`/tasks/tool-packages/${packageId}`, { status });
+    toast(status === 'active' ? '工具包已启用' : '工具包已停用', 'ok');
+    await loadToolchainCenter();
+  } catch (e) {
+    toast(`操作失败：${e.message}`, 'err');
+  }
+}
+
+async function deleteToolPackage(packageId) {
+  if (!confirm('确认删除此离线工具包？上传文件也会被删除。')) return;
+  try {
+    await safeDelete(`/tasks/tool-packages/${packageId}`);
+    toast('工具包已删除', 'ok');
+    await loadToolchainCenter();
+  } catch (e) {
+    toast(`删除失败：${e.message}`, 'err');
+  }
+}
+
+function openTaskCenterFromToolchain() {
+  switchTab('task-center');
+  loadTaskCenter();
+}
+
+// ── Task Center ───────────────────────────────────────────────────────────────
+let _taskTemplates = [];
+let _taskDefinitions = [];
+let _taskRuns = [];
+let _taskSchedules = [];
+let _taskCenterLoading = false;
+
+function taskRuntimeLabel(runtime) {
+  return runtime === 'shell' ? 'Shell' : 'Python';
+}
+
+function taskExecutionModeLabel(mode) {
+  return mode === 'pod' ? 'Pod 内执行' : 'Node 本机';
+}
+
+function taskTargetLabel(taskOrRun = {}) {
+  const target = taskOrRun.target || {};
+  if ((taskOrRun.execution_mode || 'node') !== 'pod') return '';
+  const base = [target.cluster_name || target.cluster, target.namespace || 'default', target.pod_name || target.pod]
+    .filter(Boolean)
+    .join('/');
+  return target.container ? `${base}/${target.container}` : base;
+}
+
+function getTaskPodTargetFromForm() {
+  return {
+    cluster_name: document.getElementById('taskCluster')?.value?.trim() || '',
+    namespace: document.getElementById('taskNamespace')?.value?.trim() || 'default',
+    pod_name: document.getElementById('taskPod')?.value?.trim() || '',
+    container: document.getElementById('taskContainer')?.value?.trim() || '',
+  };
+}
+
+function fillTaskPodTargetFromCurrent() {
+  const target = typeof getCurrentPodTarget === 'function' ? getCurrentPodTarget() : {};
+  const map = {
+    taskCluster: target.cluster_name || '',
+    taskNamespace: target.namespace || 'default',
+    taskPod: target.pod_name || '',
+    taskContainer: target.container || '',
+  };
+  Object.entries(map).forEach(([id, value]) => {
+    const el = document.getElementById(id);
+    if (el) el.value = value;
+  });
+  if (!target.cluster_name || !target.pod_name) toast('当前没有可填充的 Pod 连接，请手动填写目标', 'warn');
+}
+
+function toggleTaskTargetFields() {
+  const mode = document.getElementById('taskExecutionMode')?.value || 'node';
+  const box = document.getElementById('taskPodTargetBox');
+  if (box) box.style.display = mode === 'pod' ? '' : 'none';
+  if (mode === 'pod') fillTaskPodTargetFromCurrent();
+}
+
+function taskStatusLabel(status) {
+  const map = { success: '成功', failed: '失败', timeout: '超时', running: '运行中', pending: '等待中' };
+  return map[status] || status || '-';
+}
+
+function renderTaskSummary(overview = {}) {
+  const el = document.getElementById('taskSummary');
+  if (!el) return;
+  const items = [
+    ['模板', overview.templates ?? '-'],
+    ['任务', overview.tasks ?? '-'],
+    ['执行', overview.runs ?? '-'],
+    ['运行中', overview.running ?? '-'],
+    ['调度', overview.schedules ?? '-'],
+  ];
+  el.innerHTML = items.map(([label, value]) => `<div class="task-stat"><span>${label}</span><b>${value}</b></div>`).join('');
+}
+
+function renderTaskTemplateOptions() {
+  const select = document.getElementById('taskTemplate');
+  if (!select) return;
+  const current = select.value;
+  select.innerHTML = '<option value="">不使用模板 / 使用内联脚本</option>' + _taskTemplates.map(t => {
+    const toolPackageName = t.tool_package_name || '未绑定工具包';
+    return `<option value="${t.id}" data-runtime="${escapeHtml(t.runtime || 'python')}" data-timeout="${t.default_timeout || 60}">${escapeHtml(t.name)}（${escapeHtml(toolPackageName)} / ${taskRuntimeLabel(t.runtime)}）</option>`;
+  }).join('');
+  if (current && _taskTemplates.some(t => String(t.id) === String(current))) select.value = current;
+}
+
+function syncTaskTemplateRuntime() {
+  const select = document.getElementById('taskTemplate');
+  const opt = select?.selectedOptions?.[0];
+  if (!opt || !opt.value) return;
+  const runtime = opt.getAttribute('data-runtime') || 'python';
+  const timeout = opt.getAttribute('data-timeout') || '60';
+  const runtimeEl = document.getElementById('taskRuntime');
+  const timeoutEl = document.getElementById('taskTimeout');
+  if (runtimeEl) runtimeEl.value = runtime;
+  if (timeoutEl) timeoutEl.value = timeout;
+}
+
+function renderTaskDefinitions() {
+  const el = document.getElementById('taskDefinitionList');
+  if (!el) return;
+  if (!_taskDefinitions.length) {
+    el.innerHTML = '<div class="sb-empty">暂无任务<br>可先使用内置模板创建一个 Node 本机或 Pod 内任务</div>';
+    return;
+  }
+  el.innerHTML = _taskDefinitions.map(t => `
+    <div class="task-item">
+      <div class="task-item-main">
+        <div>
+          <div class="task-item-name">${escapeHtml(t.name)}</div>
+          <div class="task-item-meta">执行位置：${taskExecutionModeLabel(t.execution_mode)}${taskTargetLabel(t) ? ' · 目标：' + escapeHtml(taskTargetLabel(t)) : ''} · 运行时：${taskRuntimeLabel(t.runtime)} · 模板：${escapeHtml(t.template_name || '内联脚本')} · 超时：${t.timeout_seconds || 60}s</div>
+        </div>
+        <div class="task-item-actions">
+          <button class="btn btn-p" onclick="runTaskDefinition(${t.id})">执行</button>
+          <button class="btn btn-g danger-text" onclick="deleteTaskDefinition(${t.id})">删除</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderTaskRuns() {
+  const el = document.getElementById('taskRunList');
+  if (!el) return;
+  if (!_taskRuns.length) {
+    el.innerHTML = '<div class="sb-empty">暂无执行记录</div>';
+    return;
+  }
+  el.innerHTML = _taskRuns.map(r => `
+    <div class="task-run-item" id="task-run-${escapeHtml(r.id)}">
+      <div class="task-run-main">
+        <div>
+          <div class="task-run-name">${escapeHtml(r.task_name || ('任务 #' + (r.task_id || '-')))}</div>
+          <div class="task-run-meta">${taskExecutionModeLabel(r.execution_mode)}${taskTargetLabel(r) ? ' · ' + escapeHtml(taskTargetLabel(r)) : ''} · ${escapeHtml(r.started_at || r.created_at || '-')} · 耗时：${r.duration_ms ?? '-'}ms · exit：${r.exit_code ?? '-'}${r.error_message ? ' · ' + escapeHtml(r.error_message) : ''}</div>
+        </div>
+        <div class="task-run-actions">
+          <span class="task-status ${escapeHtml(r.status || '')}">${taskStatusLabel(r.status)}</span>
+          <button class="btn btn-g" onclick="toggleTaskRunLog('${escapeHtml(r.id)}')">日志</button>
+        </div>
+      </div>
+      <div class="task-log" id="task-log-${escapeHtml(r.id)}"></div>
+    </div>
+  `).join('');
+}
+
+async function loadTaskCenter() {
+  if (_taskCenterLoading) return;
+  _taskCenterLoading = true;
+  try {
+    const [overview, templates, defs, runs, schedules] = await Promise.all([
+      safeGet('/tasks/overview'),
+      safeGet('/tasks/templates'),
+      safeGet('/tasks/definitions'),
+      safeGet('/tasks/runs', { limit: 50 }),
+      safeGet('/tasks/schedules'),
+    ]);
+    _taskTemplates = templates.templates || [];
+    _taskDefinitions = defs.tasks || [];
+    _taskRuns = runs.runs || [];
+    _taskSchedules = schedules.schedules || [];
+    renderTaskSummary(overview);
+    renderTaskTemplateOptions();
+    renderTaskDefinitions();
+    renderTaskRuns();
+    renderTaskSchedules();
+  } catch (e) {
+    toast(`任务中心加载失败：${e.message}`, 'err');
+  } finally {
+    _taskCenterLoading = false;
+  }
+}
+
+async function createTaskDefinitionFromForm() {
+  const name = document.getElementById('taskName')?.value?.trim() || '';
+  const templateId = document.getElementById('taskTemplate')?.value || '';
+  const runtime = document.getElementById('taskRuntime')?.value || 'python';
+  const timeout = Number(document.getElementById('taskTimeout')?.value || 60);
+  const scriptBody = document.getElementById('taskScript')?.value?.trim() || '';
+  const executionMode = document.getElementById('taskExecutionMode')?.value || 'node';
+  const target = executionMode === 'pod' ? getTaskPodTargetFromForm() : {};
+  if (executionMode === 'pod' && !target.cluster_name) return toast('请填写 Pod 执行目标集群', 'warn');
+  if (executionMode === 'pod' && !target.pod_name) return toast('请填写 Pod 名称', 'warn');
+  if (!name) return toast('请填写任务名称', 'warn');
+  if (!templateId && !scriptBody) return toast('请选择模板或填写内联脚本', 'warn');
+  try {
+    await safePost('/tasks/definitions', {
+      name,
+      execution_mode: executionMode,
+      target,
+      template_id: templateId ? Number(templateId) : null,
+      runtime,
+      timeout_seconds: timeout,
+      script_body: scriptBody,
+    });
+    toast('任务已创建', 'ok');
+    document.getElementById('taskName').value = '';
+    document.getElementById('taskScript').value = '';
+    await loadTaskCenter();
+  } catch (e) {
+    toast(`创建任务失败：${e.message}`, 'err');
+  }
+}
+
+async function runTaskDefinition(taskId) {
+  try {
+    toast('任务开始执行，请稍候...', 'info');
+    const result = await safePost(`/tasks/definitions/${taskId}/run`, {}, 650000);
+    toast(result.run?.status === 'success' ? '任务执行成功' : '任务执行完成但存在失败', result.run?.status === 'success' ? 'ok' : 'warn');
+    await loadTaskCenter();
+    if (result.run?.id) setTimeout(() => toggleTaskRunLog(result.run.id), 80);
+  } catch (e) {
+    toast(`执行任务失败：${e.message}`, 'err');
+  }
+}
+
+async function toggleTaskRunLog(runId) {
+  const el = document.getElementById(`task-log-${runId}`);
+  if (!el) return;
+  if (el.classList.contains('open')) {
+    el.classList.remove('open');
+    return;
+  }
+  try {
+    const data = await safeGet(`/tasks/runs/${runId}/logs`);
+    const run = data.run || {};
+    el.innerHTML = `
+      <div class="task-log-title">stdout</div>
+      <pre>${escapeHtml(run.stdout || '') || '无输出'}</pre>
+      <div class="task-log-title">stderr</div>
+      <pre>${escapeHtml(run.stderr || '') || '无输出'}</pre>
+    `;
+    el.classList.add('open');
+  } catch (e) {
+    toast(`加载日志失败：${e.message}`, 'err');
+  }
+}
+
+// ── 调度管理 ──────────────────────────────────────────────
+
+function scheduleStatusLabel(status) {
+  return status === 'active' ? '运行中' : status === 'paused' ? '已暂停' : (status || '-');
+}
+
+function renderTaskSchedules() {
+  const el = document.getElementById('taskScheduleList');
+  if (!el) return;
+  if (!_taskSchedules.length) {
+    el.innerHTML = '<div class="sb-empty">暂无调度<br>点击「+ 新建调度」为任务绑定 interval 定时调度</div>';
+    return;
+  }
+  el.innerHTML = _taskSchedules.map(s => {
+    const isActive = s.status === 'active';
+    return `
+      <div class="task-item">
+        <div class="task-item-main">
+          <div>
+            <div class="task-item-name">${escapeHtml(s.name)}</div>
+            <div class="task-item-meta">
+              任务：${escapeHtml(s.task_name || ('#' + s.task_id))} ·
+              间隔：${s.interval_seconds}s ·
+              上次：${escapeHtml(s.last_run_at || '从未')} ·
+              下次：${escapeHtml(s.next_run_at || '-')}
+            </div>
+          </div>
+          <div class="task-item-actions">
+            <span class="task-status ${isActive ? 'success' : 'paused'}">${scheduleStatusLabel(s.status)}</span>
+            <button class="btn btn-g" onclick="toggleTaskScheduleStatus(${s.id}, '${isActive ? 'paused' : 'active'}')">${isActive ? '暂停' : '恢复'}</button>
+            <button class="btn btn-g danger-text" onclick="deleteTaskSchedule(${s.id})">删除</button>
+          </div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function openCreateScheduleModal() {
+  // 用当前已加载的任务定义填充下拉
+  const sel = document.getElementById('scheduleTaskId');
+  if (sel) {
+    sel.innerHTML = _taskDefinitions.length
+      ? _taskDefinitions.map(t => `<option value="${t.id}">${escapeHtml(t.name)}</option>`).join('')
+      : '<option value="">暂无可用任务</option>';
+  }
+  const modal = document.getElementById('modalCreateSchedule');
+  if (modal) modal.style.display = 'flex';
+}
+
+function closeCreateScheduleModal() {
+  const modal = document.getElementById('modalCreateSchedule');
+  if (modal) modal.style.display = 'none';
+}
+
+async function submitCreateSchedule() {
+  const taskId = document.getElementById('scheduleTaskId')?.value;
+  const name = document.getElementById('scheduleName')?.value?.trim() || '';
+  const interval = Number(document.getElementById('scheduleInterval')?.value || 3600);
+  if (!taskId) return toast('请选择绑定任务', 'warn');
+  if (!name) return toast('请填写调度名称', 'warn');
+  if (interval < 60 || interval > 86400) return toast('间隔需在 60 ~ 86400 秒之间', 'warn');
+  try {
+    await safePost('/tasks/schedules', { task_id: Number(taskId), name, interval_seconds: interval });
+    toast('调度已创建', 'ok');
+    closeCreateScheduleModal();
+    document.getElementById('scheduleName').value = '';
+    document.getElementById('scheduleInterval').value = '3600';
+    await loadTaskCenter();
+  } catch (e) {
+    toast(`创建调度失败：${e.message}`, 'err');
+  }
+}
+
+async function toggleTaskScheduleStatus(scheduleId, newStatus) {
+  try {
+    await safePut(`/tasks/schedules/${scheduleId}`, { status: newStatus });
+    toast(newStatus === 'active' ? '调度已恢复' : '调度已暂停', 'ok');
+    await loadTaskCenter();
+  } catch (e) {
+    toast(`操作失败：${e.message}`, 'err');
+  }
+}
+
+async function deleteTaskSchedule(scheduleId) {
+  if (!confirm('确认删除此调度？')) return;
+  try {
+    await safeDelete(`/tasks/schedules/${scheduleId}`);
+    toast('调度已删除', 'ok');
+    await loadTaskCenter();
+  } catch (e) {
+    toast(`删除失败：${e.message}`, 'err');
+  }
+}
+
+async function deleteTaskDefinition(taskId) {
+  if (!confirm('确认删除此任务？删除后关联调度将一并清除。')) return;
+  try {
+    await safeDelete(`/tasks/definitions/${taskId}`);
+    toast('任务已删除', 'ok');
+    await loadTaskCenter();
+  } catch (e) {
+    toast(`删除失败：${e.message}`, 'err');
+  }
+}
+
+function openApiHelp() {
+
+  window.open('/api/health', '_blank');
+}
+
+function openChangePasswordModal() {
+  const modal = document.getElementById('pwdModal');
+  if (!modal) return;
+  ['pwdOld', 'pwdNew', 'pwdConfirm'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  const err = document.getElementById('pwdModalErr');
+  if (err) { err.style.display = 'none'; err.textContent = ''; }
+  modal.classList.add('open');
+  setTimeout(() => document.getElementById('pwdOld')?.focus(), 50);
+}
+
+function closeChangePasswordModal() {
+  document.getElementById('pwdModal')?.classList.remove('open');
+}
+
+async function submitChangePassword() {
+  const oldPassword = document.getElementById('pwdOld')?.value || '';
+  const newPassword = document.getElementById('pwdNew')?.value || '';
+  const confirmPassword = document.getElementById('pwdConfirm')?.value || '';
+  const err = document.getElementById('pwdModalErr');
+  const showErr = (msg) => {
+    if (err) { err.textContent = msg; err.style.display = ''; }
+  };
+
+  if (!oldPassword || !newPassword || !confirmPassword) return showErr('请完整填写当前密码、新密码和确认密码');
+  if (newPassword.length < 6) return showErr('新密码至少 6 位');
+  if (newPassword !== confirmPassword) return showErr('两次输入的新密码不一致');
+
+  try {
+    await safePost('/auth/change-password', { old_password: oldPassword, new_password: newPassword });
+    closeChangePasswordModal();
+    toast('密码已修改，请使用新密码登录', 'ok');
+  } catch (e) {
+    showErr(e.message || '修改密码失败');
+  }
+}
+
 
 // 生成时间戳字符串 格式: 20260322153847
 function fmtNowTs() {
@@ -72,17 +788,39 @@ let _clusters = [], _ac = null;
 let _connections = [], _currentConnId = null;
 let _connected = false, _ap = null;
 let _connHealth = {};  // { connId: { alive, pod_exists, pod_phase, reason } }
-// 同步模块内部状态到 window，供 ai-chat.js / MCP 弹窗等外部模块读取
+// 同步模块内部状态到 window，供 ai-chat.js / 外部组件读取
+function _mergeExternalConnectionState() {
+  const externalConns = Array.isArray(window._connections) ? window._connections : [];
+  if (externalConns.length && externalConns !== _connections) {
+    const merged = new Map();
+    _connections.forEach(c => { if (c && c.id) merged.set(c.id, c); });
+    externalConns.forEach(c => {
+      if (!c || !c.id) return;
+      const old = merged.get(c.id);
+      merged.set(c.id, old ? { ...old, ...c } : c);
+    });
+    _connections = Array.from(merged.values());
+  }
+
+  const externalConnId = window._currentConnId || null;
+  if (externalConnId && (!_currentConnId || !_connections.find(c => c.id === _currentConnId))) {
+    _currentConnId = externalConnId;
+  }
+}
+
 function _syncState() {
+  _mergeExternalConnectionState();
   window._connections  = _connections;
   window._currentConnId = _currentConnId;
   window._connHealth   = _connHealth;
   // P0-1: 同步两步连接状态，供 diagnose.js 等外部模块判断连接层级
   if (typeof getConnectionState === 'function') {
     window._connState   = getConnectionState();
+  } else if (window._connState) {
+    window._connState = window._connState;
   }
   if (typeof _runtimeInfo !== 'undefined') {
-    window._runtimeInfo = _runtimeInfo;
+    window._runtimeInfo = _runtimeInfo || window._runtimeInfo;
   }
 }
 let _sid = null, _cid = null, _pollTimer = null, _polling = false;
@@ -136,6 +874,41 @@ function togglePodTarget() {
   if (arrow) arrow.classList.toggle('up', !el.classList.contains('collapsed'));
 }
 
+// ── Sidebar Navigation ───────────────────────────────────────────────────────
+function toggleSideNavGroup(el) {
+  const group = el?.closest?.('.side-nav-group');
+  if (!group) return;
+  group.classList.toggle('collapsed');
+}
+
+const WORKSPACE_META = {
+  connections: { kicker: 'Connection Center', title: '连接中心', sub: '管理 Pod 连接、Arthas 升级与最近连接记录' },
+  profiler: { kicker: 'Profiler', title: '采样工具', sub: '启动 async-profiler、JFR、线程和堆转储等采样任务' },
+  console: { kicker: 'Arthas Console', title: 'Arthas命令', sub: '执行 Arthas 诊断命令，需要 Arthas-ready 连接' },
+  terminal: { kicker: 'Pod Terminal', title: '终端', sub: '通过 kubectl exec 进入目标 Pod，不依赖 Arthas' },
+  monitor: { kicker: 'Pod Monitor', title: 'Pod 监控', sub: '查看 CPU、内存、网络、磁盘和事件等 Pod 级指标' },
+  filebrowser: { kicker: 'File Browser', title: '文件下载', sub: '浏览和下载 Pod 内文件，不依赖 Arthas' },
+  ai: { kicker: 'AI Assistant', title: 'AI 助手', sub: '结合连接上下文进行诊断分析和命令建议' },
+  'model-config': { kicker: 'Model Config', title: '模型配置', sub: '配置大模型供应商、Base URL、模型名称和系统提示词' },
+  'mcp-center': { kicker: 'MCP Access', title: 'MCP 接入', sub: '管理 MCP Token 和客户端接入配置，按需加载配置详情' },
+  diag: { kicker: 'Diagnosis', title: '性能诊断', sub: '按场景组织 JVM 与 Pod 诊断流程' },
+  history: { kicker: 'History', title: '历史记录', sub: '查看命令、采样和文件下载记录' },
+  'task-center': { kicker: 'Task Center', title: '任务中心', sub: '规划 Pod 定时脚本、执行结果和任务历史' },
+  'toolchain-center': { kicker: 'Toolchain', title: '工具链', sub: '管理 Arthas、async-profiler、jattach 与离线缓存' },
+  'user-management': { kicker: 'System Management', title: '用户管理', sub: '管理账号、角色、状态与集群授权' },
+  'audit-logs': { kicker: 'Audit Logs', title: '审计日志', sub: '查看登录、连接、诊断与资源变更操作记录' },
+};
+
+function updateWorkspaceHead(tab) {
+  const meta = WORKSPACE_META[tab] || WORKSPACE_META.connections;
+  const kicker = document.getElementById('workspaceKicker');
+  const title = document.getElementById('workspaceTitle');
+  const sub = document.getElementById('workspaceSub');
+  if (kicker) kicker.textContent = meta.kicker;
+  if (title) title.textContent = meta.title;
+  if (sub) sub.textContent = meta.sub;
+}
+
 // ── Connection Management ─────────────────────────────────────────────────────
 // 连接层级辅助
 function _inferLevel(c) {
@@ -158,9 +931,11 @@ function _rtIcon(t) { return {java:'☕',node:'🟢',python:'🐍',go:'🔵',dot
 function _canUpgrade(c) { return _inferLevel(c)==='pod' && _getRt(c)?.type==='java'; }
 
 function renderConnList() {
+  _mergeExternalConnectionState();
   const el = document.getElementById('connList');
+  if (!el) return;
   if (_connections.length === 0) {
-    el.innerHTML = '<div class="sb-empty">暂无连接<br>使用下方添加</div>';
+    el.innerHTML = '<div class="sb-empty">暂无连接<br>使用左侧连接配置创建连接</div>';
     return;
   }
   let html = '';
@@ -254,7 +1029,13 @@ async function loadConnectionCommands(connId) {
 }
 
 async function switchConnection(connId) {
-  if (connId === _currentConnId) return;
+  _mergeExternalConnectionState();
+  if (connId === _currentConnId) {
+    const currentConn = _connections.find(c => c.id === connId);
+    if (currentConn) syncPodTargetFromConnection(currentConn);
+    _syncState();
+    return;
+  }
   const conn = _connections.find(c => c.id === connId);
   if (!conn) return;
 
@@ -329,7 +1110,7 @@ async function switchConnection(connId) {
 
         if (h && h.alive && h.pod_exists !== false) {
           // Arthas 连接存活，直接复用
-          d = { ok: true, connection_id: connId, reused: true, local_port: conn.local_port, java_pid: conn.java_pid, arthas_version: conn.arthas_version, arthas_address: conn.arthas_address, mcp_available: conn.mcp_available };
+          d = { ok: true, connection_id: connId, reused: true, local_port: conn.local_port, java_pid: conn.java_pid, arthas_version: conn.arthas_version, arthas_address: conn.arthas_address };
         } else if (h && h.pod_exists === true && h.alive === false) {
           // Arthas 断了但 Pod 还在 → 降级为 pod level
           conn.level = 'pod';
@@ -397,7 +1178,7 @@ async function switchConnection(connId) {
       // 设置新的当前连接
       _currentConnId = connId;
       _connected = true;
-      _ap = t;
+      _ap = syncPodTargetFromConnection(conn) || t;
 
       // 更新连接层级
       const newLevel = _inferLevel(conn);
@@ -412,7 +1193,6 @@ async function switchConnection(connId) {
       if (d.arthas_version) conn.arthas_version = d.arthas_version;
       if (d.arthas_address) conn.arthas_address = d.arthas_address;
       if (d.http_url) conn.http_url = d.http_url;
-      if (d.mcp_available !== undefined) conn.mcp_available = d.mcp_available;
 
       // 同步两步连接状态
       if (newLevel === 'pod') {
@@ -470,8 +1250,6 @@ async function switchConnection(connId) {
       // 切换连接时设置 conTitle（含悬浮 tooltip）
       const _switchConTitle = document.getElementById('conTitle');
       if (_switchConTitle) {
-        const _mcpClass = conn.mcp_available ? 'live' : 'dead';
-        const _mcpText = conn.mcp_available ? '✓ 可用' : '✗ 不可用';
         const _switchTipRows = [
           `<div class="ct-tip-row"><span class="ct-tip-k">集群</span><span class="ct-tip-v">${esc(conn.cluster_name)}</span></div>`,
           `<div class="ct-tip-row"><span class="ct-tip-k">命名空间</span><span class="ct-tip-v">${esc(conn.namespace)}</span></div>`,
@@ -480,7 +1258,6 @@ async function switchConnection(connId) {
           conn.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(conn.java_pid))}</span></div>` : '',
           conn.local_port ? `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div>` : '',
           conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : '',
-          conn.mcp_available !== undefined ? `<div class="ct-tip-row"><span class="ct-tip-k">MCP</span><span class="ct-tip-v ${_mcpClass}">${_mcpText}</span></div>` : '',
         ].filter(Boolean).join('');
         const titleIcon = newLevel === 'arthas' ? '⚡' : '🔵';
         _switchConTitle.innerHTML = `${esc(conn.cluster_name)}/${esc(conn.namespace)}/${esc(conn.pod_name)}<span class="ct-tip"><div class="ct-tip-hd"><div class="ct-tip-icon">${titleIcon}</div><div><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body">${_switchTipRows}</div></span>`;
@@ -505,14 +1282,6 @@ async function switchConnection(connId) {
       if (typeof csbRefresh === 'function') csbRefresh();
 
       document.getElementById('runBtn').disabled = false;
-
-      // 切换连接后自动折叠 Pod 目标区
-      const podTarget = document.getElementById('podTarget');
-      const ptArrow = document.getElementById('ptCollapseArrow');
-      if (podTarget && !podTarget.classList.contains('collapsed')) {
-        podTarget.classList.add('collapsed');
-        if (ptArrow) ptArrow.classList.add('up');
-      }
 
       // 更新 Pod 目标选择器
       const ptNs = document.getElementById('ptNs');
@@ -902,7 +1671,7 @@ function loadConnections() {
       _connections = [];
       renderConnList();
     }
-    // 【关键修复】同步到 window，供 ai-chat.js / MCP 弹窗等外部模块读取
+    // 【关键修复】同步到 window，供 ai-chat.js / 外部组件读取
     _syncState();
 
     // 自动恢复上次活跃连接（延迟执行，不阻塞页面初始化）
@@ -974,7 +1743,7 @@ async function _restoreActiveConnection(conn) {
       // 同步到全局状态
       _currentConnId = conn.id;
       _connected = false; // Pod 连接不算 _connected（这是 Arthas 标志）
-      _ap = t;
+      _ap = syncPodTargetFromConnection(conn) || t;
       _connHealth[conn.id] = { alive: true, pod_exists: true, pod_phase: podD.pod_phase || 'Running' };
       conn.status = 'connected';
       _syncState();
@@ -1012,7 +1781,6 @@ async function _restoreActiveConnection(conn) {
             conn.arthas_version = arthasD.arthas_version;
             conn.arthas_address = arthasD.arthas_address;
             conn.http_url = arthasD.http_url;
-            conn.mcp_available = arthasD.mcp_available;
             _syncState();
             renderConnList();
             if (typeof updateConnectionButton === 'function') updateConnectionButton();
@@ -1050,7 +1818,7 @@ async function _restoreActiveConnection(conn) {
   // 连接成功，更新状态（复用 switchConnection 中的成功逻辑，但不走 switchConnection 本身）
   _currentConnId = conn.id;
   _connected = true;
-  _ap = t;
+  _ap = syncPodTargetFromConnection(conn) || t;
   _connHealth[conn.id] = { alive: true, pod_exists: true, pod_phase: 'Running' };
   conn.status = 'connected';
   conn.local_port = d.local_port;
@@ -1058,7 +1826,6 @@ async function _restoreActiveConnection(conn) {
   if (d.arthas_version) conn.arthas_version = d.arthas_version;
   if (d.arthas_address) conn.arthas_address = d.arthas_address;
   if (d.http_url) conn.http_url = d.http_url;
-  if (d.mcp_available !== undefined) conn.mcp_available = d.mcp_available;
 
   _syncState();
   renderConnList();
@@ -1071,9 +1838,7 @@ async function _restoreActiveConnection(conn) {
   // 更新 conTitle
   const conTitle = document.getElementById('conTitle');
   if (conTitle) {
-    const _mcpClass = conn.mcp_available ? 'live' : 'dead';
-    const _mcpText = conn.mcp_available ? '✓ 可用' : '✗ 不可用';
-    conTitle.innerHTML = `${esc(conn.cluster_name)}/${esc(conn.namespace)}/${esc(conn.pod_name)}<span class="ct-tip"><div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body"><div class="ct-tip-row"><span class="ct-tip-k">集群</span><span class="ct-tip-v">${esc(conn.cluster_name)}</span></div><div class="ct-tip-row"><span class="ct-tip-k">命名空间</span><span class="ct-tip-v">${esc(conn.namespace)}</span></div><div class="ct-tip-row"><span class="ct-tip-k">Pod</span><span class="ct-tip-v">${esc(conn.pod_name)}</span></div>${conn.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(conn.java_pid))}</span></div>` : ''}<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div><div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_addr)}</span></div>${conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : ''}<div class="ct-tip-row"><span class="ct-tip-k">MCP</span><span class="ct-tip-v ${_mcpClass}">${_mcpText}</span></div></div></span>`;
+    conTitle.innerHTML = `${esc(conn.cluster_name)}/${esc(conn.namespace)}/${esc(conn.pod_name)}<span class="ct-tip"><div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div><div class="ct-tip-pod">${esc(conn.pod_name)}</div><div class="ct-tip-ns">${esc(conn.cluster_name)} / ${esc(conn.namespace)}</div></div></div><div class="ct-tip-body"><div class="ct-tip-row"><span class="ct-tip-k">集群</span><span class="ct-tip-v">${esc(conn.cluster_name)}</span></div><div class="ct-tip-row"><span class="ct-tip-k">命名空间</span><span class="ct-tip-v">${esc(conn.namespace)}</span></div><div class="ct-tip-row"><span class="ct-tip-k">Pod</span><span class="ct-tip-v">${esc(conn.pod_name)}</span></div>${conn.java_pid ? `<div class="ct-tip-row"><span class="ct-tip-k">Java PID</span><span class="ct-tip-v">${esc(String(conn.java_pid))}</span></div>` : ''}<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(conn.local_port))}</span></div><div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_addr)}</span></div>${conn.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(conn.arthas_version)}</span></div>` : ''}</div></span>`;
   }
 
   // 更新 Arthas 版本徽章
@@ -1090,32 +1855,31 @@ async function _restoreActiveConnection(conn) {
   document.getElementById('runBtn').disabled = false;
 
   // 更新 Pod 目标选择器
-  const ptNs = document.getElementById('ptNs');
-  const ptPod = document.getElementById('ptPod');
-  if (ptNs && ptPod) {
-    ptNs.value = conn.namespace;
-    ptPod.value = conn.pod_name;
-  }
+  syncPodTargetFromConnection(conn);
 
   if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
 }
 
 function switchTab(n) {
   // 支持数字索引和字符串索引
-  // 新 tab 顺序: profiler, console, terminal, monitor, filebrowser, ai, history
-  const tabMap = {0:'profiler', 1:'console', 2:'terminal', 3:'monitor', 4:'filebrowser', 5:'ai', 6:'history', 7:'diag'};
+  // 新 tab 顺序: connections, profiler, console, terminal, monitor, filebrowser, ai, model-config, mcp-center, task-center, toolchain-center, history, diag, user-management, audit-logs
+  const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'terminal', 4:'monitor', 5:'filebrowser', 6:'ai', 7:'model-config', 8:'mcp-center', 9:'task-center', 10:'toolchain-center', 11:'history', 12:'diag', 13:'user-management', 14:'audit-logs'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
 
   // 先切 Tab（允许切换到任何 Tab）
-  const allTabs = ['console','profiler','monitor','filebrowser','terminal','ai','history','diag'];
+  const allTabs = ['connections','console','profiler','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','history','diag','user-management','audit-logs'];
   allTabs.forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
     document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
+    document.querySelectorAll(`[data-nav-tab="${x}"]`).forEach(el => el.classList.toggle('on', x === tab));
     // 切走时清除旧面板的锁定态和引导
     if (x !== tab) {
       document.getElementById('panel-'+x)?.classList.remove('panel-locked');
     }
   });
+
+  updateWorkspaceHead(tab);
+  updateConnectionBarVisibility(tab);
 
   // 连接引导检查：允许切 Tab，但不满足要求时显示引导面板 + 禁用操作区
   if (window.ConnectionGuard) {
@@ -1194,14 +1958,14 @@ function switchTab(n) {
   }
   if(tab==='terminal') { setTimeout(()=>{ document.getElementById('termInput')?.focus(); },100); }
   if(tab==='ai') { setTimeout(()=>{ aiRefreshConnSelect(); document.getElementById('aiInput')?.focus(); },100); }
+  if(tab==='model-config') { setTimeout(()=>{ document.querySelector('#panel-model-config button')?.focus(); },100); }
+  if(tab==='mcp-center') { setTimeout(()=>{ document.querySelector('#panel-mcp-center iframe')?.contentWindow?.focus?.(); },100); }
+  if(tab==='task-center') { loadTaskCenter(); }
+  if(tab==='toolchain-center') { loadToolchainCenter(); }
   if(tab==='diag') { setTimeout(()=>{ if(typeof diagRefreshConn==='function') diagRefreshConn(); },100); }
+
   if(tab==='monitor') {
-    // 切换到监控 tab 时：已有数据直接渲染，否则加载一次快照
-    if (_snap && !_snap.error) {
-      renderOverview(_snap); renderProcs(_snap); renderNetwork(_snap); renderDisk(_snap); renderEvents(_snap); renderConfig(_snap);
-    } else {
-      loadSnap();
-    }
+    loadSnap();
   }
 }
 
@@ -1245,6 +2009,53 @@ async function checkHealth() {
 }
 
 // ── Target helpers ─────────────────────────────────────────────────────────────
+function normalizeConnTarget(conn) {
+  if (!conn) return null;
+  return {
+    cluster_name: conn.cluster_name || conn.cluster || '',
+    namespace: conn.namespace || 'default',
+    pod_name: conn.pod_name || conn.pod || '',
+    container: conn.container || '',
+    arthas_jar: conn.arthas_jar || document.getElementById('ptArthas')?.value || '/app/arthas/arthas-boot.jar',
+  };
+}
+
+function syncPodTargetFromConnection(conn) {
+  const t = normalizeConnTarget(conn);
+  if (!t) return null;
+  _ac = t.cluster_name || _ac;
+  const ptNs = document.getElementById('ptNs');
+  const ptPod = document.getElementById('ptPod');
+  const ptCtr = document.getElementById('ptCtr');
+  const ptArthas = document.getElementById('ptArthas');
+  if (ptNs) ptNs.value = t.namespace || 'default';
+  if (ptPod) ptPod.value = t.pod_name || '';
+  if (ptCtr) {
+    const value = t.container || '';
+    const exists = Array.from(ptCtr.options || []).some(opt => opt.value === value);
+    if (value && !exists) ptCtr.add(new Option(value, value));
+    ptCtr.value = value;
+  }
+  if (ptArthas && t.arthas_jar) ptArthas.value = t.arthas_jar;
+  _ap = t;
+  return t;
+}
+
+function getCurrentPodTarget() {
+  _mergeExternalConnectionState();
+  const currentId = _currentConnId || window._currentConnId || null;
+  const conn = _connections.find(c => c.id === currentId) || (window._connections || []).find(c => c.id === currentId);
+  const connTarget = syncPodTargetFromConnection(conn);
+  const formTarget = getT();
+  return {
+    cluster_name: connTarget?.cluster_name || formTarget.cluster_name || '',
+    namespace: connTarget?.namespace || formTarget.namespace || 'default',
+    pod_name: connTarget?.pod_name || formTarget.pod_name || '',
+    container: connTarget?.container || formTarget.container || '',
+    arthas_jar: connTarget?.arthas_jar || formTarget.arthas_jar || '',
+  };
+}
+
 function getT() {
   return {
     cluster_name: _ac || '',
@@ -1391,7 +2202,6 @@ async function arthasConnect() {
             container: t.container,
             arthas_jar: t.arthas_jar,
             local_port: d.local_port,
-            mcp_available: !!d.mcp_available,
             arthas_version: d.arthas_version || '',
             arthas_address: d.arthas_address || d.http_url || '',
             status: 'connected',
@@ -1432,8 +2242,6 @@ async function arthasConnect() {
       // conTitle 悬浮 tooltip 展示完整连接信息
       const _conTitleEl = document.getElementById('conTitle');
       if (_conTitleEl) {
-        const _mcpClass = d.mcp_available ? 'live' : 'dead';
-        const _mcpText = d.mcp_available ? '✓ 可用' : '✗ 不可用';
         const _tipRows = [
           `<div class="ct-tip-row"><span class="ct-tip-k">集群</span><span class="ct-tip-v">${esc(t.cluster_name)}</span></div>`,
           `<div class="ct-tip-row"><span class="ct-tip-k">命名空间</span><span class="ct-tip-v">${esc(t.namespace)}</span></div>`,
@@ -1442,7 +2250,6 @@ async function arthasConnect() {
           `<div class="ct-tip-row"><span class="ct-tip-k">本地端口</span><span class="ct-tip-v">${esc(String(d.local_port))}</span></div>`,
           `<div class="ct-tip-row"><span class="ct-tip-k">地址</span><span class="ct-tip-v">${esc(_addrInfo)}</span></div>`,
           d.arthas_version ? `<div class="ct-tip-row"><span class="ct-tip-k">Arthas</span><span class="ct-tip-v">${esc(d.arthas_version)}</span></div>` : '',
-          `<div class="ct-tip-row"><span class="ct-tip-k">MCP</span><span class="ct-tip-v ${_mcpClass}">${_mcpText}</span></div>`,
         ].filter(Boolean).join('');
         _conTitleEl.innerHTML = `${esc(t.cluster_name)}/${esc(t.namespace)}/${esc(t.pod_name)}<span class="ct-tip"><div class="ct-tip-hd"><div class="ct-tip-icon">⚡</div><div><div class="ct-tip-pod">${esc(t.pod_name)}</div><div class="ct-tip-ns">${esc(t.cluster_name)} / ${esc(t.namespace)}</div></div></div><div class="ct-tip-body">${_tipRows}</div></span>`;
       }
@@ -3431,13 +4238,28 @@ async function loadConnectionProfilerLogs(connId) {
 }
 
 // ── Pod Monitor ───────────────────────────────────────────────────────────────
+function renderMonitorMessage(message, type = 'info') {
+  const color = type === 'error' ? 'var(--a5)' : type === 'warn' ? 'var(--a4)' : 'var(--tx3)';
+  const html = `<div style="color:${color};padding:30px;text-align:center;line-height:1.8"><div style="font-size:14px;margin-bottom:8px">${esc(message)}</div><div style="font-size:11px;color:var(--tx3)">请在连接中心确认当前 Pod 连接后重试</div></div>`;
+  ['pmp-ov','pmp-dk','pmp-pr','pmp-nw','pmp-ev','pmp-cf'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.innerHTML = html;
+  });
+}
+
 async function loadSnap(silent = false) {
+  _syncState();
   if(window.ConnectionGuard && !ConnectionGuard.guard('monitor')) return;
-  const t = getT();
-  if(!t.cluster_name || !t.pod_name) { toast('请先配置集群和 Pod','warn'); return; }
+  const t = getCurrentPodTarget();
+  if(!t.cluster_name || !t.pod_name) {
+    const msg = '请先在连接中心建立或选择一个 Pod 连接';
+    if(!silent) toast(msg, 'warn');
+    renderMonitorMessage(msg, 'warn');
+    return;
+  }
   // 静默刷新时不显示 loading，避免闪烁
   if (!silent) {
-    const loadingHtml = '<div style="color:var(--tx3);padding:30px;text-align:center"><div style="font-size:14px;margin-bottom:8px">⏳ 加载监控数据中...</div><div style="font-size:11px">首次加载可能需要 10-20 秒（kubectl 采集）</div></div>';
+    const loadingHtml = `<div style="color:var(--tx3);padding:30px;text-align:center"><div style="font-size:14px;margin-bottom:8px">⏳ 加载监控数据中...</div><div style="font-size:11px">${esc(t.cluster_name)} / ${esc(t.namespace)} / ${esc(t.pod_name)}，首次加载可能需要 10-20 秒（kubectl 采集）</div></div>`;
     document.getElementById('pmp-ov').innerHTML = loadingHtml;
     document.getElementById('pmp-dk').innerHTML = loadingHtml;
     document.getElementById('pmp-pr').innerHTML = loadingHtml;
@@ -3446,12 +4268,16 @@ async function loadSnap(silent = false) {
   try {
     // snapshot 接口涉及多次 kubectl 调用，超时设为 60 秒
     _snap = await safePost(`${API}/monitor/snapshot`, t, 60000);
-    if(_snap.error) { if(!silent) toast(_snap.error, 'error'); return; }
+    if(_snap.error) {
+      if(!silent) toast(_snap.error, 'error');
+      renderMonitorMessage(_snap.error, 'error');
+      return;
+    }
     document.getElementById('pmTs').textContent = new Date().toLocaleTimeString('zh-CN',{hour12:false});
     renderOverview(_snap); renderProcs(_snap); renderNetwork(_snap); renderDisk(_snap); renderEvents(_snap); renderConfig(_snap);
     const ctrs = _snap.pod_info?.containers||[];
     const lcsel = document.getElementById('logCtr');
-    if(lcsel) lcsel.innerHTML = ctrs.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+    if(lcsel) lcsel.innerHTML = ctrs.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
     // start history polling
     fetch(`${API}/monitor/start-polling`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(t)}).catch(()=>{});
     clearInterval(window._histTimer);
@@ -3462,7 +4288,11 @@ async function loadSnap(silent = false) {
       const r2 = await fetch(`${API}/monitor/history`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(t)}).catch(()=>null);
       if(r2) { _histData = await r2.json(); if(document.getElementById('pms-mt')?.classList.contains('on')) renderMetrics(_snap); }
     }, 16000);
-  } catch(e) { if(!silent) toast('加载失败: '+e.message, 'error'); }
+  } catch(e) {
+    const msg = '加载失败: '+e.message;
+    if(!silent) toast(msg, 'error');
+    renderMonitorMessage(msg, 'error');
+  }
 }
 
 // ── 监控面板自动刷新 ─────────────────────────────────────────────────────────────
@@ -3624,14 +4454,22 @@ function drawSpark(id, vals, color) {
 }
 
 function renderProcs(snap) {
-  const procs = snap.container_metrics?.processes||[];
+  const procs = snap.processes || snap.container_metrics?.processes || [];
   const el = document.getElementById('pmp-pr');
   if(!procs.length) { el.innerHTML='<div style="color:var(--tx3);padding:30px;text-align:center">无进程数据 (需要 Pod Running 且 ps 可用)</div>'; return; }
+  const normProc = p => ({
+    pid: p.pid || '?',
+    user: p.user || '—',
+    cpu: p.cpu ?? p.cpu_percent ?? 0,
+    mem: p.mem ?? p.mem_percent ?? 0,
+    stat: p.stat || p.status || '—',
+    cmd: p.cmd || p.name || '—',
+  });
   // 调试：打印进程数据结构
   console.log('[renderProcs] processes data:', procs.slice(0, 2));
   el.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--ln);border-radius:7px;overflow:hidden;margin-bottom:8px">
     <table class="ptbl"><thead><tr><th>PID</th><th>USER</th><th>%CPU</th><th>%MEM</th><th>STAT</th><th>命令</th></tr></thead>
-    <tbody>${procs.map(p=>`<tr><td class="ppid">${esc(p.pid)}</td><td style="color:var(--tx2)">${esc(p.user||'—')}</td><td class="pc">${esc(p.cpu)}%</td><td class="pmem">${esc(p.mem)}%</td><td class="ps-${(p.stat||'S')[0]}">${esc(p.stat||'')}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.cmd)}">${esc(p.cmd)}</td></tr>`).join('')}</tbody>
+    <tbody>${procs.map(raw=>{ const p = normProc(raw); return `<tr><td class="ppid">${esc(p.pid)}</td><td style="color:var(--tx2)">${esc(p.user)}</td><td class="pc">${esc(p.cpu)}%</td><td class="pmem">${esc(p.mem)}%</td><td class="ps-${(p.stat||'S')[0]}">${esc(p.stat)}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.cmd)}">${esc(p.cmd)}</td></tr>`; }).join('')}</tbody>
     </table></div>
   <div style="font-size:10px;color:var(--tx3)">STAT: <code>R</code>=运行中 <code>S</code>=睡眠 <code>D</code>=不可中断 <code>Z</code>=僵尸</div>`;
 }
@@ -4383,11 +5221,48 @@ window.selCmd = selCmd;
 window.buildAndRun = buildAndRun;
 
 // 其他
+window.openConnectionCenter = openConnectionCenter;
+window.toggleSideNavGroup = toggleSideNavGroup;
+window.openTaskCenter = openTaskCenter;
+window.openToolchainCenter = openToolchainCenter;
+window.loadToolchainCenter = loadToolchainCenter;
+window.createToolPackageFromForm = createToolPackageFromForm;
+window.uploadToolPackageFromForm = uploadToolPackageFromForm;
+window.distributeToolPackage = distributeToolPackage;
+window.verifyToolPackage = verifyToolPackage;
+window.toggleToolPackageStatus = toggleToolPackageStatus;
+window.deleteToolPackage = deleteToolPackage;
+window.fillToolchainPodTargetFromCurrent = fillToolchainPodTargetFromCurrent;
+window.openTaskCenterFromToolchain = openTaskCenterFromToolchain;
+window.uploadArthasSourceFromForm = uploadArthasSourceFromForm;
+window.renderToolQuickPlans = renderToolQuickPlans;
+window.renderArthasUserCaseCapabilities = renderArthasUserCaseCapabilities;
+window.createTaskFromTemplateQuick = createTaskFromTemplateQuick;
+window.openModelConfig = openModelConfig;
+window.openMcpCenter = openMcpCenter;
+window.loadTaskCenter = loadTaskCenter;
+window.createTaskDefinitionFromForm = createTaskDefinitionFromForm;
+window.runTaskDefinition = runTaskDefinition;
+window.toggleTaskRunLog = toggleTaskRunLog;
+window.syncTaskTemplateRuntime = syncTaskTemplateRuntime;
+window.toggleTaskTargetFields = toggleTaskTargetFields;
+window.fillTaskPodTargetFromCurrent = fillTaskPodTargetFromCurrent;
+window.openCreateScheduleModal = openCreateScheduleModal;
+window.closeCreateScheduleModal = closeCreateScheduleModal;
+window.submitCreateSchedule = submitCreateSchedule;
+window.toggleTaskScheduleStatus = toggleTaskScheduleStatus;
+window.deleteTaskSchedule = deleteTaskSchedule;
+window.openApiHelp = openApiHelp;
+
+window.openChangePasswordModal = openChangePasswordModal;
+window.closeChangePasswordModal = closeChangePasswordModal;
+window.submitChangePassword = submitChangePassword;
 window.doLogout = doLogout;
 window.loadHistory = loadHistory;
 window.gcDownloadPath = gcDownloadPath;
 window.gcPreviewPath = gcPreviewPath;
 window.toggleCtr = toggleCtr;
+
 
 // 来自 utils.js 的工具函数
 window.mkv = mkv;

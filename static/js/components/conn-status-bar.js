@@ -73,6 +73,11 @@ const ConnStatusBar = (function () {
     if (!_bar) _cacheDom();
     if (!_bar) return;
 
+    if (window.__hideConnStatusBar) {
+      _bar.style.display = 'none';
+      return;
+    }
+
     const level = _getLevel();
     const conn  = _getCurrentConn();
     const rt    = _getRuntimeInfo();
@@ -130,7 +135,7 @@ const ConnStatusBar = (function () {
       _action.style.display = '';
     }
 
-    // 条体可见性：始终显示（未连接时也展示引导状态）
+    // 条体可见性：由当前页面场景控制，未隐藏时展示引导状态
     _bar.style.display = '';
   }
 

@@ -28,27 +28,93 @@ function showToast(msg, type = 'ok') {
 async function loadConnections() {
   const el = document.getElementById('conn-list');
   try {
-    const resp = await fetch(`${API}/mcp/connections`);
-    const data = await resp.json();
-    _connections = data.connections || [];
+    const parentState = await getParentConnectionState();
+    let sourceConnections = parentState.connections;
+    let healthMap = parentState.health;
+
+    // 嵌入主工作区时，连接中心状态是权威来源；独立打开时才回退后端接口
+    if (!sourceConnections.length) {
+      const resp = await fetch(`${API}/mcp/connections`, { credentials: 'include' });
+      const data = await resp.json();
+      sourceConnections = data.connections || [];
+      healthMap = {};
+    }
+
+    _connections = normalizeMcpConnections(sourceConnections, healthMap);
+    if (_selectedConn && !_connections.some(c => c.id === _selectedConn)) {
+      _selectedConn = '';
+      document.getElementById('selected-conn').value = '';
+    }
 
     if (!_connections.length) {
-      el.innerHTML = '<div class="empty">暂无可用连接<br><span style="font-size:11px">请先在主界面连接 Pod</span></div>';
+      el.innerHTML = '<div class="empty">暂无可用 Arthas 连接<br><span style="font-size:11px">请先在连接中心连接 Pod，并启动 Arthas</span></div>';
       return;
     }
 
     el.innerHTML = _connections.map(c => `
-      <div class="conn-option ${_selectedConn === c.id ? 'selected' : ''}" onclick="selectConn('${c.id}')">
+      <div class="conn-option ${_selectedConn === c.id ? 'selected' : ''}" onclick="selectConn('${escAttr(c.id)}')">
         <div class="dot ${c.alive ? 'alive' : 'dead'}"></div>
         <div class="info">
-          <div class="path">${esc(c.cluster || c.id)}</div>
-          <div class="meta">${c.namespace ? esc(c.namespace) + ' / ' : ''}${esc(c.pod || c.id)}${c.local_port ? ' · port ' + c.local_port : ''}</div>
+          <div class="path">${esc(c.cluster || c.cluster_name || c.id)}</div>
+          <div class="meta">${c.namespace ? esc(c.namespace) + ' / ' : ''}${esc(c.pod || c.pod_name || c.id)}${c.local_port ? ' · port ' + c.local_port : ''}</div>
         </div>
       </div>
     `).join('');
   } catch (e) {
     el.innerHTML = '<div class="empty" style="color:var(--err)">加载失败</div>';
   }
+}
+
+async function getParentConnectionState() {
+  const result = { connections: [], health: {} };
+  if (window.parent && window.parent !== window) {
+    try {
+      const parentWin = window.parent;
+      if (typeof parentWin.checkConnectionsHealth === 'function') {
+        await parentWin.checkConnectionsHealth();
+      }
+      result.connections = Array.isArray(parentWin._connections) ? parentWin._connections : [];
+      result.health = parentWin._connHealth || {};
+    } catch (e) {
+      console.warn('读取连接中心状态失败，回退后端连接列表:', e);
+    }
+  }
+  return result;
+}
+
+function normalizeMcpConnections(connections, healthMap = {}) {
+  return (connections || [])
+    .map(c => {
+      const id = c.id || c.connection_id;
+      const h = healthMap[id] || {};
+      const level = inferMcpConnLevel(c);
+      const alive = h.alive ?? c.alive ?? c.status === 'connected';
+      const podExists = h.pod_exists ?? c.pod_exists;
+      return {
+        id,
+        alive,
+        pod_exists: podExists,
+        level,
+        local_port: c.local_port || 0,
+        cluster: c.cluster || c.cluster_name || '',
+        cluster_name: c.cluster_name || c.cluster || '',
+        namespace: c.namespace || '',
+        pod: c.pod || c.pod_name || '',
+        pod_name: c.pod_name || c.pod || '',
+        mcp_available: c.mcp_available,
+      };
+    })
+    .filter(c => c.id)
+    .filter(c => c.level === 'arthas')
+    .filter(c => c.pod_exists !== false)
+    .filter(c => c.alive !== false)
+    .filter(c => Boolean(c.local_port));
+}
+
+function inferMcpConnLevel(c) {
+  if (c.level) return c.level;
+  if (c.local_port || c.java_pid || c.arthas_version || c.arthas_address) return 'arthas';
+  return 'pod';
 }
 
 function selectConn(connId) {
@@ -271,4 +337,8 @@ function esc(s) {
   const d = document.createElement('div');
   d.textContent = String(s);
   return d.innerHTML;
+}
+
+function escAttr(s) {
+  return esc(s).replace(/'/g, '&#39;');
 }

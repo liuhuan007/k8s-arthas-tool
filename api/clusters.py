@@ -8,6 +8,7 @@ from functools import wraps
 from pathlib import Path
 
 from models.db import db
+from services.authorization_service import AuthorizationService
 
 # 集群配置文件读写锁
 _clusters_lock = threading.Lock()
@@ -243,6 +244,7 @@ def list_namespaces(cluster_id: str):
         if result.returncode == 0:
             data = json.loads(stdout)
             ns_list = [item['metadata']['name'] for item in data.get('items', [])]
+            ns_list = AuthorizationService.filter_namespaces(current_user, cluster.get('id') or cluster_id, ns_list)
             return jsonify({'namespaces': ns_list})
         else:
             return jsonify({'error': stderr}), 400
@@ -263,6 +265,8 @@ def list_pods(cluster_id: str):
         return jsonify(err), code
     
     namespace = request.args.get('namespace', 'default')
+    if not AuthorizationService.can_access_namespace(current_user, cluster.get('id') or cluster_id, namespace):
+        return jsonify({'error': '无权访问该 namespace'}), 403
     
     # 构建 kubectl 命令
     cmd = ['kubectl', 'get', 'pods', '-n', namespace, '-o', 'json']

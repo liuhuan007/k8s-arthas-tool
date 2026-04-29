@@ -118,6 +118,19 @@ class Database:
                     UNIQUE(user_id, cluster_id)
                 )
             ''')
+
+            # user_namespaces 表：账号到 cluster/namespace 的精细授权
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS user_namespaces (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    cluster_id TEXT NOT NULL,
+                    namespace TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+                    UNIQUE(user_id, cluster_id, namespace)
+                )
+            ''')
             
             # clusters 表
             cursor.execute('''

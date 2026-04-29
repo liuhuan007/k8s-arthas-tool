@@ -120,7 +120,11 @@ class ArthasConnection:
             except OSError:
                 time.sleep(0.5)
 
-        return False, f"port-forward 超时，本地端口 {self.local_port} 无法连接"
+        failed_port = self.local_port
+        self._stop_port_forward()
+        self._release_port(failed_port)
+        self.local_port = 0
+        return False, f"port-forward 超时，本地端口 {failed_port} 无法连接"
 
     # ── Public API ─────────────────────────────────────────────────────────────
     

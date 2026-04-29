@@ -59,22 +59,19 @@ def create_mcp_token():
     if not connection_id:
         return jsonify({"error": "请指定要绑定的连接"}), 400
 
-    # 验证连接存在且属于当前用户
-    # 1. 先检查内存中的活跃连接
+    # 验证连接存在且属于当前用户，并且是当前活跃的 Arthas 连接
     conn_entry = _get_connection_entry(connection_id)
-    conn_alive = False
+    if not conn_entry:
+        return jsonify({"error": "连接不存在、已失效或无权访问，请先在连接中心重新连接并启动 Arthas"}), 404
 
-    if conn_entry:
-        conn = conn_entry.get('conn')
+    conn = conn_entry.get('conn')
+    try:
         conn_alive = conn.is_alive() if conn else False
-    else:
-        # 2. 内存中没有，检查数据库中的历史连接
-        db_conn = db.fetch_one(
-            'SELECT id FROM connections WHERE id = ? AND user_id = ?',
-            (connection_id, current_user.id)
-        )
-        if not db_conn:
-            return jsonify({"error": "连接不存在或无权访问"}), 404
+    except Exception:
+        conn_alive = False
+
+    if not conn_alive or not getattr(conn, 'local_port', None):
+        return jsonify({"error": "当前连接不可用于 MCP，请先在连接中心启动 Arthas 并保持连接可用"}), 400
 
     # 生成 Token
     token = f"mcp_{secrets.token_hex(24)}"
@@ -316,65 +313,50 @@ def mcp_proxy(token):
 @mcp_bp.route('/api/mcp/connections', methods=['GET'])
 @login_required
 def list_available_connections():
-    """列出当前用户可用的 Arthas 连接（用于 Token 绑定选择）
+    """列出当前用户可绑定 MCP Token 的活跃 Arthas 连接。
 
-    优先从内存读取活跃连接，同时从数据库读取历史连接记录
+    MCP 代理依赖 Arthas HTTP/MCP port-forward，因此这里只返回当前内存中
+    属于当前用户、仍存活且具备本地端口的 Arthas 连接；不再混入数据库历史记录，
+    避免 Token 绑定到已经不存在的 Pod 或断开的连接。
     """
     from server import _connections, _connections_lock
 
-    # 从数据库读取用户的连接记录
-    db_connections = db.fetch_all(
-        'SELECT id, cluster_name, namespace, pod_name, updated_at FROM connections WHERE user_id = ? ORDER BY updated_at DESC',
-        (current_user.id,)
-    ) or []
-
-    # 从内存读取活跃连接状态
-    alive_map = {}
-    mcp_map = {}
+    available = []
     with _connections_lock:
         for conn_id, entry in _connections.items():
-            if entry.get('user_id') == current_user.id:
-                conn = entry.get('conn')
-                has_port = bool(conn and conn.local_port)
-                alive = conn.is_alive() if conn else False
-                alive_map[conn_id] = {
-                    'alive': alive or has_port,  # 有端口转发也视为连接中
-                    'local_port': conn.local_port if conn else 0,
-                }
-                mcp_map[conn_id] = entry.get('mcp_available', False)
+            if entry.get('user_id') != current_user.id:
+                continue
 
-    # 合并结果
-    available = []
-    seen_ids = set()
+            conn = entry.get('conn')
+            if not conn:
+                continue
 
-    # 1. 添加数据库中的连接记录
-    for row in db_connections:
-        conn_id = row['id']
-        seen_ids.add(conn_id)
-        alive_info = alive_map.get(conn_id, {'alive': False, 'local_port': 0})
-        available.append({
-            "id": conn_id,
-            "alive": alive_info['alive'],
-            "local_port": alive_info['local_port'],
-            "cluster": row.get('cluster_name', ''),
-            "namespace": row.get('namespace', ''),
-            "pod": row.get('pod_name', ''),
-            "status": 'connected' if alive_info['alive'] else 'disconnected',
-            "mcp_available": mcp_map.get(conn_id, False),
-        })
+            try:
+                alive = conn.is_alive()
+            except Exception:
+                alive = False
 
-    # 2. 添加内存中有但数据库中没有的连接（边缘情况）
-    for conn_id, alive_info in alive_map.items():
-        if conn_id not in seen_ids:
+            local_port = getattr(conn, 'local_port', None)
+            if not alive or not local_port:
+                continue
+
+            target = getattr(conn, 'target', None)
             available.append({
                 "id": conn_id,
-                "alive": alive_info['alive'],
-                "local_port": alive_info['local_port'],
-                "cluster": '',
-                "namespace": '',
-                "pod": '',
-                "status": 'connected' if alive_info['alive'] else 'disconnected',
-                "mcp_available": mcp_map.get(conn_id, False),
+                "alive": True,
+                "pod_exists": True,
+                "local_port": local_port,
+                "cluster": getattr(target, 'cluster_name', '') if target else '',
+                "cluster_name": getattr(target, 'cluster_name', '') if target else '',
+                "namespace": getattr(target, 'namespace', '') if target else '',
+                "pod": getattr(target, 'pod_name', '') if target else '',
+                "pod_name": getattr(target, 'pod_name', '') if target else '',
+                "status": "connected",
+                "level": "arthas",
+                "java_pid": getattr(conn, 'java_pid', None),
+                "arthas_version": getattr(conn, 'arthas_version', None),
+                "arthas_address": getattr(conn, 'arthas_address', None),
+                "mcp_available": entry.get('mcp_available', False),
             })
 
     return jsonify({"connections": available})

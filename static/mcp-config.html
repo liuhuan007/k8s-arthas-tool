@@ -167,9 +167,17 @@
     .conn-option .info { flex:1; font-size:12px; }
     .conn-option .info .path { font-family:monospace; font-size:11px; }
     .conn-option .info .meta { font-size:10px; color:var(--tx3); margin-top:2px; }
+    body.embed { background:transparent; }
+    body.embed .topbar { display:none; }
+    body.embed .main { max-width:none; padding:18px; }
   </style>
 </head>
 <body>
+  <script>
+    if (new URLSearchParams(window.location.search).get('embed') === '1') {
+      document.body.classList.add('embed');
+    }
+  </script>
   <div class="topbar">
     <h1>🤖 <span>MCP</span> 接入配置</h1>
     <a href="/index.html">← 返回主界面</a>

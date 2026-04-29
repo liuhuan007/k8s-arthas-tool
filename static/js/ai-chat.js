@@ -352,9 +352,8 @@
         window._connections.forEach(c => {
           const opt = document.createElement('option');
           opt.value = c.id;
-          const mcpTag = c.mcp_available ? ' [MCP]' : '';
           const statusTag = c.status === 'connected' ? '' : ' (离线)';
-          opt.textContent = `${c.pod_name || c.pod} (${c.cluster_name || c.cluster}/${c.namespace})${mcpTag}${statusTag}`;
+          opt.textContent = `${c.pod_name || c.pod} (${c.cluster_name || c.cluster}/${c.namespace})${statusTag}`;
           if (c.id === currentVal) opt.selected = true;
           sel.appendChild(opt);
         });
@@ -406,8 +405,7 @@
           statusStyle = c.status === 'connected' ? 'color:var(--a3)' : '';
         }
         dot.innerHTML = `<span style="font-size:11px;${statusStyle}">${statusIcon}</span>`;
-        const mcpTag = c.mcp_available ? ' 🔌' : '';
-        label.textContent = `${c.namespace}/${c.pod_name || c.pod}${mcpTag}`;
+        label.textContent = `${c.namespace}/${c.pod_name || c.pod}`;
       } else {
         dot.innerHTML = '<span style="font-size:11px;opacity:0.5">🔹</span>';
         label.textContent = currentId;
@@ -441,11 +439,10 @@
           hint = c.status === 'connected' ? '正常' : '离线';
         }
         const isActive = c.id === currentId;
-        const mcpBadge = c.mcp_available ? '<span style="font-size:9px;padding:1px 3px;border-radius:3px;background:rgba(63,185,80,.15);color:#3fb950;margin-left:4px">MCP</span>' : '';
         return `<div class="ai-conn-dd-item ${isActive ? 'active' : ''}" onclick="aiSelectConn('${esc(c.id)}')">
           <span style="font-size:11px;${statusStyle}" title="${hint}">${statusIcon}</span>
           <div class="dd-info">
-            <div class="dd-pod">${esc(c.pod_name || c.pod)}${mcpBadge}</div>
+            <div class="dd-pod">${esc(c.pod_name || c.pod)}</div>
             <div class="dd-meta">${esc(c.cluster_name || c.cluster)} / ${esc(c.namespace)}${hint ? ' · ' + hint : ''}</div>
           </div>
         </div>`;

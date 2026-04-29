@@ -122,6 +122,31 @@ class KubectlExecutor:
 
     # ── file transfer ─────────────────────────────────────────────────────────
 
+    def cp_to_pod(self, namespace: str, pod: str, container: str,
+                  local_path: str, pod_path: str, timeout: int = 180) -> Tuple[int, str, str]:
+        """上传本地文件到 Pod。"""
+        import os as _os
+        import subprocess as _sp
+
+        if not pod or not local_path or not pod_path:
+            return -1, "", "pod、local_path 和 pod_path 不能为空"
+        if not _os.path.exists(local_path):
+            return -1, "", f"本地文件不存在: {local_path}"
+
+        cmd = self._base_cmd() + ["cp", local_path, f"{pod}:{pod_path}", "-n", namespace]
+        if container:
+            cmd += ["-c", container]
+        log.info("kubectl cp to pod: %s", " ".join(cmd))
+        try:
+            r = _sp.run(cmd, capture_output=True, timeout=timeout)
+            stdout = r.stdout.decode('utf-8', errors='replace') if r.stdout else ''
+            stderr = r.stderr.decode('utf-8', errors='replace') if r.stderr else ''
+            return r.returncode, stdout, stderr
+        except _sp.TimeoutExpired:
+            return -1, "", f"kubectl cp 上传超时 ({timeout}s)"
+        except FileNotFoundError:
+            return -1, "", "kubectl 未找到，请确认已安装并在 PATH 中"
+
     def cp_from_pod(self, namespace: str, pod: str, container: str,
                     pod_path: str, local_path: str) -> Tuple[int, str, str]:
         """三级降级策略下载 Pod 内文件"""
