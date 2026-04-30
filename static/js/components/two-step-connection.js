@@ -29,6 +29,17 @@ let _podConnId = null;       // Pod 连接 ID
 let _runtimeInfo = null;     // 运行时信息
 let _podPhase = null;        // Pod 阶段
 
+function resetTwoStepConnectionState() {
+  _connState = ConnectionState.DISCONNECTED;
+  _podConnId = null;
+  _runtimeInfo = null;
+  _podPhase = null;
+  if (typeof updateConnectionButton === 'function') updateConnectionButton();
+  if (typeof updateRuntimeDisplay === 'function') updateRuntimeDisplay();
+  const statusEl = document.getElementById('connStatus');
+  if (statusEl) statusEl.style.display = 'none';
+}
+
 /**
  * 获取连接状态
  */
@@ -275,6 +286,9 @@ async function podConnect() {
     toast('请先配置集群和 Pod', 'warn');
     return;
   }
+  if (typeof validateSelectedNamespace === 'function' && !validateSelectedNamespace()) {
+    return;
+  }
 
   // 更新状态
   _connState = ConnectionState.POD_CONNECTING;
@@ -301,6 +315,7 @@ async function podConnect() {
     }
 
     // 连接成功
+    window._manualTargetDirty = false;
     _connState = ConnectionState.POD_CONNECTED;
     _podConnId = d.connection_id;
     _runtimeInfo = d.runtime;
@@ -592,10 +607,7 @@ function initTwoStepConnection() {
   console.log('两步连接流程已初始化');
   
   // 重置状态
-  _connState = ConnectionState.DISCONNECTED;
-  
-  // 更新按钮
-  updateConnectionButton();
+  resetTwoStepConnectionState();
   
   // 隐藏运行时信息
   const runtimeEl = document.getElementById('runtimeInfo');
@@ -614,6 +626,7 @@ window.upgradeToArthas = upgradeToArthas;
 window.getConnectionState = getConnectionState;
 window.canUpgradeToArthas = canUpgradeToArthas;
 window.initTwoStepConnection = initTwoStepConnection;
+window.resetTwoStepConnectionState = resetTwoStepConnectionState;
 // P0-1: 状态变更时自动同步到 window，让 diagnose.js 等模块可读取
 // 用 getter/setter 拦截，确保外部赋值也能更新内部状态
 (function() {

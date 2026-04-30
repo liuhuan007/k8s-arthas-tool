@@ -100,6 +100,15 @@ function openMcpCenter() {
   switchTab('mcp-center');
 }
 
+function loadAdminFrameIfNeeded(tab) {
+  if (!['user-management', 'audit-logs'].includes(tab)) return;
+  if (!(typeof isAdmin === 'function' && isAdmin())) return;
+  const frame = document.querySelector(`#panel-${tab} iframe[data-src]`);
+  if (frame && !frame.getAttribute('src')) {
+    frame.setAttribute('src', frame.dataset.src);
+  }
+}
+
 // ── Toolchain Center ─────────────────────────────────────────────────────────
 let _toolPackages = [];
 let _toolchainLoading = false;
@@ -1615,15 +1624,19 @@ async function cleanupStaleConnections() {
     return;
   }
   if (!confirm(`发现 ${staleIds.length} 个失效连接（Pod 不存在或集群不可用），是否清理？`)) return;
-  staleIds.forEach(id => {
-    // 通知后端断开
-    fetch(`${API}/arthas/disconnect`, {
+  try {
+    const resp = await fetch(`${API}/arthas/connections/cleanup-stale`, {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      credentials: 'same-origin',
-      body: JSON.stringify({conn_id: id})
-    }).catch(() => {});
-  });
+      credentials: 'include',
+      body: JSON.stringify({connection_ids: staleIds})
+    });
+    const data = await resp.json();
+    if (!resp.ok || data.ok === false) throw new Error(data.error || '清理失败');
+  } catch (e) {
+    toast('清理失败: ' + e.message, 'error');
+    return;
+  }
   _connections = _connections.filter(c => !staleIds.includes(c.id));
   staleIds.forEach(id => delete _connHealth[id]);
   if (staleIds.includes(_currentConnId)) {
@@ -1866,6 +1879,11 @@ function switchTab(n) {
   const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'terminal', 4:'monitor', 5:'filebrowser', 6:'ai', 7:'model-config', 8:'mcp-center', 9:'task-center', 10:'toolchain-center', 11:'history', 12:'diag', 13:'user-management', 14:'audit-logs'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
 
+  if (['user-management', 'audit-logs'].includes(tab) && !(typeof isAdmin === 'function' && isAdmin())) {
+    toast('只有管理员可以访问此页面', 'warn');
+    return;
+  }
+
   // 先切 Tab（允许切换到任何 Tab）
   const allTabs = ['connections','console','profiler','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','history','diag','user-management','audit-logs'];
   allTabs.forEach(x => {
@@ -1880,6 +1898,7 @@ function switchTab(n) {
 
   updateWorkspaceHead(tab);
   updateConnectionBarVisibility(tab);
+  loadAdminFrameIfNeeded(tab);
 
   // 连接引导检查：允许切 Tab，但不满足要求时显示引导面板 + 禁用操作区
   if (window.ConnectionGuard) {
@@ -2043,10 +2062,13 @@ function syncPodTargetFromConnection(conn) {
 
 function getCurrentPodTarget() {
   _mergeExternalConnectionState();
+  const formTarget = getT();
+  if (window._manualTargetDirty) {
+    return formTarget;
+  }
   const currentId = _currentConnId || window._currentConnId || null;
   const conn = _connections.find(c => c.id === currentId) || (window._connections || []).find(c => c.id === currentId);
   const connTarget = syncPodTargetFromConnection(conn);
-  const formTarget = getT();
   return {
     cluster_name: connTarget?.cluster_name || formTarget.cluster_name || '',
     namespace: connTarget?.namespace || formTarget.namespace || 'default',
@@ -2054,6 +2076,32 @@ function getCurrentPodTarget() {
     container: connTarget?.container || formTarget.container || '',
     arthas_jar: connTarget?.arthas_jar || formTarget.arthas_jar || '',
   };
+}
+
+function resetConnectionFlowForTargetChange() {
+  window._manualTargetDirty = true;
+  _currentConnId = null;
+  window._currentConnId = null;
+  _connected = false;
+  _ap = null;
+  window._selectedJavaPid = null;
+  window._lastCheckResult = null;
+  if (typeof resetTwoStepConnectionState === 'function') resetTwoStepConnectionState();
+  else window._connState = 'disconnected';
+  const runtimeEl = document.getElementById('runtimeInfo');
+  if (runtimeEl) runtimeEl.style.display = 'none';
+  setPtStat('', '');
+  setConnStatus('', '');
+  const conTitle = document.getElementById('conTitle');
+  if (conTitle) conTitle.innerHTML = '等待连接...';
+  const verBadge = document.getElementById('arthasVerBadge');
+  if (verBadge) verBadge.style.display = 'none';
+  const runBtn = document.getElementById('runBtn');
+  if (runBtn) runBtn.disabled = true;
+  if (typeof updateConnectionButton === 'function') updateConnectionButton();
+  if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
+  if (typeof csbRefresh === 'function') csbRefresh();
+  _syncState();
 }
 
 function getT() {
@@ -2075,6 +2123,7 @@ function setPtStat(type, msg) {
 
 async function loadPods() {
   if(!_ac) { toast('请先选择集群','warn'); return; }
+  if(!validateSelectedNamespace()) return;
   const ns = document.getElementById('ptNs').value || 'default';
   try {
     const r = await fetch(`${API}/clusters/${encodeURIComponent(_ac)}/pods?namespace=${ns}`);
@@ -2095,8 +2144,10 @@ function onPodSel(name) {
   const ctrs = (opt?.dataset.c || '').split(',').filter(Boolean);
   const csel = document.getElementById('ptCtr');
   csel.innerHTML = '<option value="">默认容器</option>' + ctrs.map(c => `<option value="${c}">${c}</option>`).join('');
+  csel.value = ctrs[0] || '';
   const lcsel = document.getElementById('logCtr');
   if(lcsel) lcsel.innerHTML = ctrs.map(c => `<option value="${c}">${c}</option>`).join('');
+  resetConnectionFlowForTargetChange();
 }
 
 async function checkPod() {
@@ -4875,6 +4926,7 @@ function selCluster(name) {
   _ac = name;
   try { localStorage.setItem('arthas_ac', name); } catch {}
   renderSidebar(); pingCluster(name);
+  resetConnectionFlowForTargetChange();
   // Auto-load namespaces for this cluster
   const cached = window._clusterNs && window._clusterNs[name];
   if(cached) { populateNsList(cached); }
@@ -4938,11 +4990,36 @@ async function autoLoadNs(clusterName) {
   } catch {}
 }
 
+function normalizeActiveNamespace(nsList) {
+  const ptNs = document.getElementById('ptNs');
+  if (!ptNs) return;
+  const allowed = nsList || [];
+  ptNs.dataset.allowedNamespaces = JSON.stringify(allowed);
+  if (!allowed.length) {
+    ptNs.innerHTML = '<option value="">无可用 namespace</option>';
+    ptNs.value = '';
+    return;
+  }
+  ptNs.innerHTML = allowed.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+  if (!allowed.includes(ptNs.value)) {
+    ptNs.value = allowed.includes('default') ? 'default' : allowed[0];
+  }
+}
+
+function validateSelectedNamespace() {
+  const ptNs = document.getElementById('ptNs');
+  if (!ptNs) return true;
+  let allowed = [];
+  try { allowed = JSON.parse(ptNs.dataset.allowedNamespaces || '[]'); } catch {}
+  if (allowed.length && !allowed.includes(ptNs.value)) {
+    toast('请选择已授权的 namespace', 'warn');
+    return false;
+  }
+  return true;
+}
+
 function populateNsList(nsList) {
-  let dl = document.getElementById('nsList');
-  if(!dl) { dl=document.createElement('datalist'); dl.id='nsList'; document.body.appendChild(dl); }
-  dl.innerHTML = nsList.map(n=>`<option value="${n}">`).join('');
-  document.getElementById('ptNs').setAttribute('list','nsList');
+  normalizeActiveNamespace(nsList);
 }
 function closeModal() { document.getElementById('clModal').classList.remove('open'); }
 
@@ -5289,6 +5366,265 @@ window.startMetricsPolling = startMetricsPolling;
 window.stopMetricsPolling = stopMetricsPolling;
 window.renderOverview = renderOverview;
 window.renderProcs = renderProcs;
+
+
+// ── Connection Detail Functions ─────────────────────────────────────
+function openConnectionDetail(connectionId) {
+  if (!connectionId) return;
+  fetch(`${API}/pod/connections`, { credentials: 'include' })
+    .then(r => r.json())
+    .then(data => {
+      const conn = (data.connections || []).find(c => c.connection_id === connectionId);
+      if (!conn) { toast('连接不存在', 'e'); return; }
+      renderConnectionDetail(conn);
+    })
+    .catch(e => toast('加载连接详情失败: ' + e.message, 'e'));
+}
+
+function renderConnectionDetail(conn) {
+  document.getElementById('cdCluster').textContent = conn.cluster_name || '—';
+  document.getElementById('cdNamespace').textContent = conn.namespace || '—';
+  document.getElementById('cdPod').textContent = conn.pod_name || '—';
+  document.getElementById('cdContainer').textContent = conn.container || '—';
+  document.getElementById('cdLevel').textContent = conn.level || '—';
+  document.getElementById('cdAlive').textContent = conn.alive ? '✅ 存活' : '❌ 离线';
+  document.getElementById('cdRuntime').textContent = conn.runtime ? `${conn.runtime} ${conn.runtime_version || ''}`.trim() : '—';
+  document.getElementById('cdJavaPid').textContent = conn.java_pid || '—';
+  document.getElementById('cdArthasVersion').textContent = conn.arthas_version || '—';
+  document.getElementById('cdLocalPort').textContent = conn.local_port || '—';
+
+  // 操作按钮显隐
+  const isArthas = conn.level === 'arthas';
+  document.getElementById('cdBtnUpgrade').style.display = isArthas ? 'none' : 'inline-block';
+  document.getElementById('cdBtnDisconnect').style.display = 'inline-block';
+
+  document.getElementById('connectionDetailTitle').textContent = `${conn.cluster_name}/${conn.namespace}/${conn.pod_name}`;
+  document.getElementById('connectionDetailSub').textContent = `层级: ${conn.level || 'pod'}  |  状态: ${conn.alive ? '在线' : '离线'}`;
+
+  // 切换面板
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('on'));
+  document.getElementById('panel-connection-detail').classList.add('on');
+}
+
+function closeConnectionDetail() {
+  document.getElementById('panel-connection-detail').classList.remove('on');
+  // 回到连接中心
+  document.getElementById('panel-connections').classList.add('on');
+}
+
+// ── Dashboard 控制面板 ─────────────────────────────────────────
+function openDashboard() {
+  // 获取当前连接
+  fetch(`${API}/pod/connections`, { credentials: 'include' })
+    .then(r => r.json())
+    .then(data => {
+      const conns = data.connections || [];
+      const arthasConn = conns.find(c => c.level === 'arthas' && c.alive);
+      if (!arthasConn) {
+        toast('请先建立 Arthas 连接', 'e');
+        return;
+      }
+      window.__currentDashboardConnId = arthasConn.connection_id;
+      // 打开面板
+      document.querySelectorAll('.panel').forEach(p => p.classList.remove('on'));
+      document.getElementById('panel-dashboard').classList.add('on');
+      refreshDashboard();
+    })
+    .catch(e => toast('加载连接失败: ' + e.message, 'e'));
+}
+
+function refreshDashboard() {
+  const connId = window.__currentDashboardConnId;
+  if (!connId) { toast('没有活跃的 Arthas 连接', 'e'); return; }
+  document.getElementById('dbThreadsContent').textContent = '加载中...';
+  document.getElementById('dbMemoryContent').textContent = '加载中...';
+  document.getElementById('dbGCContent').textContent = '加载中...';
+  document.getElementById('dbRuntimeContent').textContent = '加载中...';
+
+  fetch(`${API}/diagnose/tool`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ connection_id: connId, tool: 'dashboard' })
+  })
+    .then(r => r.json())
+    .then(resp => {
+      if (!resp.ok) { toast(resp.error || 'dashboard 执行失败', 'e'); return; }
+      renderDashboard(resp.data);
+    })
+    .catch(e => toast('dashboard 请求失败: ' + e.message, 'e'));
+}
+
+function renderDashboard(data) {
+  if (!data) return;
+  // data 是 Arthas dashboard 的返回，结构：{ results: [{ threads, memoryInfo, gcInfos, runtimeInfo }] }
+  const results = data.results || data.body?.results || [];
+  const d = results[0] || {};
+  // 线程
+  const threads = d.threads || [];
+  const threadHtml = threads.length
+    ? `<div class="dc-list">${threads.slice(0, 10).map(t => {
+        const cpu = parseFloat(t.cpu || 0);
+        const cls = cpu > 50 ? 'dc-high' : cpu > 20 ? 'dc-mid' : 'dc-low';
+        return `<div class="${cls}">${t.threadName || t.id} — CPU ${t.cpu}%</div>`;
+      }).join('')}</div>`
+    : '<div class="dc-empty">无数据</div>';
+  document.getElementById('dbThreadsContent').innerHTML = threadHtml;
+  // 内存
+  const mem = d.memoryInfo || {};
+  const memHtml = Object.entries(mem).map(([k, v]) => {
+    const used = parseFloat(v.used || 0);
+    const total = parseFloat(v.total || v.max || 0);
+    const pct = total ? Math.round(used / total * 100) : 0;
+    const cls = pct > 85 ? 'dc-high' : pct > 60 ? 'dc-mid' : 'dc-low';
+    return `<div class="${cls}">${k}: ${pct}%</div>`;
+  }).join('');
+  document.getElementById('dbMemoryContent').innerHTML = memHtml || '—';
+  // GC
+  const gc = d.gcInfos || [];
+  const gcHtml = gc.map(g => {
+    const name = g.name || '';
+    const count = g.collectionCount || 0;
+    const time = g.collectionTime || 0;
+    const cls = name.includes('Full') ? 'dc-high' : 'dc-low';
+    return `<div class="${cls}">${name}: ${count} 次 / ${time}ms</div>`;
+  }).join('');
+  document.getElementById('dbGCContent').innerHTML = gcHtml || '—';
+  // 运行时
+  const rt = d.runtimeInfo || {};
+  const rtHtml = `
+    <div>OS: ${rt.os || '—'}</div>
+    <div>JVM: ${rt.vmName || '—'} ${rt.vmVersion || ''}</div>
+    <div>PID: ${rt.pid || '—'}</div>
+  `;
+  document.getElementById('dbRuntimeContent').innerHTML = rtHtml;
+}
+
+function closeDashboard() {
+  document.getElementById('panel-dashboard').classList.remove('on');
+}
+
+
+
+// ── 线程诊断 ──────────────────────────────────
+function renderThreads(data) {
+  if (!data) return;
+  window.__lastThreadData = data;
+  const results = data.results || data.body?.results || [];
+  const d = results[0] || {};
+  const threads = d.threads || d.busyThreads || [];
+  const filter = document.getElementById("threadStateFilter")?.value || "";
+  const filtered = filter ? threads.filter(t => (t.state || "") === filter) : threads;
+  if (!filtered.length) {
+    document.getElementById("threadListContent").innerHTML = '<div class="dc-empty">无数据</div>';
+    return;
+  }
+  const html = '<table class="thread-table"><thead><tr>' +
+    '<th>线程名</th><th>ID</th><th>状态</th><th>CPU</th><th>操作</th></tr></thead><tbody>' +
+    filtered.map(t => {
+      const cpu = parseFloat(t.cpu || 0);
+      const cls = cpu > 50 ? "dc-high" : cpu > 20 ? "dc-mid" : "dc-low";
+      const tstr = JSON.stringify(t).replace(/"/g, '&');
+      return '<tr class="' + cls + '" onclick="showThreadStack(' + tstr + ')">' +
+        '<td>' + (t.threadName || '-') + '</td>' +
+        '<td>' + (t.id || '-') + '</td>' +
+        '<td>' + (t.state || '-') + '</td>' +
+        '<td>' + (t.cpu || 0) + '%</td>' +
+        '<td><button class="btn btn-sm" onclick="event.stopPropagation();showThreadStack(' + tstr + ')">查看堆栈</button></td>' +
+        '</tr>'; }).join('') +
+    '</tbody></table>';
+  document.getElementById("threadListContent").innerHTML = html;
+}
+
+function loadThreads() {
+  const connId = window.__currentDashboardConnId || "";
+  if (!connId) { toast("没有活跃的 Arthas 连接", "e"); return; }
+  const topN = parseInt(document.getElementById("threadTopN")?.value || 15);
+  document.getElementById("threadListContent").textContent = "加载中...";
+  fetch(`${API}/diagnose/tool`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ connection_id: connId, tool: "threads", args: { top_n: topN } })
+  })
+    .then(r => r.json())
+    .then(resp => {
+      if (!resp.ok) { toast(resp.error || "线程获取失败", "e"); return; }
+      renderThreads(resp.data);
+    })
+    .catch(e => toast("线程请求失败: " + e.message, "e"));
+}
+
+function filterThreads() {
+  if (window.__lastThreadData) renderThreads(window.__lastThreadData);
+}
+
+function showThreadStack(t) {
+  const stack = t.stack || t.stackTrace || "无堆栈信息";
+  document.getElementById("tsThreadName").textContent = t.threadName || "-";
+  document.getElementById("tsStackText").textContent = typeof stack === "string" ? stack : JSON.stringify(stack, null, 2);
+  document.getElementById("threadStackContent").style.display = "block";
+}
+
+function checkDeadlock() {
+  const connId = window.__currentDashboardConnId || "";
+  if (!connId) { toast("没有活跃的 Arthas 连接", "e"); return; }
+  fetch(`${API}/diagnose/tool`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ connection_id: connId, tool: "threads", args: { check_deadlock: true } })
+  })
+    .then(r => r.json())
+    .then(resp => {
+      if (resp.deadlock && resp.deadlock.blockingThread) {
+        toast("⚠️ 检测到死锁！", "e");
+        showThreadStack(resp.deadlock.blockingThread);
+      } else {
+        toast("未检测到死锁", "i");
+      }
+    })
+    .catch(e => toast("死锁检测失败: " + e.message, "e"));
+}
+
+function closeThreadDiag() {
+  document.getElementById("panel-thread-diagnosis").classList.remove("on");
+}
+
+function closeThreadStack() {
+  document.getElementById("threadStackContent").style.display = "none";
+}
+
+function cdPodConnect() { /* 复用现有 podConnect() 逻辑 */ toast('Pod 连接功能见连接中心', 'i'); }
+function cdUpgradeToArthas() { /* 复用现有 upgradeToArthas() 逻辑 */ toast('Arthas 升级功能见连接中心', 'i'); }
+function cdHealthCheck() { checkConnectionsHealth(); }
+function cdDisconnect() { cleanupStaleConnections(); }
+function cdOpenPanel(panelId) {
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('on'));
+  const panel = document.getElementById(panelId);
+  if (panel) panel.classList.add('on');
+}
+
+// 暴露给全局
+window.openConnectionDetail = openConnectionDetail;
+window.renderConnectionDetail = renderConnectionDetail;
+window.closeConnectionDetail = closeConnectionDetail;
+window.cdPodConnect = cdPodConnect;
+window.cdUpgradeToArthas = cdUpgradeToArthas;
+window.cdHealthCheck = cdHealthCheck;
+window.cdDisconnect = cdDisconnect;
+window.cdOpenPanel = cdOpenPanel;
+window.openDashboard = openDashboard;
+window.refreshDashboard = refreshDashboard;
+window.renderDashboard = renderDashboard;
+window.closeDashboard = closeDashboard;
+window.renderThreads = renderThreads;
+window.loadThreads = loadThreads;
+window.filterThreads = filterThreads;
+window.showThreadStack = showThreadStack;
+window.checkDeadlock = checkDeadlock;
+window.closeThreadDiag = closeThreadDiag;
+window.closeThreadStack = closeThreadStack;
 
 // 来自 components/filebrowser.js
 window.fbGetCurPath = fbGetCurPath;

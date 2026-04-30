@@ -178,8 +178,11 @@
           return;
         }
         if (!resp.user || resp.user.role !== 'admin') {
-          alert('只有管理员可以查看审计日志');
-          window.location.href = 'index.html';
+          if (window.self !== window.top && window.parent && typeof window.parent.switchTab === 'function') {
+            window.parent.switchTab('connections');
+          } else {
+            window.location.href = 'index.html';
+          }
           return;
         }
         const el = document.getElementById('currentUser');

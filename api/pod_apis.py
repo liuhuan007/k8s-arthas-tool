@@ -143,6 +143,24 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             log.error("Pod connect failed: %s", e, exc_info=True)
             return jsonify({"error": str(e)}), 500
     
+    def cleanup_pod_connection_by_id(conn_id: str) -> bool:
+        """按连接 ID 清理 Pod 连接，供全局失效连接清理复用。"""
+        entry = None
+        with _pod_connections_lock:
+            entry = _pod_connections.pop(conn_id, None)
+        if entry:
+            conn = entry.get('conn')
+            if conn:
+                try:
+                    conn.disconnect()
+                except Exception:
+                    pass
+            return True
+        return False
+
+    # 将清理函数挂到 Flask app，避免跨闭包直接访问 _pod_connections
+    app.cleanup_pod_connection_by_id = cleanup_pod_connection_by_id
+
     @app.route('/api/pod/disconnect', methods=['POST'])
     @login_required
     def pod_disconnect():
@@ -153,20 +171,14 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         if not conn_id:
             return jsonify({"error": "connection_id 必填"}), 400
         
-        with _pod_connections_lock:
-            if conn_id not in _pod_connections:
-                return jsonify({"error": "连接不存在"}), 404
-            
-            if not _check_pod_conn_owner(conn_id):
-                return jsonify({"error": "无权操作此连接"}), 403
-            
-            entry = _pod_connections.pop(conn_id, None)
-        
-        if entry:
-            conn = entry.get('conn')
-            if conn:
-                conn.disconnect()
-        
+        entry = _pod_connections.get(conn_id)
+        if entry and not _check_pod_conn_owner(conn_id):
+            return jsonify({"error": "无权操作此连接"}), 403
+
+        cleaned = cleanup_pod_connection_by_id(conn_id)
+        if not cleaned:
+            return jsonify({"error": "连接不存在"}), 404
+        db.delete('connections', 'id = ?', (conn_id,))
         return jsonify({"ok": True, "message": "Pod 连接已断开"})
     
     @app.route('/api/pod/connections', methods=['GET'])

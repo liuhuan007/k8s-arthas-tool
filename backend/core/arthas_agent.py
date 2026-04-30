@@ -107,6 +107,7 @@ class ArthasAgentManager:
                 log.info("Auto-detected Arthas JAR: %s", fallback)
                 self.t.arthas_jar = fallback
                 return True
+        log.warning("未找到 Arthas JAR: %s，请使用工具链分发", self.t.arthas_jar)
         return False
 
     def _detect_mcp_support(self, http_port: int) -> str:

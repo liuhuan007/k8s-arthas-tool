@@ -113,26 +113,29 @@ const ConnStatusBar = (function () {
       _runtime.style.display = 'none';
     }
 
-    // 操作按钮
-    if (level === 'none') {
-      _action.textContent = '🔌 连接';
-      _action.className = 'csb-action csb-action-connect';
-      _action.style.display = '';
-    } else if (level === 'pod') {
-      const isJava = rt && rt.type === 'java';
-      if (isJava) {
-        _action.textContent = '⚡ 启动 Arthas';
-        _action.className = 'csb-action csb-action-upgrade';
+    // 快捷操作按钮：根据状态显示不同文本和样式
+    if (_action) {
+      _action.classList.remove('csb-action-connect', 'csb-action-upgrade', 'csb-action-connected');
+      if (level === 'none') {
+        _action.textContent = '🔌 连接';
+        _action.classList.add('csb-action-connect');
+        _action.style.display = '';
+      } else if (level === 'pod') {
+        const rt = _getRuntimeInfo();
+        if (rt && rt.type === 'java') {
+          _action.textContent = '⚡ 启动 Arthas';
+          _action.classList.add('csb-action-upgrade');
+          _action.style.display = '';
+        } else {
+          _action.style.display = 'none';
+        }
+      } else if (level === 'arthas') {
+        _action.textContent = '🔌 断开';
+        _action.classList.add('csb-action-disconnect');
         _action.style.display = '';
       } else {
-        _action.textContent = '🔵 已连接';
-        _action.className = 'csb-action csb-action-connected';
-        _action.style.display = '';
+        _action.style.display = 'none';
       }
-    } else if (level === 'arthas') {
-      _action.textContent = '⚡ 已连接';
-      _action.className = 'csb-action csb-action-connected';
-      _action.style.display = '';
     }
 
     // 条体可见性：由当前页面场景控制，未隐藏时展示引导状态
@@ -154,8 +157,9 @@ const ConnStatusBar = (function () {
       if (rt && rt.type === 'java') {
         if (typeof upgradeToArthas === 'function') upgradeToArthas();
       }
+    } else if (level === 'arthas') {
+      if (typeof arthasDC === 'function') arthasDC();
     }
-    // arthas 已连接时按钮无操作
   }
 
   // ── 初始化 ────────────────────────────────────────────────────────────

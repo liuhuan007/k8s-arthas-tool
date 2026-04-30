@@ -1173,5 +1173,14 @@
   } catch(e) {
     console.error('❌ diagnose.js IIFE error:', e);
   }
+
+  // ── watch/trace 场景化表单 ──────────────────────────
+  function watchTraceForm() {
+    // 最小实现：打开 panel-diag 并提示
+    const panel = document.getElementById('panel-diag');
+    if (panel) panel.classList.add("on");
+    toast("请输入类名表达式和方法名，然后执行 trace/watch", "i");
+  }
+
 })();
 

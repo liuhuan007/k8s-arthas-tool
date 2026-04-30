@@ -21,9 +21,12 @@ document.addEventListener('DOMContentLoaded', async function() {
         }
 
         if (!data.user.is_admin) {
-            // 不是管理员，重定向到主页
-            alert('只有管理员可以访问此页面');
-            window.location.href = '/';
+            // 不是管理员，嵌入模式下交给父页面回到连接中心，避免 iframe 反复弹窗/跳转
+            if (window.self !== window.top && window.parent && typeof window.parent.switchTab === 'function') {
+                window.parent.switchTab('connections');
+            } else {
+                window.location.href = '/';
+            }
             return;
         }
 
@@ -87,6 +90,9 @@ function renderUserTable(users) {
                 <div class="btn-row">
                     <button class="ab ab-g ab-sm" onclick="showClusterModal(${user.id}, '${escapeHtml(user.username)}')">
                         管理集群
+                    </button>
+                    <button class="ab ab-g ab-sm" onclick="showNamespaceModal(${user.id}, '${escapeHtml(user.username)}')">
+                        管理namespace
                     </button>
                     ${user.username !== 'admin' ? `
                     <button class="ab ab-g ab-sm" onclick="editUser(${user.id}, '${escapeHtml(user.username)}', '${user.role}', '${user.status}')">
@@ -391,6 +397,130 @@ function updateClusterAssignment(checkbox) {
     }
 }
 
+// Namespace 授权管理
+async function showNamespaceModal(userId, username) {
+    const modal = document.getElementById('namespaceModal');
+    modal.dataset.userId = userId;
+    document.getElementById('namespaceModalUser').textContent = username;
+    document.getElementById('namespaceError').classList.remove('show');
+
+    try {
+        const [clusterResponse, namespaceResponse] = await Promise.all([
+            fetch(API + '/clusters', { credentials: 'same-origin' }),
+            fetch(API + `/user-namespaces/${userId}`, { credentials: 'same-origin' })
+        ]);
+        const clusterData = await clusterResponse.json();
+        const namespaceData = await namespaceResponse.json();
+        const clusters = clusterData.clusters || [];
+        const namespaceClusterNameMap = {};
+        clusters.forEach(c => { namespaceClusterNameMap[c.id] = c.name || c.id; });
+        modal.dataset.clusterNameMap = JSON.stringify(namespaceClusterNameMap);
+
+        const select = document.getElementById('namespaceClusterSelect');
+        select.innerHTML = clusters.map(c => `<option value="${escapeHtml(c.id)}">${escapeHtml(c.name || c.id)}</option>`).join('');
+        select.dataset.clusters = JSON.stringify(clusters.map(c => ({ id: c.id, name: c.name })));
+
+        renderAssignedNamespaces(namespaceData.namespaces || [], namespaceClusterNameMap);
+        showModal('namespaceModal');
+        await loadNamespacesForSelectedCluster();
+    } catch (error) {
+        console.error('Failed to load namespace permissions:', error);
+        alert('加载 namespace 授权失败: ' + error.message);
+    }
+}
+
+async function loadNamespacesForSelectedCluster() {
+    const select = document.getElementById('namespaceClusterSelect');
+    const clusterId = select.value;
+    const options = document.getElementById('namespaceOptions');
+    options.innerHTML = '';
+    if (!clusterId) return;
+    try {
+        const resp = await fetch(API + `/clusters/${encodeURIComponent(clusterId)}/namespaces`, { credentials: 'same-origin' });
+        const data = await resp.json();
+        const namespaces = data.namespaces || [];
+        options.innerHTML = namespaces.map(ns => `<option value="${escapeHtml(ns)}"></option>`).join('') + '<option value="*"></option>';
+    } catch (error) {
+        console.warn('Failed to load namespace options:', error);
+        options.innerHTML = '<option value="default"></option><option value="*"></option>';
+    }
+}
+
+function renderAssignedNamespaces(rows, namespaceClusterNameMap) {
+    const list = document.getElementById('assignedNamespaces');
+    const clusterNameMap = namespaceClusterNameMap || (() => {
+        try { return JSON.parse(document.getElementById('namespaceModal').dataset.clusterNameMap || '{}'); }
+        catch { return {}; }
+    })();
+    list.innerHTML = '';
+    if (!rows || rows.length === 0) {
+        list.innerHTML = '<div style="text-align:center;color:var(--tx3);padding:16px;font-size:11px">暂无 namespace 授权</div>';
+        return;
+    }
+    rows.forEach(row => {
+        const displayCluster = clusterNameMap[row.cluster_id] || row.cluster_name || row.cluster_id;
+        const item = document.createElement('div');
+        item.className = 'namespace-chip';
+        item.innerHTML = `
+            <span><code>${escapeHtml(displayCluster)}</code> / <code>${escapeHtml(row.namespace)}</code></span>
+            <button class="ab ab-d ab-sm" onclick="removeNamespacePermission(${row.id}, '${escapeHtml(row.cluster_id)}', '${escapeHtml(row.namespace)}')">取消</button>
+        `;
+        list.appendChild(item);
+    });
+}
+
+async function assignNamespace() {
+    const modal = document.getElementById('namespaceModal');
+    const userId = parseInt(modal.dataset.userId, 10);
+    const clusterId = document.getElementById('namespaceClusterSelect').value;
+    const namespace = document.getElementById('namespaceInput').value.trim();
+    const err = document.getElementById('namespaceError');
+    err.classList.remove('show');
+
+    if (!userId || !clusterId || !namespace) {
+        err.textContent = '用户、集群和 namespace 必填';
+        err.classList.add('show');
+        return;
+    }
+
+    try {
+        const resp = await fetch(API + '/user-namespaces', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            credentials: 'same-origin',
+            body: JSON.stringify({ user_id: userId, cluster_id: clusterId, namespace })
+        });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || '授权失败');
+        document.getElementById('namespaceInput').value = '';
+        const refreshed = await fetch(API + `/user-namespaces/${userId}`, { credentials: 'same-origin' }).then(r => r.json());
+        renderAssignedNamespaces(refreshed.namespaces || []);
+    } catch (error) {
+        err.textContent = '授权失败: ' + error.message;
+        err.classList.add('show');
+    }
+}
+
+async function removeNamespacePermission(assignmentId, clusterId, namespace) {
+    const modal = document.getElementById('namespaceModal');
+    const userId = parseInt(modal.dataset.userId, 10);
+    if (!confirm(`确定取消 ${clusterId}/${namespace} 授权吗？`)) return;
+    try {
+        const endpoint = assignmentId
+            ? API + `/user-namespaces/${assignmentId}`
+            : API + `/user-namespaces/by-user-cluster-namespace?user_id=${userId}&cluster_id=${encodeURIComponent(clusterId)}&namespace=${encodeURIComponent(namespace)}`;
+        const resp = await fetch(endpoint, { method: 'DELETE', credentials: 'same-origin' });
+        const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || '取消授权失败');
+        const refreshed = await fetch(API + `/user-namespaces/${userId}`, { credentials: 'same-origin' }).then(r => r.json());
+        renderAssignedNamespaces(refreshed.namespaces || []);
+    } catch (error) {
+        const err = document.getElementById('namespaceError');
+        err.textContent = '取消授权失败: ' + error.message;
+        err.classList.add('show');
+    }
+}
+
 // HTML 转义
 function escapeHtml(text) {
     const div = document.createElement('div');
@@ -405,5 +535,9 @@ window.closeModal = closeModal;
 window.createUser = createUser;
 window.saveClusterAssignment = saveClusterAssignment;
 window.showClusterModal = showClusterModal;
+window.showNamespaceModal = showNamespaceModal;
+window.assignNamespace = assignNamespace;
+window.removeNamespacePermission = removeNamespacePermission;
+window.loadNamespacesForSelectedCluster = loadNamespacesForSelectedCluster;
 window.escapeHtml = escapeHtml;
 window.updateClusterAssignment = updateClusterAssignment;

@@ -321,6 +321,25 @@ def diagnose_tool():
             cmd = f"trace {cp} {mp} -n {sample_count} '{skip} #cost > .5' '#cost > .1'"
             resp = conn.http_client.exec_once(cmd, timeout_ms=30000)
             return jsonify({"ok": True, "data": resp})
+        elif tool == 'watch':
+            cp = args.get('class_pattern', '')
+            mp = args.get('method_pattern', '*')
+            if not cp:
+                return jsonify({"error": "class_pattern 不能为空"}), 400
+            n = args.get('n', 5)
+            condition = args.get('condition', '')
+            cmd = f"watch {cp} {mp} -n {n}"
+            if condition:
+                cmd += f" '{condition}'"
+            resp = conn.http_client.exec_once(cmd, timeout_ms=30000)
+            return jsonify({"ok": True, "data": resp})
+        elif tool == 'jad':
+            class_name = args.get('class_name', '')
+            if not class_name:
+                return jsonify({"error": "class_name 不能为空"}), 400
+            cmd = f"jad --source-only {class_name}"
+            resp = conn.http_client.exec_once(cmd, timeout_ms=30000)
+            return jsonify({"ok": True, "data": resp})
         else:
             return jsonify({"error": f"未知工具: {tool}"}), 400
     except Exception as e:

@@ -254,6 +254,8 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .csb-action-connect:hover{background:rgba(56,189,248,.22);border-color:rgba(56,189,248,.5)}
 .csb-action-upgrade{background:rgba(52,211,153,.1);color:var(--a3);border:1px solid rgba(52,211,153,.25)}
 .csb-action-upgrade:hover{background:rgba(52,211,153,.2);border-color:rgba(52,211,153,.45)}
+.csb-action-disconnect{background:rgba(239,68,68,.1);color:#ef4444;border:1px solid rgba(239,68,68,.25)}
+.csb-action-disconnect:hover{background:rgba(239,68,68,.2);border-color:rgba(239,68,68,.45)}
 .csb-action-connected{background:rgba(107,127,160,.08);color:var(--tx3);border:1px solid var(--ln);cursor:default}
 
 /* 层级提示条 */
@@ -907,3 +909,52 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 .toolchain-page .task-stat{background:linear-gradient(180deg,rgba(8,24,38,.86),rgba(5,12,20,.72));border-color:rgba(0,229,255,.18)}
 .toolchain-page .task-stat b{color:var(--ops-green);text-shadow:0 0 16px rgba(47,255,177,.22)}
 .toolchain-page .task-status.running,.toolchain-page .task-status.active{color:var(--ops-green);border-color:rgba(47,255,177,.35);background:rgba(47,255,177,.08)}
+
+/* Connection Detail Panel */
+.conn-detail-hero{position:relative;overflow:hidden;border-color:rgba(0,229,255,.20);background:linear-gradient(135deg,rgba(6,17,29,.90),rgba(12,28,44,.82)),radial-gradient(circle at 92% 0%,rgba(47,255,177,.12),transparent 38%);padding:18px 20px 14px}
+.conn-detail-kicker{font-size:10px;letter-spacing:2px;color:var(--ops-green);text-shadow:0 0 10px rgba(47,255,177,.25);text-transform:uppercase}
+.conn-detail-hero h2{font-size:17px;color:#eaffff;text-shadow:0 0 18px rgba(0,229,255,.16%);margin:4px 0 2px}
+.conn-detail-hero p{font-size:11px;color:var(--tx2)}
+.conn-detail-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:8px}
+.conn-detail-body{padding:14px 18px 18px;display:flex;flex-direction:column;gap:14px}
+.cd-section{border:1px solid var(--ln);border-radius:8px;padding:10px 14px;background:var(--bg2)}
+.cd-section-title{font-size:11px;font-weight:700;color:var(--ops-cyan);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px}
+.cd-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px}
+.cd-field{display:flex;align-items:center;gap:6px;font-size:12px}
+.cd-label{color:var(--tx2);min-width:72px;font-size:11px}
+.cd-value{color:var(--tx);font-family:'IBM Plex Mono',monospace;font-size:11px}
+.cd-actions{display:flex;flex-wrap:wrap;gap:6px}
+.cd-caps{display:flex;flex-wrap:wrap;gap:6px}
+.cd-cap{font-size:11px;padding:6px 10px;border:1px solid rgba(0,229,255,.18);border-radius:6px;background:rgba(0,229,255,.04);color:var(--tx);cursor:pointer}
+.cd-cap:hover{border-color:rgba(47,255,177,.38);background:rgba(47,255,177,.08);color:#eaffff}
+
+/* Dashboard 控制面板 */
+.dashboard-page{position:relative}
+.dashboard-actions{display:flex;gap:8px;margin-top:10px}
+.dashboard-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px;padding:14px 18px}
+.dashboard-card{border:1px solid var(--ln);border-radius:8px;padding:10px 14px;background:var(--bg2);min-height:120px}
+.dc-title{font-size:11px;font-weight:700;color:var(--ops-cyan);letter-spacing:1px;text-transform:uppercase;margin-bottom:8px}
+.dc-content{font-size:11px;color:var(--tx);max-height:260px;overflow-y:auto}
+.dc-list{display:flex;flex-direction:column;gap:3px}
+.dc-high{color:#ff6b6b;font-weight:600}
+.dc-mid{color:#ffd93d;font-weight:500}
+.dc-low{color:#6bff6b}
+.dc-empty{color:var(--tx2);font-style:italic}
+
+/* 线程诊断面板 */
+.thread-diag-page{position:relative}
+.thread-actions{display:flex;gap:8px;margin:10px 18px}
+.thread-filter{display:flex;gap:12px;align-items:center;padding:8px 18px;font-size:12px;color:var(--tx2)}
+.thread-filter select,.thread-filter input{background:var(--bg2);color:var(--tx);border:1px solid var(--ln);border-radius:4px;padding:2px 6px}
+.thread-list{padding:10px 18px;max-height:50vh;overflow-y:auto}
+.thread-table{width:100%;border-collapse:collapse;font-size:11px}
+.thread-table th{text-align:left;padding:4px 8px;color:var(--ops-cyan);border-bottom:1px solid var(--ln)}
+.thread-table td{padding:4px 8px;border-bottom:1px solid rgba(255,255,255,.04)}
+.thread-table tr{cursor:pointer;transition:background .15s}
+.thread-table tr:hover{background:rgba(0,229,255,.06)}
+.thread-table .dc-high{color:#ff6b6b;font-weight:600}
+.thread-table .dc-mid{color:#ffd93d;font-weight:500}
+.thread-table .dc-low{color:#6bff6b}
+.thread-stack{border-top:1px solid var(--ln);padding:10px 18px;max-height:40vh;overflow-y:auto}
+.ts-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.ts-stack-text{background:var(--bg2);padding:10px;border-radius:6px;font-size:11px;white-space:pre-wrap;max-height:35vh;overflow-y:auto}

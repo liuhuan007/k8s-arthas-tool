@@ -186,7 +186,7 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
     <div class="csb-right">
       <span class="csb-runtime" id="csbRuntime"></span>
-      <button class="csb-action" id="csbAction" onclick="csbHandleAction()"></button>
+      <button class="csb-action" id="csbAction" onclick="csbHandleAction()" style="display:none"></button>
     </div>
   </div>
 
@@ -236,7 +236,7 @@ document.addEventListener('DOMContentLoaded', function() {
               </div>
               <div class="pod-target pod-target-main" id="podTarget">
                 <div class="pt-lbl">Namespace</div>
-                <input class="pt-inp" id="ptNs" value="default" placeholder="default">
+                <select class="pt-inp" id="ptNs"><option value="default">default</option></select>
                 <div class="pt-lbl">Pod</div>
                 <div style="display:flex;gap:5px">
                   <input class="pt-inp" id="ptPod" placeholder="pod-name-xxxxx" style="flex:1">
@@ -293,6 +293,149 @@ document.addEventListener('DOMContentLoaded', function() {
               <div class="sb-empty">暂无连接<br>使用左侧连接配置创建连接</div>
             </div>
           </section>
+        </div>
+      </div>
+    </div>
+
+    <!-- Connection Detail Panel -->
+    <div class="panel" id="panel-connection-detail" style="display:none">
+      <div class="conn-detail-hero">
+        <div>
+          <div class="conn-detail-kicker">Connection Detail</div>
+          <h2 id="connectionDetailTitle">连接详情</h2>
+          <p id="connectionDetailSub">选择连接以查看详情</p>
+        </div>
+        <div class="conn-detail-actions">
+          <button class="ib" onclick="closeConnectionDetail()">✕ 关闭</button>
+        </div>
+      </div>
+
+      <div class="conn-detail-body">
+        <!-- 基本信息区 -->
+        <section class="cd-section" id="connectionDetailBasic">
+          <div class="cd-section-title">基本信息</div>
+          <div class="cd-grid">
+            <div class="cd-field"><span class="cd-label">Cluster</span><span class="cd-value" id="cdCluster">—</span></div>
+            <div class="cd-field"><span class="cd-label">Namespace</span><span class="cd-value" id="cdNamespace">—</span></div>
+            <div class="cd-field"><span class="cd-label">Pod</span><span class="cd-value" id="cdPod">—</span></div>
+            <div class="cd-field"><span class="cd-label">Container</span><span class="cd-value" id="cdContainer">—</span></div>
+          </div>
+        </section>
+
+        <!-- 状态区 -->
+        <section class="cd-section" id="connectionDetailStatus">
+          <div class="cd-section-title">连接状态</div>
+          <div class="cd-grid">
+            <div class="cd-field"><span class="cd-label">层级</span><span class="cd-value" id="cdLevel">—</span></div>
+            <div class="cd-field"><span class="cd-label">存活</span><span class="cd-value" id="cdAlive">—</span></div>
+            <div class="cd-field"><span class="cd-label">Runtime</span><span class="cd-value" id="cdRuntime">—</span></div>
+            <div class="cd-field"><span class="cd-label">Java PID</span><span class="cd-value" id="cdJavaPid">—</span></div>
+            <div class="cd-field"><span class="cd-label">Arthas 版本</span><span class="cd-value" id="cdArthasVersion">—</span></div>
+            <div class="cd-field"><span class="cd-label">本地端口</span><span class="cd-value" id="cdLocalPort">—</span></div>
+          </div>
+        </section>
+
+        <!-- 操作区 -->
+        <section class="cd-section" id="connectionDetailActions">
+          <div class="cd-section-title">操作</div>
+          <div class="cd-actions">
+            <button class="pt-btn" id="cdBtnPodConnect" onclick="cdPodConnect()">🔌 Pod 连接</button>
+            <button class="pt-btn success" id="cdBtnUpgrade" onclick="cdUpgradeToArthas()">⚡ 升级 Arthas</button>
+            <button class="pt-btn" onclick="cdHealthCheck()">♥ 健康检查</button>
+            <button class="pt-btn danger" id="cdBtnDisconnect" onclick="cdDisconnect()">⏏ 断开</button>
+          </div>
+        </section>
+
+        <!-- 能力入口区 -->
+        <section class="cd-section" id="connectionDetailCapabilities">
+          <div class="cd-section-title">能力入口</div>
+          <div class="cd-caps">
+            <button class="cd-cap" onclick="cdOpenPanel('panel-monitor')">📊 Pod 监控</button>
+            <button class="cd-cap" onclick="openDashboard()">📈 控制面板</button>
+            <button class="cd-cap" onclick="cdOpenPanel('panel-terminal')">🖥 终端</button>
+            <button class="cd-cap" onclick="cdOpenPanel('panel-filebrowser')">📂 文件</button>
+            <button class="cd-cap" onclick="cdOpenPanel('panel-profiler')">📉 性能诊断</button>
+            <button class="cd-cap" onclick="cdOpenPanel('panel-diag')">🔧 Arthas 命令</button>
+            <button class="cd-cap" onclick="cdOpenPanel('panel-task-center')">🛠 采样工具</button>
+            <button class="cd-cap" onclick="cdOpenPanel('panel-thread-diagnosis')">🧵 线程诊断</button>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <!-- Dashboard 控制面板 -->
+    <div class="panel" id="panel-dashboard" style="display:none">
+      <div class="ops-page dashboard-page">
+        <div class="ops-hero">
+          <div>
+            <div class="ops-kicker">Dashboard</div>
+            <h2>JVM 实时控制面板</h2>
+            <p id="dashboardSub">Arthas 连接后可用，默认 10 秒刷新</p>
+          </div>
+          <div class="dashboard-actions">
+            <button class="btn btn-g" onclick="refreshDashboard()">🔄 刷新</button>
+            <button class="btn btn-p" onclick="closeDashboard()">✕ 关闭</button>
+          </div>
+        </div>
+        <div class="dashboard-grid" id="dashboardGrid">
+          <div class="dashboard-card" id="dashboardThreads">
+            <div class="dc-title">线程</div>
+            <div class="dc-content" id="dbThreadsContent">—</div>
+          </div>
+          <div class="dashboard-card" id="dashboardMemory">
+            <div class="dc-title">内存</div>
+            <div class="dc-content" id="dbMemoryContent">—</div>
+          </div>
+          <div class="dashboard-card" id="dashboardGC">
+            <div class="dc-title">GC</div>
+            <div class="dc-content" id="dbGCContent">—</div>
+          </div>
+          <div class="dashboard-card" id="dashboardRuntime">
+            <div class="dc-title">运行时</div>
+            <div class="dc-content" id="dbRuntimeContent">—</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+
+    <!-- 线程诊断面板 -->
+    <div class="panel" id="panel-thread-diagnosis" style="display:none">
+      <div class="ops-page thread-diag-page">
+        <div class="ops-hero">
+          <div>
+            <div class="ops-kicker">Thread Diagnosis</div>
+            <h2>线程诊断</h2>
+            <p id="threadDiagSub">Arthas 连接后可用</p>
+          </div>
+          <div class="thread-actions">
+            <button class="btn btn-g" onclick="refreshThreads()">🔄 刷新线程</button>
+            <button class="btn btn-p" onclick="checkDeadlock()">⚠️ 检测死锁</button>
+            <button class="btn btn-p" onclick="closeThreadDiag()">✕ 关闭</button>
+          </div>
+        </div>
+        <div class="thread-filter">
+          <label>状态过滤：
+            <select id="threadStateFilter" onchange="filterThreads()">
+              <option value="">全部</option>
+              <option value="RUNNABLE">RUNNABLE</option>
+              <option value="BLOCKED">BLOCKED</option>
+              <option value="WAITING">WAITING</option>
+              <option value="TIMED_WAITING">TIMED_WAITING</option>
+            </select>
+          </label>
+          <label>TOP N：
+            <input type="number" id="threadTopN" value="15" min="1" max="100" style="width:60px">
+          </label>
+          <button class="btn btn-sm" onclick="loadThreads()">应用</button>
+        </div>
+        <div class="thread-list" id="threadListContent">—</div>
+        <div class="thread-stack" id="threadStackContent" style="display:none">
+          <div class="ts-header">
+            <span id="tsThreadName">—</span>
+            <button class="btn btn-sm" onclick="closeThreadStack()">✕ 关闭堆栈</button>
+          </div>
+          <pre id="tsStackText"></pre>
         </div>
       </div>
     </div>
@@ -614,11 +757,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
     <!-- Embedded Admin Pages -->
     <div class="panel" id="panel-user-management">
-      <iframe class="admin-frame" src="user-management.html?embed=1" title="用户管理"></iframe>
+      <iframe class="admin-frame" data-src="user-management.html?embed=1" title="用户管理"></iframe>
     </div>
 
     <div class="panel" id="panel-audit-logs">
-      <iframe class="admin-frame" src="audit-logs.html?embed=1" title="审计日志"></iframe>
+      <iframe class="admin-frame" data-src="audit-logs.html?embed=1" title="审计日志"></iframe>
     </div>
 
     <!-- Arthas Console -->

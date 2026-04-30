@@ -605,6 +605,49 @@ def arthas_status():
     })
 
 
+@app.route('/api/arthas/connections/cleanup-stale', methods=['POST'])
+@login_required
+def cleanup_stale_connections():
+    """真正清理失效连接：断开内存连接、删除 Pod/Arthas 状态和数据库记录。"""
+    d = request.json or {}
+    conn_ids = d.get('connection_ids') or d.get('conn_ids') or []
+    if not isinstance(conn_ids, list):
+        return jsonify({'error': 'connection_ids 必须是数组'}), 400
+
+    cleaned = []
+    denied = []
+    for conn_id in conn_ids:
+        if not conn_id:
+            continue
+
+        row = db.fetch_one('SELECT user_id FROM connections WHERE id = ?', (conn_id,))
+        if row and not current_user.is_admin and row.get('user_id') != current_user.id:
+            denied.append(conn_id)
+            continue
+        if conn_id in _connections and not _check_conn_owner(conn_id):
+            denied.append(conn_id)
+            continue
+
+        entry = None
+        with _connections_lock:
+            entry = _connections.pop(conn_id, None)
+        conn = entry.get('conn') if entry else None
+        if conn:
+            try:
+                conn.disconnect()
+            except Exception:
+                pass
+
+        cleanup_pod = getattr(app, 'cleanup_pod_connection_by_id', None)
+        if cleanup_pod:
+            cleanup_pod(conn_id)
+
+        db.delete('connections', 'id = ?', (conn_id,))
+        cleaned.append(conn_id)
+
+    return jsonify({'ok': True, 'cleaned': cleaned, 'denied': denied, 'count': len(cleaned)})
+
+
 @app.route('/api/arthas/connections/check', methods=['POST'])
 @login_required
 def check_connections_health():

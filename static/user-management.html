@@ -77,6 +77,10 @@
         .cluster-item:last-child{margin-bottom:0}
         .cluster-item label{display:flex;align-items:center;gap:8px;flex:1;cursor:pointer;color:var(--tx)}
         .cluster-item input[type=checkbox]{accent-color:var(--a)}
+        .namespace-form{display:grid;grid-template-columns:1fr 1fr auto;gap:8px;align-items:end;margin-bottom:12px}
+        .namespace-chip{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 10px;background:rgba(56,189,248,.06);border:1px solid rgba(56,189,248,.18);border-radius:5px;margin-bottom:6px;font-size:12px}
+        .namespace-chip code{color:var(--a);font-family:var(--mono)}
+        .namespace-hint{font-size:11px;color:var(--tx3);line-height:1.5;margin-top:6px}
 
         .empty-msg{text-align:center;padding:40px;color:var(--tx3);font-size:12px}
         .err-box{color:var(--a5);background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.25);border-radius:6px;padding:10px 14px;font-size:11px;display:none;margin-top:8px}
@@ -175,6 +179,32 @@
         </div>
     </div>
 
+    <!-- Namespace 授权模态框 -->
+    <div class="modal-bg" id="namespaceModal">
+        <div class="modal" style="width:620px">
+            <div class="mhd"><span class="m-tt">Namespace 授权 — <span id="namespaceModalUser"></span></span><button class="m-cl" onclick="closeModal('namespaceModal')">✕</button></div>
+            <div class="mbd">
+                <div class="cluster-sec">
+                    <h3>新增授权</h3>
+                    <div class="namespace-form">
+                        <div class="fg" style="margin-bottom:0"><label class="fl">集群</label><select class="fs" id="namespaceClusterSelect" onchange="loadNamespacesForSelectedCluster()"></select></div>
+                        <div class="fg" style="margin-bottom:0"><label class="fl">Namespace</label><input class="fi" id="namespaceInput" list="namespaceOptions" placeholder="default 或 *"><datalist id="namespaceOptions"></datalist></div>
+                        <button class="ab ab-p" onclick="assignNamespace()">授权</button>
+                    </div>
+                    <div class="namespace-hint">填写 <code>*</code> 表示授权该集群下所有 namespace。普通用户仍需先拥有对应集群权限。</div>
+                </div>
+                <div class="cluster-sec">
+                    <h3>已授权 namespace</h3>
+                    <div id="assignedNamespaces" class="cluster-list">加载中...</div>
+                </div>
+                <div class="err-box" id="namespaceError"></div>
+            </div>
+            <div class="mft">
+                <button class="ab ab-g" onclick="closeModal('namespaceModal')">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <script src="js/user-management.js"></script>
     <script>
     (async function() {
@@ -185,8 +215,11 @@
           return;
         }
         if (!resp.user.is_admin) {
-          alert('只有管理员可以访问此页面');
-          window.location.href = '/';
+          if (window.self !== window.top && window.parent && typeof window.parent.switchTab === 'function') {
+            window.parent.switchTab('connections');
+          } else {
+            window.location.href = '/';
+          }
           return;
         }
         const el = document.getElementById('currentUser');
