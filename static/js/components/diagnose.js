@@ -1182,5 +1182,74 @@
     toast("请输入类名表达式和方法名，然后执行 trace/watch", "i");
   }
 
+
+  // ── jad 工作台 ──────────────────────────────
+  function jadForm() {
+    // jad 工作台：输入类名执行 jad --source-only
+    const panel = document.getElementById('panel-diag');
+    if (!panel) { toast('请在 Arthas 命令面板中使用 jad 功能', 'i'); return; }
+    let form = document.getElementById('jadForm');
+    if (form) { form.style.display = form.style.display === 'none' ? 'block' : 'none'; return; }
+    form = document.createElement('div');
+    form.id = 'jadForm';
+    form.style = 'margin-top:10px;padding:10px;border:1px solid var(--ln);border-radius:8px;background:var(--bg2);font-size:12px;';
+    form.innerHTML = `
+      <div style="font-weight:700;color:var(--ops-cyan);margin-bottom:8px;">jad 在线反编译</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        <label>类名：<input type="text" id="jadClassName" style="background:var(--bg2);color:var(--tx);border:1px solid var(--ln);border-radius:4px;padding:2px 6px;width:220px;"></label>
+        <label>类加载器：<span id="jadClassLoader" style="font-size:11px;color:var(--tx2);">—</span></label>
+        <label>源码位置：<span id="jadLocation" style="font-size:11px;color:var(--tx2);">—</span></label>
+        <div id="jadSource" style="white-space:pre-wrap;background:var(--bg3);padding:8px;border-radius:6px;max-height:300px;overflow:auto;font-family:var(--mono);font-size:11px;"></div>
+        <div style="display:flex;gap:6px;margin-top:6px;">
+          <button onclick="executeJad()" style="padding:4px 12px;background:var(--ops-green,#22c55e);color:#000;border:none;border-radius:4px;cursor:pointer;">执行 jad</button>
+          <button onclick="copyJadSource()" style="padding:4px 12px;background:var(--bg3);color:var(--tx);border:1px solid var(--ln);border-radius:4px;cursor:pointer;">复制源码</button>
+          <button onclick="saveJadSource()" style="padding:4px 12px;background:var(--bg3);color:var(--tx);border:1px solid var(--ln);border-radius:4px;cursor:pointer;">保存</button>
+        </div>
+      </div>
+    `;
+    panel.appendChild(form);
+  }
+
+  function executeJad() {
+    const connId = window.__currentDashboardConnId || '';
+    if (!connId) { toast('没有活跃的 Arthas 连接', 'e'); return; }
+    const className = document.getElementById('jadClassName')?.value?.trim();
+    if (!className) { toast('class_name 不能为空', 'e'); return; }
+    fetch(`${API}/diagnose/tool`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ connection_id: connId, tool: 'jad', args: { class_name: className } })
+    })
+      .then(r => r.json())
+      .then(resp => {
+        if (!resp.ok) { toast(resp.error || 'jad 执行失败', 'e'); return; }
+        const data = resp.data || resp;
+        // 展示源码、classloader、location
+        document.getElementById('jadSource').textContent = data.source || data.body || JSON.stringify(data, null, 2);
+        document.getElementById('jadClassLoader').textContent = data.classloader || '—';
+        document.getElementById('jadLocation').textContent = data.location || '—';
+        toast('jad 执行成功', 's');
+      })
+      .catch(e => toast('jad 请求失败: ' + e.message, 'e'));
+  }
+
+  function copyJadSource() {
+    const src = document.getElementById('jadSource')?.textContent || '';
+    if (!src || src === '—') { toast('没有可复制的源码', 'e'); return; }
+    navigator.clipboard.writeText(src).then(() => toast('已复制到剪贴板', 's'));
+  }
+
+  function saveJadSource() {
+    const src = document.getElementById('jadSource')?.textContent || '';
+    if (!src || src === '—') { toast('没有可保存的源码', 'e'); return; }
+    const blob = new Blob([src], { type: 'text/plain' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = (document.getElementById('jadClassName')?.value || 'source') + '.java';
+    a.click();
+    toast('已保存为文件', 's');
+  }
+
 })();
 

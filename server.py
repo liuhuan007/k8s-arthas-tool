@@ -605,6 +605,25 @@ def arthas_status():
     })
 
 
+@app.route('/api/arthas/connections', methods=['GET'])
+@login_required
+def get_arthas_connections():
+    """获取连接列表（从数据库，按 updated_at 降序）"""
+    try:
+        if current_user.is_admin:
+            rows = db.fetch_all('SELECT * FROM connections ORDER BY updated_at DESC')
+        else:
+            rows = db.fetch_all(
+                'SELECT * FROM connections WHERE user_id = ? ORDER BY updated_at DESC',
+                (current_user.id,)
+            )
+        connections = [dict(r) for r in (rows or [])]
+        return jsonify({"ok": True, "connections": connections})
+    except Exception as e:
+        log.exception('获取连接列表失败')
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route('/api/arthas/connections/cleanup-stale', methods=['POST'])
 @login_required
 def cleanup_stale_connections():

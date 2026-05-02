@@ -1610,6 +1610,32 @@ async function checkConnectionsHealth() {
   }
 }
 
+// 刷新连接列表：从后端数据库重新获取
+async function refreshConnectionList() {
+  toast('正在刷新连接列表...', 'info');
+  try {
+    const r = await fetch(`${API}/arthas/connections`, { credentials: 'include' });
+    const d = await r.json();
+    if (!r.ok || d.ok === false) throw new Error(d.error || '获取失败');
+    
+    // 更新内存和 localStorage
+    _connections = d.connections || [];
+    const user = getCurrentUser();
+    const key = user ? `arthas_connections_${user.username}` : 'arthas_connections';
+    localStorage.setItem(key, JSON.stringify(_connections));
+    _syncState();
+    
+    // 重新渲染
+    renderConnList();
+    toast(`已刷新，${_connections.length} 个连接`, 'ok');
+  } catch (e) {
+    console.error('刷新连接列表失败:', e);
+    toast('刷新失败: ' + e.message, 'error');
+    // 降级：从 localStorage 加载
+    loadConnections();
+  }
+}
+
 // 一键清理所有失效连接（Pod 不存在 或 集群不可用）
 async function cleanupStaleConnections() {
   const staleIds = [];
@@ -2977,9 +3003,14 @@ async function runCmd() {
   const ta = document.getElementById('cmdTa'); const command = ta.value.trim(); if(!command) return;
   ta.value=''; autoResize(ta); _cmdHist.push(command); _histIdx=-1;
   oSep(); clog(esc(command), 'cmd');
-  // TODO: Re-enable streaming commands for dashboard/watch/trace/monitor/stack/tt - issue #XXX
-  // 暂时全部使用 runOnce，流式功能后续实现
-  await runOnce(command);
+  // 根据命令类型选择执行方式：stream 命令实时输出，once 命令一次性返回
+  const streamCmds = ['dashboard','watch','trace','monitor','stack','tt'];
+  const cmdBase = command.trim().split(/\s+/)[0];
+  if(streamCmds.includes(cmdBase)) {
+    await runStream(command);
+  } else {
+    await runOnce(command);
+  }
 }
 
 async function runOnce(command) {
@@ -5613,6 +5644,7 @@ window.cdPodConnect = cdPodConnect;
 window.cdUpgradeToArthas = cdUpgradeToArthas;
 window.cdHealthCheck = cdHealthCheck;
 window.cdDisconnect = cdDisconnect;
+window.refreshConnectionList = refreshConnectionList;
 window.cdOpenPanel = cdOpenPanel;
 window.openDashboard = openDashboard;
 window.refreshDashboard = refreshDashboard;
@@ -5631,3 +5663,205 @@ window.fbGetCurPath = fbGetCurPath;
 window.fbSetCurPath = fbSetCurPath;
 window.fbGetFiles = fbGetFiles;
 window.renderFileBrowser = renderFileBrowser;
+
+// ══ Hot Swap Workbench 热替换工作台 ══════════════════════════════════════════
+// 四步工作流：jad 反编译 → 编辑 → mc 编译 → retransform 热加载
+
+let _hs = { classname: '', sourceCode: '', classFile: '', cloaderHash: '' };
+
+function hotswapReset() {
+  _hs = { classname: '', sourceCode: '', classFile: '', cloaderHash: '' };
+  document.getElementById('hs-classname').value = '';
+  document.getElementById('hs-source').value = '';
+  document.getElementById('hs-rt-classfile').value = '';
+  document.getElementById('hs-mc-result').style.display = 'none';
+  document.getElementById('hs-rt-result').style.display = 'none';
+  document.getElementById('hs-mc-btn').disabled = true;
+  document.getElementById('hs-rt-btn').disabled = true;
+  document.getElementById('hs-editor-status').textContent = '等待反编译...';
+  document.getElementById('hs-editor-filename').textContent = '—';
+  document.querySelectorAll('.hotswap-step').forEach(el => { el.classList.remove('active','done'); });
+  document.getElementById('hs-step1').classList.add('active');
+  document.getElementById('hs-log-wrap').style.display = 'none';
+  document.getElementById('hs-log').innerHTML = '';
+}
+
+function _hsLog(msg, type) {
+  const wrap = document.getElementById('hs-log-wrap');
+  const log = document.getElementById('hs-log');
+  wrap.style.display = 'block';
+  const cls = type === 'ok' ? 'hs-ok' : type === 'err' ? 'hs-err' : type === 'cmd' ? 'hs-cmd' : 'hs-dim';
+  log.innerHTML += `<span class="${cls}">${msg}</span>\n`;
+  log.scrollTop = log.scrollHeight;
+}
+
+async function hotswapJad() {
+  if(!_connected) { toast('请先连接 Arthas','warn'); return; }
+  const cls = document.getElementById('hs-classname').value.trim();
+  if(!cls) { toast('请输入类全限定名','warn'); return; }
+  _hs.classname = cls;
+  const sourceOnly = document.getElementById('hs-source-only').checked;
+  const cmd = sourceOnly ? `jad --source-only ${cls}` : `jad ${cls}`;
+  _hsLog(`$ ${cmd}`, 'cmd');
+  document.getElementById('hs-jad-btn').disabled = true;
+  document.getElementById('hs-editor-status').textContent = '反编译中...';
+  document.getElementById('hs-step1').classList.add('active');
+  try {
+    const r = await fetch(`${API}/arthas/exec`, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({..._ap, command: cmd, connection_id: _currentConnId, timeout_ms: 60000})});
+    const d = await r.json();
+    if(d.state === 'SUCCEEDED' && d.body?.results) {
+      let source = '', hash = '';
+      for(const res of d.body.results) {
+        if(res.type === 'jad') {
+          source = res.sourceCode || res.body?.sourceCode || '';
+          // 提取 classloader hash
+          if(res.classloaderHash || res.body?.classloaderHash) {
+            hash = res.classloaderHash || res.body?.classloaderHash;
+          }
+        }
+        // 也从纯文本结果中提取
+        if(res.type === 'text' || res.type === 'normal') {
+          const txt = res.body || res.message || '';
+          if(!source && txt.includes('package ')) {
+            source = txt;
+          }
+          const hashMatch = txt.match(/hash:\s*([a-f0-9]+)/i);
+          if(hashMatch && !hash) hash = hashMatch[1];
+        }
+      }
+      if(source) {
+        _hs.sourceCode = source;
+        _hs.cloaderHash = hash;
+        document.getElementById('hs-source').value = source;
+        document.getElementById('hs-editor-status').textContent = hash ? `已反编译 · classloader: ${hash}` : '已反编译';
+        document.getElementById('hs-editor-filename').textContent = cls.replace(/\./g, '/') + '.java';
+        document.getElementById('hs-mc-btn').disabled = false;
+        document.getElementById('hs-step1').classList.remove('active');
+        document.getElementById('hs-step1').classList.add('done');
+        document.getElementById('hs-step2').classList.add('active');
+        _hsLog('✓ 反编译成功', 'ok');
+      } else {
+        // 尝试从原始输出中提取
+        const rawOutput = JSON.stringify(d.body?.results || d);
+        document.getElementById('hs-source').value = rawOutput;
+        document.getElementById('hs-editor-status').textContent = '原始输出（可能需要手动提取源码）';
+        document.getElementById('hs-mc-btn').disabled = false;
+        _hsLog('⚠ 未解析到标准格式，已输出原始结果', 'err');
+      }
+    } else {
+      const errMsg = d.message || d.error || JSON.stringify(d);
+      document.getElementById('hs-editor-status').textContent = '反编译失败';
+      _hsLog('✗ 反编译失败: ' + errMsg, 'err');
+    }
+  } catch(e) {
+    document.getElementById('hs-editor-status').textContent = '请求失败';
+    _hsLog('✗ 请求异常: ' + e.message, 'err');
+  }
+  document.getElementById('hs-jad-btn').disabled = false;
+}
+
+async function hotswapMc() {
+  if(!_connected) { toast('请先连接 Arthas','warn'); return; }
+  const source = document.getElementById('hs-source').value.trim();
+  if(!source) { toast('源码为空，请先反编译或手动输入','warn'); return; }
+
+  // 将源码写入 Pod 临时文件
+  const tmpJava = `/tmp/arthas-hotswap/${_hs.classname.replace(/\./g, '/')}.java`;
+  const tmpDir = `/tmp/arthas-hotswap`;
+  const outputDir = document.getElementById('hs-mc-output').value.trim() || '/tmp';
+
+  _hsLog(`$ 写入源码到 ${tmpJava}`, 'cmd');
+  document.getElementById('hs-mc-btn').disabled = true;
+
+  try {
+    // 1. 在 Pod 中创建临时目录
+    await fetch(`${API}/pod/exec`, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({..._ap, command: `mkdir -p ${tmpDir}`, connection_id: _currentConnId})});
+
+    // 2. 写入源码文件（通过 cat heredoc）
+    const escapedSource = source.replace(/'/g, "'\\''");
+    await fetch(`${API}/pod/exec`, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({..._ap, command: `mkdir -p $(dirname ${tmpJava}) && cat > ${tmpJava} << 'ARTHAS_HOTSWAP_EOF'\n${source}\nARTHAS_HOTSWAP_EOF`, connection_id: _currentConnId})});
+
+    // 3. 执行 mc 编译
+    const mcCmd = `mc ${tmpJava} -d ${outputDir}`;
+    _hsLog(`$ ${mcCmd}`, 'cmd');
+    const r = await fetch(`${API}/arthas/exec`, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({..._ap, command: mcCmd, connection_id: _currentConnId, timeout_ms: 60000})});
+    const d = await r.json();
+
+    const mcResult = document.getElementById('hs-mc-result');
+    mcResult.style.display = 'block';
+
+    if(d.state === 'SUCCEEDED') {
+      // 从结果中提取 .class 文件路径
+      let classFile = '';
+      if(d.body?.results) {
+        for(const res of d.body.results) {
+          const txt = res.body || res.message || JSON.stringify(res);
+          const pathMatch = txt.match(/(\/[^\s"']+\.class)/);
+          if(pathMatch) classFile = pathMatch[1];
+        }
+      }
+      if(!classFile) {
+        // 根据类名推算 .class 路径
+        classFile = `${outputDir}/${_hs.classname.replace(/\./g, '/')}.class`;
+      }
+      _hs.classFile = classFile;
+      document.getElementById('hs-rt-classfile').value = classFile;
+      document.getElementById('hs-rt-btn').disabled = false;
+      mcResult.innerHTML = `<div style="padding:8px 10px;background:rgba(52,199,89,.06);border:1px solid rgba(52,199,89,.18);border-radius:6px;color:var(--a3);font-size:11px">✓ 编译成功 → ${classFile}</div>`;
+      document.getElementById('hs-step2').classList.remove('active');
+      document.getElementById('hs-step2').classList.add('done');
+      document.getElementById('hs-step3').classList.remove('active');
+      document.getElementById('hs-step3').classList.add('done');
+      document.getElementById('hs-step4').classList.add('active');
+      _hsLog('✓ 编译成功: ' + classFile, 'ok');
+    } else {
+      mcResult.innerHTML = `<div style="padding:8px 10px;background:rgba(255,59,48,.06);border:1px solid rgba(255,59,48,.18);border-radius:6px;color:var(--a5);font-size:11px">✗ 编译失败: ${esc(d.message || JSON.stringify(d))}</div>`;
+      _hsLog('✗ 编译失败', 'err');
+    }
+  } catch(e) {
+    _hsLog('✗ 编译异常: ' + e.message, 'err');
+  }
+  document.getElementById('hs-mc-btn').disabled = false;
+}
+
+async function hotswapRetransform() {
+  if(!_connected) { toast('请先连接 Arthas','warn'); return; }
+  const classFile = document.getElementById('hs-rt-classfile').value.trim() || _hs.classFile;
+  if(!classFile) { toast('请先编译获取 .class 文件','warn'); return; }
+
+  const rtCmd = `retransform ${classFile}`;
+  _hsLog(`$ ${rtCmd}`, 'cmd');
+  document.getElementById('hs-rt-btn').disabled = true;
+
+  try {
+    const r = await fetch(`${API}/arthas/exec`, {method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({..._ap, command: rtCmd, connection_id: _currentConnId, timeout_ms: 60000})});
+    const d = await r.json();
+
+    const rtResult = document.getElementById('hs-rt-result');
+    rtResult.style.display = 'block';
+
+    if(d.state === 'SUCCEEDED') {
+      rtResult.innerHTML = `<div style="padding:10px 12px;background:rgba(52,199,89,.08);border:1px solid rgba(52,199,89,.25);border-radius:6px;color:var(--a3);font-size:12px;font-weight:600">🔥 热加载成功！类 ${_hs.classname} 已更新，无需重启 JVM</div>`;
+      document.getElementById('hs-step4').classList.remove('active');
+      document.getElementById('hs-step4').classList.add('done');
+      _hsLog('✓ 热加载成功！', 'ok');
+      _hsLog('提示：retransform 不允许增删方法/字段，如需更大改动请使用 redefine', 'dim');
+    } else {
+      rtResult.innerHTML = `<div style="padding:8px 10px;background:rgba(255,59,48,.06);border:1px solid rgba(255,59,48,.18);border-radius:6px;color:var(--a5);font-size:11px">✗ 热加载失败: ${esc(d.message || JSON.stringify(d))}</div>`;
+      _hsLog('✗ 热加载失败', 'err');
+    }
+  } catch(e) {
+    _hsLog('✗ 热加载异常: ' + e.message, 'err');
+  }
+  document.getElementById('hs-rt-btn').disabled = false;
+}
+
+window.hotswapReset = hotswapReset;
+window.hotswapJad = hotswapJad;
+window.hotswapMc = hotswapMc;
+window.hotswapRetransform = hotswapRetransform;

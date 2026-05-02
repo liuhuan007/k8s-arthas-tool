@@ -107,6 +107,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <div class="side-nav-items">
         <button class="side-nav-item" data-nav-tab="profiler" onclick="switchTab('profiler')"><span>🔥</span><span>采样工具</span></button>
         <button class="side-nav-item" data-nav-tab="console" onclick="switchTab('console')"><span>⚡</span><span>Arthas命令</span></button>
+        <button class="side-nav-item" data-nav-tab="hotswap" onclick="switchTab('hotswap')"><span>🔄</span><span>热替换工作台</span></button>
         <button class="side-nav-item" data-nav-tab="terminal" onclick="switchTab('terminal')"><span>🖥️</span><span>终端</span></button>
         <button class="side-nav-item" data-nav-tab="monitor" onclick="switchTab('monitor')"><span>📊</span><span>Pod 监控</span></button>
         <button class="side-nav-item" data-nav-tab="filebrowser" onclick="switchTab('filebrowser')"><span>📂</span><span>文件下载</span></button>
@@ -162,6 +163,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="tb-tab on" id="tab-connections" onclick="switchTab('connections')">🔌 连接中心</div>
     <div class="tb-tab" id="tab-profiler" onclick="switchTab('profiler')">🔥 采样工具</div>
     <div class="tb-tab"    id="tab-console"  onclick="switchTab('console')">⚡ Arthas命令</div>
+    <div class="tb-tab"    id="tab-hotswap"  onclick="switchTab('hotswap')">🔄 热替换</div>
     <div class="tb-tab"    id="tab-terminal" onclick="switchTab('terminal')">🖥️ 终端</div>
     <div class="tb-tab-sep"></div>
     <div class="tb-tab"    id="tab-monitor"  onclick="switchTab('monitor')">📊 Pod 监控</div>
@@ -204,7 +206,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="conn-hero-actions">
             <button class="ib" onclick="checkConnectionsHealth()">♥ 健康检查</button>
             <button class="ib danger" onclick="cleanupStaleConnections()">🗑 清理失效</button>
-            <button class="ib" onclick="renderConnList()">↻ 刷新列表</button>
+            <button class="ib" onclick="refreshConnectionList()">↻ 刷新列表</button>
           </div>
         </div>
 
@@ -762,6 +764,103 @@ document.addEventListener('DOMContentLoaded', function() {
 
     <div class="panel" id="panel-audit-logs">
       <iframe class="admin-frame" data-src="audit-logs.html?embed=1" title="审计日志"></iframe>
+    </div>
+
+    <!-- Hot Swap Workbench -->
+    <div class="panel" id="panel-hotswap">
+      <div class="hotswap-wrap">
+        <div class="hotswap-hero">
+          <div>
+            <div class="hotswap-kicker">Hot Swap Workbench</div>
+            <h2>反编译 → 编辑 → 编译 → 热加载</h2>
+            <p>四步工作流，零重启修复线上代码问题。基于 Arthas jad/mc/retransform 命令封装。</p>
+          </div>
+          <div class="hotswap-hero-actions">
+            <button class="ib" onclick="hotswapReset()">↻ 重置</button>
+          </div>
+        </div>
+        <div class="hotswap-steps">
+          <div class="hotswap-step" id="hs-step1">
+            <div class="hs-step-header">
+              <span class="hs-step-no">1</span>
+              <div class="hs-step-info">
+                <div class="hs-step-title">反编译 (jad)</div>
+                <div class="hs-step-desc">输入类全限定名，获取 JVM 中加载的实际字节码</div>
+              </div>
+              <button class="btn btn-p" onclick="hotswapJad()" id="hs-jad-btn">反编译</button>
+            </div>
+            <div class="hs-step-body">
+              <div class="hs-field">
+                <label class="fl">类全限定名</label>
+                <div style="display:flex;gap:6px">
+                  <input class="fi" id="hs-classname" placeholder="com.example.service.UserService" style="flex:1">
+                  <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:var(--tx2);white-space:nowrap"><input type="checkbox" id="hs-source-only" checked>--source-only</label>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div class="hotswap-step" id="hs-step2">
+            <div class="hs-step-header">
+              <span class="hs-step-no">2</span>
+              <div class="hs-step-info">
+                <div class="hs-step-title">编辑源码</div>
+                <div class="hs-step-desc">修改反编译后的 Java 源码</div>
+              </div>
+            </div>
+            <div class="hs-step-body">
+              <div class="hs-editor-wrap">
+                <div class="hs-editor-bar">
+                  <span id="hs-editor-filename">—</span>
+                  <span id="hs-editor-status" style="color:var(--tx3)">等待反编译...</span>
+                </div>
+                <textarea class="hs-editor" id="hs-source" placeholder="反编译后的源码将显示在这里，可直接编辑..." spellcheck="false"></textarea>
+              </div>
+            </div>
+          </div>
+
+          <div class="hotswap-step" id="hs-step3">
+            <div class="hs-step-header">
+              <span class="hs-step-no">3</span>
+              <div class="hs-step-info">
+                <div class="hs-step-title">编译 (mc)</div>
+                <div class="hs-step-desc">将修改后的源码编译为 .class 字节码</div>
+              </div>
+              <button class="btn btn-p" onclick="hotswapMc()" id="hs-mc-btn" disabled>编译</button>
+            </div>
+            <div class="hs-step-body">
+              <div class="hs-field">
+                <label class="fl">输出目录 (可选)</label>
+                <input class="fi" id="hs-mc-output" value="/tmp" placeholder="/tmp">
+              </div>
+              <div id="hs-mc-result" style="display:none;margin-top:8px"></div>
+            </div>
+          </div>
+
+          <div class="hotswap-step" id="hs-step4">
+            <div class="hs-step-header">
+              <span class="hs-step-no">4</span>
+              <div class="hs-step-info">
+                <div class="hs-step-title">热加载 (retransform)</div>
+                <div class="hs-step-desc">将编译后的 .class 热加载到运行中的 JVM，无需重启</div>
+              </div>
+              <button class="btn btn-p" onclick="hotswapRetransform()" id="hs-rt-btn" disabled style="background:var(--a3)">🔥 热加载</button>
+            </div>
+            <div class="hs-step-body">
+              <div class="hs-field">
+                <label class="fl">.class 文件路径</label>
+                <input class="fi" id="hs-rt-classfile" placeholder="编译后自动填入" readonly>
+              </div>
+              <div id="hs-rt-result" style="display:none;margin-top:8px"></div>
+            </div>
+          </div>
+        </div>
+
+        <div class="hs-log-wrap" id="hs-log-wrap" style="display:none">
+          <div class="hs-log-header">操作日志</div>
+          <div class="hs-log" id="hs-log"></div>
+        </div>
+      </div>
     </div>
 
     <!-- Arthas Console -->
