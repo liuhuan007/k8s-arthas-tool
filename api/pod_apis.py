@@ -100,6 +100,8 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         try:
             ok, msg = conn.connect(timeout=10)
             if not ok:
+                if isinstance(msg, dict):
+                    return jsonify({"ok": False, **msg}), 400
                 return jsonify({"ok": False, "error": msg}), 400
             
             with _pod_connections_lock:
@@ -109,24 +111,27 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                     "created_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 }
             
-            # 持久化到数据库
+            # 持久化到数据库（保存完整上下文）
             now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            conn_data = {
+                'cluster_name': cluster_name,
+                'namespace': namespace,
+                'pod_name': pod_name,
+                'container_name': container or '',
+                'level': 'pod',
+                'local_port': None,
+                'java_pid': None,
+                'arthas_version': None,
+                'last_ping_at': now_ts,
+                'user_id': current_user.id,
+                'status': 'pod_connected',
+                'updated_at': now_ts,
+            }
             if db.exists('connections', 'id = ?', (conn_id,)):
-                db.update('connections', {
-                    'level': 'pod',
-                    'user_id': current_user.id,
-                    'updated_at': now_ts,
-                }, 'id = ?', (conn_id,))
+                db.update('connections', conn_data, 'id = ?', (conn_id,))
             else:
-                db.insert('connections', {
-                    'id': conn_id,
-                    'cluster_name': cluster_name,
-                    'namespace': namespace,
-                    'pod_name': pod_name,
-                    'level': 'pod',
-                    'user_id': current_user.id,
-                    'updated_at': now_ts,
-                })
+                conn_data['id'] = conn_id
+                db.insert('connections', conn_data)
             
             AuditService.log_connection_created(current_user.id, conn_id, pod_name, namespace)
             
@@ -164,21 +169,58 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
     @app.route('/api/pod/disconnect', methods=['POST'])
     @login_required
     def pod_disconnect():
-        """断开 Pod 连接"""
+        """断开 Pod 连接（同时释放 Arthas 层资源）"""
+        from services.audit_service import AuditService
         d = request.json or {}
         conn_id = d.get('connection_id', '')
         
         if not conn_id:
             return jsonify({"error": "connection_id 必填"}), 400
         
+        # ✅ 检查连接是否存在（优先检查 _pod_connections,如果不存在则检查 _connections）
         entry = _pod_connections.get(conn_id)
+        if not entry:
+            # 尝试从 _connections 中查找（旧版兼容）
+            with _connections_lock:
+                entry = _connections.get(conn_id)
+        
         if entry and not _check_pod_conn_owner(conn_id):
             return jsonify({"error": "无权操作此连接"}), 403
+        
+        # ✅ 如果连接不存在,直接返回成功（幂等性）
+        if not entry:
+            log.info("[断开] 连接不存在（可能已断开）: %s", conn_id)
+            return jsonify({"ok": True, "message": "连接已断开"})
 
+        # 1. 释放 Arthas 层（port-forward + 本地端口）
+        with _connections_lock:
+            arthas_entry = _connections.pop(conn_id, None)
+        if arthas_entry:
+            arthas_conn = arthas_entry.get('conn')
+            if arthas_conn and hasattr(arthas_conn, 'disconnect'):
+                try:
+                    arthas_conn.disconnect()
+                except Exception:
+                    pass
+
+        # 2. 释放 Pod 层
         cleaned = cleanup_pod_connection_by_id(conn_id)
         if not cleaned:
-            return jsonify({"error": "连接不存在"}), 404
-        db.delete('connections', 'id = ?', (conn_id,))
+            log.warning("[断开] Pod 连接清理失败: %s", conn_id)
+
+        # 3. 更新数据库状态为 disconnected（而非删除）
+        now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        db.update('connections', {
+            'status': 'disconnected',
+            'updated_at': now_ts,
+        }, 'id = ?', (conn_id,))
+
+        # 4. 审计日志
+        parts = conn_id.split('/')
+        pod = parts[2] if len(parts) >= 3 else conn_id
+        namespace = parts[1] if len(parts) >= 3 else ''
+        AuditService.log_connection_deleted(current_user.id, conn_id, pod, namespace)
+
         return jsonify({"ok": True, "message": "Pod 连接已断开"})
     
     @app.route('/api/pod/connections', methods=['GET'])
@@ -273,6 +315,8 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         try:
             ok, msg = arthas_conn.connect_arthas(timeout=30)
             if not ok:
+                if isinstance(msg, dict):
+                    return jsonify({"ok": False, **msg}), 400
                 return jsonify({"ok": False, "error": msg}), 400
             
             is_reused = '复用' in msg or '已在运行' in msg
@@ -286,24 +330,25 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                 }
             
             now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            upgrade_data = {
+                'cluster_name': pod_conn.target.cluster_name,
+                'namespace': pod_conn.target.namespace,
+                'pod_name': pod_conn.target.pod_name,
+                'container_name': pod_conn.target.container or '',
+                'level': 'arthas',
+                'local_port': arthas_conn.local_port,
+                'java_pid': arthas_conn.java_pid,
+                'arthas_version': arthas_conn.arthas_version,
+                'last_ping_at': now_ts,
+                'user_id': current_user.id,
+                'status': 'ready',
+                'updated_at': now_ts,
+            }
             if db.exists('connections', 'id = ?', (pod_conn_id,)):
-                db.update('connections', {
-                    'level': 'arthas',
-                    'local_port': arthas_conn.local_port,
-                    'user_id': current_user.id,
-                    'updated_at': now_ts,
-                }, 'id = ?', (pod_conn_id,))
+                db.update('connections', upgrade_data, 'id = ?', (pod_conn_id,))
             else:
-                db.insert('connections', {
-                    'id': pod_conn_id,
-                    'cluster_name': pod_conn.target.cluster_name,
-                    'namespace': pod_conn.target.namespace,
-                    'pod_name': pod_conn.target.pod_name,
-                    'level': 'arthas',
-                    'local_port': arthas_conn.local_port,
-                    'user_id': current_user.id,
-                    'updated_at': now_ts,
-                })
+                upgrade_data['id'] = pod_conn_id
+                db.insert('connections', upgrade_data)
             
             AuditService.log_connection_created(
                 current_user.id, pod_conn_id, pod_conn.target.pod_name, pod_conn.target.namespace
@@ -325,6 +370,58 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         except Exception as e:
             log.error("Upgrade to Arthas failed: %s", e, exc_info=True)
             return jsonify({"error": str(e)}), 500
+
+    # ═══════════════════════════════════════════════════════════════════════════════
+    # Connection health & listing APIs
+    # ═══════════════════════════════════════════════════════════════════════════════
+
+    @app.route('/api/arthas/connections/<id>/ping', methods=['POST'])
+    @login_required
+    def arthas_connection_ping(id: str):
+        """主动健康检查：刷新 last_ping_at 并返回当前状态"""
+        now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        db.update('connections', {
+            'last_ping_at': now_ts,
+            'updated_at': now_ts,
+        }, 'id = ?', (id,))
+        row = db.fetch_one(
+            "SELECT status, last_ping_at FROM connections WHERE id = ?",
+            (id,),
+        )
+        if not row:
+            return jsonify({"ok": False, "error": "连接不存在"}), 404
+        return jsonify({
+            "ok": True,
+            "status": row.get('status', 'unknown'),
+            "last_ping_at": row.get('last_ping_at', ''),
+        })
+
+    @app.route('/api/arthas/connections', methods=['GET'])
+    @login_required
+    def list_arthas_connections():
+        """列出连接（含完整上下文字段）"""
+        try:
+            if current_user.is_admin:
+                rows = db.fetch_all(
+                    'SELECT id, cluster_name, namespace, pod_name, container_name, '
+                    'level, java_pid, arthas_version, local_port, last_ping_at, '
+                    'user_id, status, updated_at '
+                    'FROM connections ORDER BY updated_at DESC'
+                )
+            else:
+                # 非 admin 只能看到自己的连接
+                rows = db.fetch_all(
+                    'SELECT id, cluster_name, namespace, pod_name, container_name, '
+                    'level, java_pid, arthas_version, local_port, last_ping_at, '
+                    'user_id, status, updated_at '
+                    'FROM connections WHERE user_id = ? ORDER BY updated_at DESC',
+                    (current_user.id,)
+                )
+            connections = [dict(r) for r in (rows or [])]
+            return jsonify({"ok": True, "connections": connections, "count": len(connections)})
+        except Exception as e:
+            log.exception('获取连接列表失败')
+            return jsonify({"ok": False, "error": str(e)}), 500
 
     # ═══════════════════════════════════════════════════════════════════════════════
     # Pod 级系统诊断（无需 Arthas）

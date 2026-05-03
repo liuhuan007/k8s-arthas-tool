@@ -206,6 +206,98 @@ class AuditService:
         })
     
     # ─────────────────────────────────────────────────────────────────
+    # 诊断操作相关
+    # ─────────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def log_event(user_id: int, action: str, resource_type: str,
+                  resource_id: str, details: str):
+        """通用事件日志记录"""
+        AuditService._log_raw(user_id, action, resource_type, resource_id, details)
+
+    @staticmethod
+    def log_diagnostic_operation(user_id: int, operation: str,
+                                 connection_id: str, details: str):
+        """记录诊断操作（arthas exec、profiler tasks 等）"""
+        AuditService._log_raw(
+            user_id, operation, 'diagnostic', connection_id, details
+        )
+
+    @staticmethod
+    def log_arthas_connect(user_id: int, connection_id: str,
+                           cluster: str, namespace: str, pod: str):
+        """记录 Arthas 连接建立"""
+        AuditService.log_diagnostic_operation(
+            user_id, 'arthas_connect', connection_id,
+            f'Arthas 连接到 {cluster}/{namespace}/{pod}'
+        )
+
+    @staticmethod
+    def log_arthas_disconnect(user_id: int, connection_id: str):
+        """记录 Arthas 连接断开"""
+        AuditService.log_diagnostic_operation(
+            user_id, 'arthas_disconnect', connection_id,
+            'Arthas 连接断开'
+        )
+
+    @staticmethod
+    def log_arthas_exec(user_id: int, connection_id: str, command: str):
+        """记录 Arthas 命令执行"""
+        AuditService.log_diagnostic_operation(
+            user_id, 'arthas_exec', connection_id,
+            f'执行命令: {command}'
+        )
+
+    @staticmethod
+    def log_profiler_start(user_id: int, task_id: str, task_type: str):
+        """记录 Profiler 任务启动"""
+        AuditService.log_diagnostic_operation(
+            user_id, 'profiler_start', task_id,
+            f'启动性能分析任务: {task_type}'
+        )
+
+    @staticmethod
+    def log_profiler_cancel(user_id: int, task_id: str, reason: str):
+        """记录 Profiler 任务取消"""
+        AuditService.log_diagnostic_operation(
+            user_id, 'profiler_cancel', task_id,
+            f'取消性能分析任务，原因: {reason}'
+        )
+
+    @staticmethod
+    def log_profiler_download(user_id: int, task_id: str, filename: str):
+        """记录 Profiler 结果下载"""
+        AuditService.log_diagnostic_operation(
+            user_id, 'profiler_download', task_id,
+            f'下载性能分析结果: {filename}'
+        )
+
+    @staticmethod
+    def log_gc_download(user_id: int, cluster: str, namespace: str,
+                        pod: str, filename: str):
+        """记录 GC 日志下载"""
+        AuditService._log_raw(
+            user_id, 'gc_download', 'gc_log', filename,
+            f'下载 GC 日志: {cluster}/{namespace}/{pod} -> {filename}'
+        )
+
+    @staticmethod
+    def log_pod_file_read(user_id: int, connection_id: str, path: str):
+        """记录 Pod 文件读取"""
+        AuditService.log_diagnostic_operation(
+            user_id, 'pod_file_read', connection_id,
+            f'读取 Pod 文件: {path}'
+        )
+
+    @staticmethod
+    def log_pod_file_download(user_id: int, connection_id: str, path: str):
+        """记录 Pod 文件下载"""
+        AuditService.log_diagnostic_operation(
+            user_id, 'pod_file_download', connection_id,
+            f'下载 Pod 文件: {path}'
+        )
+
+    # ─────────────────────────────────────────────────────────────────
     # MCP 相关
     # ─────────────────────────────────────────────────────────────────
 

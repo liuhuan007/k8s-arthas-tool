@@ -2,9 +2,11 @@
 """数据库统一抽象层"""
 import sqlite3
 import os
+import logging
 from contextlib import contextmanager
 from typing import Optional, List, Dict, Any
-from backend import Config
+
+log = logging.getLogger(__name__)
 
 
 class Database:
@@ -15,6 +17,8 @@ class Database:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            # 延迟导入避免循环依赖
+            from backend.config import Config
             cls._instance._db_file = Config.DB_FILE
             cls._instance._ensure_db_dir()
         return cls._instance
@@ -28,9 +32,12 @@ class Database:
     
     @contextmanager
     def connection(self):
-        """上下文管理器 - 自动提交/回滚"""
+        """上下文管理器 - 自动提交/回滚，启用 WAL / busy_timeout / foreign_keys"""
         conn = sqlite3.connect(self._db_file, timeout=10)
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL;")
+        conn.execute("PRAGMA busy_timeout = 5000;")
+        conn.execute("PRAGMA foreign_keys = ON;")
         try:
             yield conn
             conn.commit()
@@ -221,6 +228,60 @@ class Database:
             except Exception:
                 cursor.execute("ALTER TABLE connections ADD COLUMN level TEXT NOT NULL DEFAULT 'arthas'")
                 log.info("Schema migrated: connections.level added")
+
+            # connections 表增加 P0 增量字段
+            for col, ddl in [
+                ("container_name", "ALTER TABLE connections ADD COLUMN container_name TEXT"),
+                ("java_pid",       "ALTER TABLE connections ADD COLUMN java_pid INTEGER"),
+                ("arthas_version", "ALTER TABLE connections ADD COLUMN arthas_version TEXT"),
+                ("last_ping_at",   "ALTER TABLE connections ADD COLUMN last_ping_at TIMESTAMP"),
+                ("owner_user_id",  "ALTER TABLE connections ADD COLUMN owner_user_id INTEGER"),
+                ("status",         "ALTER TABLE connections ADD COLUMN status TEXT DEFAULT 'disconnected'"),
+            ]:
+                try:
+                    cursor.execute(f"SELECT {col} FROM connections LIMIT 1")
+                except Exception:
+                    cursor.execute(ddl)
+                    log.info("Schema migrated: connections.%s added", col)
+
+            # arthas_commands 表增加 P0 增量字段
+            for col, ddl in [
+                ("template_type", "ALTER TABLE arthas_commands ADD COLUMN template_type TEXT"),
+                ("risk_level",    "ALTER TABLE arthas_commands ADD COLUMN risk_level TEXT DEFAULT 'low'"),
+                ("duration_ms",   "ALTER TABLE arthas_commands ADD COLUMN duration_ms INTEGER"),
+                ("exit_status",   "ALTER TABLE arthas_commands ADD COLUMN exit_status TEXT"),
+                ("masked_output", "ALTER TABLE arthas_commands ADD COLUMN masked_output TEXT"),
+            ]:
+                try:
+                    cursor.execute(f"SELECT {col} FROM arthas_commands LIMIT 1")
+                except Exception:
+                    cursor.execute(ddl)
+                    log.info("Schema migrated: arthas_commands.%s added", col)
+
+            # profiler_tasks 表增加 P0 增量字段
+            for col, ddl in [
+                ("artifact_size",    "ALTER TABLE profiler_tasks ADD COLUMN artifact_size INTEGER"),
+                ("artifact_sha256",  "ALTER TABLE profiler_tasks ADD COLUMN artifact_sha256 TEXT"),
+                ("max_duration",     "ALTER TABLE profiler_tasks ADD COLUMN max_duration INTEGER"),
+                ("cancel_reason",    "ALTER TABLE profiler_tasks ADD COLUMN cancel_reason TEXT"),
+            ]:
+                try:
+                    cursor.execute(f"SELECT {col} FROM profiler_tasks LIMIT 1")
+                except Exception:
+                    cursor.execute(ddl)
+                    log.info("Schema migrated: profiler_tasks.%s added", col)
+
+            # ── P0 索引 ──────────────────────────────────────────────────────────
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_connections_user ON connections(owner_user_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_connections_status ON connections(status)")
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_arthas_commands_user_cluster_created
+                ON arthas_commands(user_id, connection_id, timestamp DESC)
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_profiler_tasks_user_status_created
+                ON profiler_tasks(user_id, status, created_at DESC)
+            """)
             
             # 创建默认 admin 账户
             cursor.execute('SELECT COUNT(*) FROM users')
@@ -234,5 +295,22 @@ class Database:
                 print("✓ 已创建默认 admin 账户 (用户名: admin, 密码: admin123)")
 
 
-# 单例实例
-db = Database()
+# 延迟初始化的单例实例 (避免循环导入)
+_db_instance: Optional['Database'] = None
+
+def get_db() -> 'Database':
+    """获取 Database 单例 (延迟初始化避免循环导入)"""
+    global _db_instance
+    if _db_instance is None:
+        _db_instance = Database()
+    return _db_instance
+
+# 向后兼容: 提供 db 属性
+class _DbProxy:
+    """Database 单例的延迟代理"""
+    def __getattr__(self, name):
+        return getattr(get_db(), name)
+    def __call__(self):
+        return get_db()
+
+db = _DbProxy()

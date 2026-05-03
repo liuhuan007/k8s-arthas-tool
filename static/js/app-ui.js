@@ -894,6 +894,7 @@ const WORKSPACE_META = {
   connections: { kicker: 'Connection Center', title: '连接中心', sub: '管理 Pod 连接、Arthas 升级与最近连接记录' },
   profiler: { kicker: 'Profiler', title: '采样工具', sub: '启动 async-profiler、JFR、线程和堆转储等采样任务' },
   console: { kicker: 'Arthas Console', title: 'Arthas命令', sub: '执行 Arthas 诊断命令，需要 Arthas-ready 连接' },
+  hotfix: { kicker: 'Hotfix Workbench', title: '热修复', sub: 'jad 查看源码 → 在线编辑/上传 → mc 编译 → redefine 热更新 → 验证报告' },
   terminal: { kicker: 'Pod Terminal', title: '终端', sub: '通过 kubectl exec 进入目标 Pod，不依赖 Arthas' },
   monitor: { kicker: 'Pod Monitor', title: 'Pod 监控', sub: '查看 CPU、内存、网络、磁盘和事件等 Pod 级指标' },
   filebrowser: { kicker: 'File Browser', title: '文件下载', sub: '浏览和下载 Pod 内文件，不依赖 Arthas' },
@@ -909,13 +910,15 @@ const WORKSPACE_META = {
 };
 
 function updateWorkspaceHead(tab) {
-  const meta = WORKSPACE_META[tab] || WORKSPACE_META.connections;
   const kicker = document.getElementById('workspaceKicker');
   const title = document.getElementById('workspaceTitle');
   const sub = document.getElementById('workspaceSub');
-  if (kicker) kicker.textContent = meta.kicker;
-  if (title) title.textContent = meta.title;
-  if (sub) sub.textContent = meta.sub;
+
+  const meta = WORKSPACE_META[tab] || WORKSPACE_META.connections;
+  // 更新标题内容并显示
+  if (kicker) { kicker.textContent = meta.kicker; kicker.style.display = ''; }
+  if (title) { title.textContent = meta.title; title.style.display = ''; }
+  if (sub) { sub.textContent = meta.sub; sub.style.display = ''; }
 }
 
 // ── Connection Management ─────────────────────────────────────────────────────
@@ -939,6 +942,40 @@ function _getRt(c) {
 function _rtIcon(t) { return {java:'☕',node:'🟢',python:'🐍',go:'🔵',dotnet:'🟣',unknown:'❓'}[t]||'❓'; }
 function _canUpgrade(c) { return _inferLevel(c)==='pod' && _getRt(c)?.type==='java'; }
 
+/**
+ * 格式化最后活跃时间
+ * @param {string} timestamp - ISO 时间戳 (如 "2026-05-03T22:18:28")
+ * @returns {string} 相对时间描述 (如 "2分钟前", "1小时前", "3天前")
+ */
+function _formatLastActive(timestamp) {
+  if (!timestamp) return '未知';
+  
+  try {
+    const now = new Date();
+    const pingTime = new Date(timestamp);
+    const diffMs = now - pingTime;
+    const diffSec = Math.floor(diffMs / 1000);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHour = Math.floor(diffMin / 60);
+    const diffDay = Math.floor(diffHour / 24);
+    
+    if (diffSec < 60) return '刚刚';
+    if (diffMin < 60) return `${diffMin}分钟前`;
+    if (diffHour < 24) return `${diffHour}小时前`;
+    if (diffDay < 7) return `${diffDay}天前`;
+    
+    // 超过 7 天显示具体日期
+    const month = pingTime.getMonth() + 1;
+    const day = pingTime.getDate();
+    const hours = pingTime.getHours().toString().padStart(2, '0');
+    const minutes = pingTime.getMinutes().toString().padStart(2, '0');
+    return `${month}/${day} ${hours}:${minutes}`;
+  } catch (e) {
+    console.warn('[时间格式化] 失败:', e);
+    return timestamp;
+  }
+}
+
 function renderConnList() {
   _mergeExternalConnectionState();
   const el = document.getElementById('connList');
@@ -957,6 +994,13 @@ function renderConnList() {
     // 层级标识
     const levelIcon = level === 'arthas' ? '⚡' : '🔵';
     const levelBadge = `<span class="conn-level ${level}">${level === 'arthas' ? 'Arthas连接' : 'Pod连接'}</span>`;
+
+    // ✅ 最后活跃时间
+    let lastActiveLine = '';
+    if (c.last_ping_at) {
+      const timeStr = _formatLastActive(c.last_ping_at);
+      lastActiveLine = `<div class="conn-last-active" title="最后活跃: ${c.last_ping_at}">🕒 ${timeStr}</div>`;
+    }
 
     // 运行时信息行（补充：从当前连接状态获取，以防旧缓存中缺失）
     let runtimeLine = '';
@@ -1003,6 +1047,7 @@ function renderConnList() {
           <div class="conn-cluster">${statusIcon ? `<span style="font-size:9px;${statusStyle};margin-right:3px" title="${statusHint}">${statusIcon}</span>` : `<span style="font-size:11px">${levelIcon}</span>`} ${esc(c.cluster_name)}${levelBadge}</div>
           <div class="conn-pod"><span class="conn-ns">${c.namespace}</span><span class="conn-slash">/</span><span class="conn-name">${esc(c.pod_name)}</span></div>
           ${runtimeLine}
+          ${lastActiveLine}
           ${upgradeBtn}
         </div>
         <button class="del-conn" onclick="event.stopPropagation();deleteConnection('${c.id}')" title="删除连接">✕</button>
@@ -1666,6 +1711,7 @@ async function cleanupStaleConnections() {
   _connections = _connections.filter(c => !staleIds.includes(c.id));
   staleIds.forEach(id => delete _connHealth[id]);
   if (staleIds.includes(_currentConnId)) {
+    console.log('[清理] 当前连接被清理,重置状态');
     _currentConnId = null;
     _connected = false;
     _ap = null;
@@ -1675,9 +1721,31 @@ async function cleanupStaleConnections() {
     if (_verBadgeStale) _verBadgeStale.style.display = 'none';
     document.getElementById('runBtn').disabled = true;
   }
-  _syncState();  // 【关键修复】同步状态到 window
-  renderConnList();
+  
+  // 保存到 localStorage
   saveConnections();
+  
+  // 同步状态到 window (关键!)
+  _syncState();
+  
+  console.log('[清理] 清理后状态:', {
+    connections_count: _connections.length,
+    current_conn_id: _currentConnId,
+    window_connections: window._connections?.length
+  });
+  
+  // 刷新连接列表
+  renderConnList();
+  
+  // 刷新连接状态条
+  if (typeof csbRefresh === 'function') csbRefresh();
+  
+  // 更新功能 Tab 状态
+  if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
+  
+  // 更新连接按钮
+  if (typeof updateConnectionButton === 'function') updateConnectionButton();
+  
   toast(`已清理 ${staleIds.length} 个失效连接`, 'success');
 }
 
@@ -1686,13 +1754,24 @@ function saveConnections() {
   const user = getCurrentUser();
   const key = user ? `arthas_connections_${user.username}` : 'arthas_connections';
   localStorage.setItem(key, JSON.stringify(_connections));
-  // 保存当前活跃连接 ID，刷新后自动恢复
+  
+  // 保存当前活跃连接 ID 和层级，刷新后自动恢复
   const activeKey = user ? `arthas_active_conn_${user.username}` : 'arthas_active_conn';
+  const levelKey = user ? `arthas_active_level_${user.username}` : 'arthas_active_level';
+  
   if (_currentConnId) {
     localStorage.setItem(activeKey, _currentConnId);
+    // ✅ 保存连接层级 (arthas 或 pod)
+    const currentConn = _connections.find(c => c.id === _currentConnId);
+    if (currentConn) {
+      const level = _inferLevel(currentConn);
+      localStorage.setItem(levelKey, level);
+    }
   } else {
     localStorage.removeItem(activeKey);
+    localStorage.removeItem(levelKey);
   }
+  
   // 【关键修复】同步到 window
   _syncState();
 }
@@ -1715,18 +1794,22 @@ function loadConnections() {
 
     // 自动恢复上次活跃连接（延迟执行，不阻塞页面初始化）
     const activeKey = user ? `arthas_active_conn_${user.username}` : 'arthas_active_conn';
+    const levelKey = user ? `arthas_active_level_${user.username}` : 'arthas_active_level';
     const savedConnId = localStorage.getItem(activeKey);
+    const savedLevel = localStorage.getItem(levelKey);  // ✅ 读取保存的层级
+    
     if (savedConnId && _connections.find(c => c.id === savedConnId)) {
       const conn = _connections.find(c => c.id === savedConnId);
       if (conn) {
         setTimeout(() => {
-          _restoreActiveConnection(conn).catch(e => {
+          _restoreActiveConnection(conn, savedLevel).catch(e => {
             console.warn('自动恢复连接失败:', e);
             // 恢复失败不影响页面功能，仅清除无效的活跃连接标记
             _currentConnId = null;
             _syncState();
             renderConnList();
             localStorage.removeItem(activeKey);
+            localStorage.removeItem(levelKey);
           });
         }, 800);
       }
@@ -1742,8 +1825,11 @@ function loadConnections() {
  * 安全恢复上次活跃连接
  * 不走 switchConnection（会被 connId===_currentConnId 短路跳过），
  * 而是直接发起后端 connect 请求重建 Arthas 通道。
+ * 
+ * @param {Object} conn - 连接对象
+ * @param {string} savedLevel - 保存的连接层级 ('arthas' 或 'pod')
  */
-async function _restoreActiveConnection(conn) {
+async function _restoreActiveConnection(conn, savedLevel) {
   const t = {
     cluster_name: conn.cluster_name,
     namespace: conn.namespace,
@@ -1785,7 +1871,9 @@ async function _restoreActiveConnection(conn) {
       _ap = syncPodTargetFromConnection(conn) || t;
       _connHealth[conn.id] = { alive: true, pod_exists: true, pod_phase: podD.pod_phase || 'Running' };
       conn.status = 'connected';
+      conn.level = 'pod';  // ✅ 明确设置层级
       _syncState();
+      saveConnections();  // ✅ 保存到 localStorage
       renderConnList();
 
       // 更新 two-step-connection 内部状态
@@ -1796,8 +1884,11 @@ async function _restoreActiveConnection(conn) {
       setConnStatus('ok', `✓ Pod 连接已恢复 (${podD.runtime?.runtime_type || 'unknown'})`);
       toast(`Pod 连接已恢复 (${podD.runtime?.runtime_type || 'unknown'})`, 'success');
 
-      // Step 2: 如果原来是 Arthas 连接，且当前是 Java 应用，自动升级
-      if (conn.arthas_version && podD.runtime?.runtime_type === 'java') {
+      // Step 2: ✅ 修复：根据保存的层级判断是否需要升级 Arthas
+      const shouldUpgradeToArthas = savedLevel === 'arthas' && podD.runtime?.runtime_type === 'java';
+      
+      if (shouldUpgradeToArthas) {
+        console.log('[恢复] 检测到之前是 Arthas 连接, 开始自动升级');
         setConnStatus('dim', `正在恢复 Arthas 诊断环境...`);
         try {
           const arthasR = await fetch(`${API}/pod/upgrade-to-arthas`, {
@@ -1820,7 +1911,9 @@ async function _restoreActiveConnection(conn) {
             conn.arthas_version = arthasD.arthas_version;
             conn.arthas_address = arthasD.arthas_address;
             conn.http_url = arthasD.http_url;
+            conn.level = 'arthas';  // ✅ 更新层级
             _syncState();
+            saveConnections();  // ✅ 保存到 localStorage
             renderConnList();
             if (typeof updateConnectionButton === 'function') updateConnectionButton();
             if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
@@ -1834,6 +1927,8 @@ async function _restoreActiveConnection(conn) {
         } catch (e) {
           console.warn('Arthas 恢复失败，保持 Pod 连接:', e.message);
         }
+      } else {
+        console.log(`[恢复] savedLevel=${savedLevel}, runtime=${podD.runtime?.runtime_type}, 不需要升级`);
       }
       return; // Pod 连接成功即返回
     }
@@ -1860,6 +1955,7 @@ async function _restoreActiveConnection(conn) {
   _ap = syncPodTargetFromConnection(conn) || t;
   _connHealth[conn.id] = { alive: true, pod_exists: true, pod_phase: 'Running' };
   conn.status = 'connected';
+  conn.level = 'arthas';  // ✅ 设置层级
   conn.local_port = d.local_port;
   if (d.java_pid) conn.java_pid = d.java_pid;
   if (d.arthas_version) conn.arthas_version = d.arthas_version;
@@ -1867,6 +1963,7 @@ async function _restoreActiveConnection(conn) {
   if (d.http_url) conn.http_url = d.http_url;
 
   _syncState();
+  saveConnections();  // ✅ 保存到 localStorage
   renderConnList();
 
   // 更新 UI
@@ -1901,8 +1998,8 @@ async function _restoreActiveConnection(conn) {
 
 function switchTab(n) {
   // 支持数字索引和字符串索引
-  // 新 tab 顺序: connections, profiler, console, terminal, monitor, filebrowser, ai, model-config, mcp-center, task-center, toolchain-center, history, diag, user-management, audit-logs
-  const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'terminal', 4:'monitor', 5:'filebrowser', 6:'ai', 7:'model-config', 8:'mcp-center', 9:'task-center', 10:'toolchain-center', 11:'history', 12:'diag', 13:'user-management', 14:'audit-logs'};
+  // 新 tab 顺序: connections, profiler, console, hotfix, terminal, monitor, filebrowser, ai, model-config, mcp-center, task-center, toolchain-center, history, diag, user-management, audit-logs
+  const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'hotfix', 4:'terminal', 5:'monitor', 6:'filebrowser', 7:'ai', 8:'model-config', 9:'mcp-center', 10:'task-center', 11:'toolchain-center', 12:'history', 13:'diag', 14:'user-management', 15:'audit-logs'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
 
   if (['user-management', 'audit-logs'].includes(tab) && !(typeof isAdmin === 'function' && isAdmin())) {
@@ -1911,7 +2008,7 @@ function switchTab(n) {
   }
 
   // 先切 Tab（允许切换到任何 Tab）
-  const allTabs = ['connections','console','profiler','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','history','diag','user-management','audit-logs'];
+  const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','history','diag','user-management','audit-logs'];
   allTabs.forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
     document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
@@ -5224,11 +5321,55 @@ async function loadLocalFiles() {
   } catch {}
 }
 
-// ── Init ────────────────────────────────────────────────────────────────────────
+// ── Init ───────────────────────────────────────────────────────────────────────
 // 等待 DOM 加载完成后初始化
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
   initUserDisplay();
-  loadConnections();
+  
+  // ✅ P0修复: 先从数据库 API 加载最新连接,再恢复活跃连接
+  try {
+    const r = await fetch(`${API}/arthas/connections`, { credentials: 'include' });
+    const d = await r.json();
+    if (r.ok && d.ok && d.connections) {
+      console.log('[初始化] 从数据库加载连接:', d.connections.length, '个');
+      _connections = d.connections;
+      const user = getCurrentUser();
+      const key = user ? `arthas_connections_${user.username}` : 'arthas_connections';
+      localStorage.setItem(key, JSON.stringify(_connections));
+      _syncState();
+      renderConnList();
+      
+      // ✅ 恢复活跃连接 (与 loadConnections 相同的逻辑)
+      const activeKey = user ? `arthas_active_conn_${user.username}` : 'arthas_active_conn';
+      const levelKey = user ? `arthas_active_level_${user.username}` : 'arthas_active_level';
+      const savedConnId = localStorage.getItem(activeKey);
+      const savedLevel = localStorage.getItem(levelKey);
+      
+      if (savedConnId && _connections.find(c => c.id === savedConnId)) {
+        const conn = _connections.find(c => c.id === savedConnId);
+        if (conn) {
+          console.log('[初始化] 恢复活跃连接:', savedConnId, '层级:', savedLevel);
+          setTimeout(() => {
+            _restoreActiveConnection(conn, savedLevel).catch(e => {
+              console.warn('[初始化] 自动恢复连接失败:', e);
+              _currentConnId = null;
+              _syncState();
+              renderConnList();
+              localStorage.removeItem(activeKey);
+              localStorage.removeItem(levelKey);
+            });
+          }, 800);
+        }
+      }
+    } else {
+      console.warn('[初始化] 数据库加载失败, 从 localStorage 加载');
+      loadConnections();
+    }
+  } catch (e) {
+    console.error('[初始化] 数据库加载异常:', e);
+    loadConnections();
+  }
+  
   renderCmdPal();
   checkHealth();
   setInterval(checkHealth, 8000);

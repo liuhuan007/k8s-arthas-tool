@@ -60,61 +60,120 @@ function canUpgradeToArthas() {
 
 /**
  * 更新连接按钮状态
+ * ✅ 修复: 步骤3和步骤4的按钮独立控制
  */
 function updateConnectionButton() {
   const btn = document.getElementById('ptConnBtn');
+  const upgradeBtn = document.getElementById('ptUpgradeBtn');
+  
   if (!btn) return;
 
   switch (_connState) {
     case ConnectionState.DISCONNECTED:
+      // 步骤3: Pod 连接按钮可用
       btn.textContent = '🔌 Pod 连接';
       btn.className = 'pt-btn';
       btn.disabled = false;
       btn.onclick = podConnect;
+      
+      // 步骤4: Arthas 升级按钮禁用
+      if (upgradeBtn) {
+        upgradeBtn.disabled = true;
+        upgradeBtn.style.opacity = '0.5';
+        upgradeBtn.style.display = 'none';  // ✅ 隐藏按钮
+      }
       break;
 
     case ConnectionState.POD_CONNECTING:
+      // 步骤3: Pod 连接中
       btn.textContent = '连接中...';
       btn.className = 'pt-btn';
       btn.disabled = true;
+      
+      // 步骤4: Arthas 升级按钮禁用
+      if (upgradeBtn) {
+        upgradeBtn.disabled = true;
+        upgradeBtn.style.opacity = '0.5';
+        upgradeBtn.style.display = 'none';  // ✅ 隐藏按钮
+      }
       break;
 
     case ConnectionState.POD_CONNECTED:
+      // 步骤3: Pod 已连接
       if (canUpgradeToArthas()) {
-        btn.textContent = '⚡ 启动 Arthas';
-        btn.className = 'pt-btn';
-        btn.disabled = false;
-        btn.onclick = upgradeToArthas;
+        btn.textContent = '✓ Pod 已连接';
+        btn.className = 'pt-btn success';
+        btn.disabled = true;
+        
+        // 步骤4: Arthas 升级按钮可用
+        if (upgradeBtn) {
+          upgradeBtn.disabled = false;
+          upgradeBtn.style.opacity = '1';
+          upgradeBtn.style.display = '';  // ✅ 显示按钮
+          upgradeBtn.textContent = '⚡ 启动 Arthas';
+          upgradeBtn.className = 'pt-btn success';
+        }
       } else {
         btn.textContent = '✓ Pod 已连接';
         btn.className = 'pt-btn success';
         btn.disabled = true;
+        
+        // 步骤4: 非 Java 应用, Arthas 升级按钮禁用
+        if (upgradeBtn) {
+          upgradeBtn.disabled = true;
+          upgradeBtn.style.opacity = '0.5';
+          upgradeBtn.style.display = '';  // ✅ 显示按钮
+          upgradeBtn.textContent = '⚠️ 非 Java 应用,无法升级';
+          upgradeBtn.className = 'pt-btn';
+        }
       }
       break;
 
     case ConnectionState.ARTHAS_UPGRADING:
-      btn.textContent = '启动中...';
-      btn.className = 'pt-btn';
+      // 步骤3: Pod 已连接
+      btn.textContent = '✓ Pod 已连接';
+      btn.className = 'pt-btn success';
       btn.disabled = true;
+      
+      // 步骤4: Arthas 升级中
+      if (upgradeBtn) {
+        upgradeBtn.textContent = '启动中...';
+        upgradeBtn.className = 'pt-btn';
+        upgradeBtn.disabled = true;
+        upgradeBtn.style.display = '';  // ✅ 显示按钮
+      }
       break;
 
     case ConnectionState.ARTHAS_READY:
-      btn.textContent = '⚡ Arthas 就绪';
+      // 步骤3: Pod 已连接 - ✅ 禁用并隐藏
+      btn.textContent = '✓ Pod 已连接';
       btn.className = 'pt-btn success';
       btn.disabled = true;
+      btn.style.display = 'none';  // ✅ Arthas 已连接时隐藏 Pod 连接按钮
+      
+      // 步骤4: Arthas 已就绪
+      if (upgradeBtn) {
+        upgradeBtn.textContent = '✓ Arthas 已就绪';
+        upgradeBtn.className = 'pt-btn success';
+        upgradeBtn.disabled = true;
+        upgradeBtn.style.display = '';  // ✅ 显示按钮
+      }
       break;
   }
 }
 
 /**
  * 更新连接状态显示
+ * ✅ 修复: 根据状态显示在不同的区域
  */
 function updateConnectionStatus(message, type = 'info') {
+  // ✅ 步骤3: Pod 连接状态
+  const podStatusEl = document.getElementById('podConnStatus');
+  // ✅ 步骤4: Arthas 升级状态
+  const arthasStatusEl = document.getElementById('arthasUpgradeStatus');
+  // 旧版兼容: 通用状态
   const statusEl = document.getElementById('connStatus');
-  if (!statusEl) return;
 
-  statusEl.style.display = 'block';
-  
   const colors = {
     info: 'var(--a3)',
     success: 'var(--green)',
@@ -122,11 +181,47 @@ function updateConnectionStatus(message, type = 'info') {
     error: 'var(--red)'
   };
 
-  statusEl.innerHTML = `
+  const html = `
     <div style="padding: 8px 12px; background: rgba(0,0,0,0.3); border-left: 3px solid ${colors[type]}; border-radius: 4px; font-size: 12px; color: ${colors[type]}">
       ${message}
     </div>
   `;
+
+  // ✅ 根据状态显示在不同的区域
+  switch (_connState) {
+    case ConnectionState.POD_CONNECTING:
+    case ConnectionState.POD_CONNECTED:
+      // 步骤3: 显示在 Pod 连接下方
+      if (podStatusEl) {
+        podStatusEl.style.display = 'block';
+        podStatusEl.innerHTML = html;
+      }
+      // 隐藏 Arthas 升级状态
+      if (arthasStatusEl) {
+        arthasStatusEl.style.display = 'none';
+      }
+      break;
+
+    case ConnectionState.ARTHAS_UPGRADING:
+    case ConnectionState.ARTHAS_READY:
+      // 步骤4: 显示在 Arthas 升级下方
+      if (arthasStatusEl) {
+        arthasStatusEl.style.display = 'block';
+        arthasStatusEl.innerHTML = html;
+      }
+      // 隐藏 Pod 连接状态
+      if (podStatusEl) {
+        podStatusEl.style.display = 'none';
+      }
+      break;
+
+    default:
+      // 兼容旧版: 显示在通用区域
+      if (statusEl) {
+        statusEl.style.display = 'block';
+        statusEl.innerHTML = html;
+      }
+  }
 }
 
 /**
@@ -470,13 +565,14 @@ async function upgradeToArthas() {
 
     const reused = Boolean(d.reused);
     const verSuffix = d.arthas_version ? ` Arthas ${d.arthas_version}` : '';
+    
+    // ✅ 只在 Arthas 升级状态区域显示,避免重复
     updateConnectionStatus(
-      `✓ Arthas 诊断环境就绪${verSuffix}${reused ? '（复用已有进程）' : ''} - ${d.message}`,
+      `✓ Arthas 诊断环境就绪${verSuffix}${reused ? '（复用已有进程）' : ''}`,
       'success'
     );
 
-    // 更新连接状态提示（复用原有逻辑）
-    setCpSt('ok', `✓ ${d.message} (port:${d.local_port})`);
+    // 启用诊断按钮
     document.getElementById('runBtn').disabled = false;
 
     // 更新 conTitle tooltip
@@ -510,27 +606,31 @@ async function upgradeToArthas() {
  * 断开连接
  */
 async function podDisconnect() {
-  if (!_podConnId) {
+  // ✅ 优先使用 Arthas 连接 ID,如果不存在则使用 Pod 连接 ID
+  const activeConnId = _currentConnId || _podConnId;
+  
+  if (!activeConnId) {
     toast('没有活动连接', 'warn');
     return;
   }
 
   try {
+    // ✅ 优先尝试调用 /api/pod/disconnect (新接口)
     const r = await fetch(`${API}/pod/disconnect`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
       body: JSON.stringify({
-        connection_id: _podConnId
+        connection_id: activeConnId
       })
     });
 
     const d = await r.json();
 
     if (d.ok) {
-      // 从全局连接列表中移除（在重置之前，需要用到 _podConnId）
-      if (_podConnId && typeof removeConnection === 'function') {
-        removeConnection(_podConnId);
+      // 从全局连接列表中移除
+      if (activeConnId && typeof removeConnection === 'function') {
+        removeConnection(activeConnId);
       }
 
       // 重置状态
@@ -548,14 +648,75 @@ async function podDisconnect() {
       updateConnectionStatus('', 'info');
 
       // 隐藏状态显示
+      const podStatusEl = document.getElementById('podConnStatus');
+      const arthasStatusEl = document.getElementById('arthasUpgradeStatus');
       const statusEl = document.getElementById('connStatus');
+      if (podStatusEl) podStatusEl.style.display = 'none';
+      if (arthasStatusEl) arthasStatusEl.style.display = 'none';
       if (statusEl) statusEl.style.display = 'none';
+
+      // ✅ 重新显示 Pod 连接按钮
+      const btn = document.getElementById('ptConnBtn');
+      if (btn) {
+        btn.style.display = '';
+      }
 
       toast('连接已断开', 'info');
 
       // 同步到全局状态
       _syncState && _syncState();
       renderConnList && renderConnList();
+    } else {
+      // ✅ 如果新接口失败,尝试旧接口
+      console.warn('[断开] /api/pod/disconnect 失败,尝试旧接口:', d.error);
+      
+      const r2 = await fetch(`${API}/arthas/disconnect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          conn_id: activeConnId
+        })
+      });
+      
+      const d2 = await r2.json();
+      
+      if (d2.ok || r2.status === 200) {
+        // 成功断开
+        if (activeConnId && typeof removeConnection === 'function') {
+          removeConnection(activeConnId);
+        }
+        
+        _connState = ConnectionState.DISCONNECTED;
+        _podConnId = null;
+        _runtimeInfo = null;
+        _podPhase = null;
+        _connected = false;
+        _currentConnId = null;
+        
+        updateConnectionButton();
+        updateRuntimeDisplay();
+        updateFeatureTabs();
+        updateConnectionStatus('', 'info');
+        
+        const podStatusEl = document.getElementById('podConnStatus');
+        const arthasStatusEl = document.getElementById('arthasUpgradeStatus');
+        const statusEl = document.getElementById('connStatus');
+        if (podStatusEl) podStatusEl.style.display = 'none';
+        if (arthasStatusEl) arthasStatusEl.style.display = 'none';
+        if (statusEl) statusEl.style.display = 'none';
+        
+        const btn = document.getElementById('ptConnBtn');
+        if (btn) {
+          btn.style.display = '';
+        }
+        
+        toast('连接已断开', 'info');
+        _syncState && _syncState();
+        renderConnList && renderConnList();
+      } else {
+        throw new Error(d2.error || d.error || '断开连接失败');
+      }
     }
 
   } catch (e) {

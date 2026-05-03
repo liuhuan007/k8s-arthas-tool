@@ -1155,6 +1155,231 @@ def _save_history(user_id: int, user_msg: str, ai_msg: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+# AI 辅助诊断 API (P1b-2)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@ai_bp.route('/api/ai/explain', methods=['POST'])
+@login_required
+def ai_explain_command():
+    """解释 Arthas 命令 - 帮助用户理解命令用途、参数和输出"""
+    d = request.json or {}
+    command = d.get('command', '').strip()
+    context = d.get('context', '')  # 可选: 当前问题上下文
+
+    if not command:
+        return jsonify({"error": "命令不能为空"}), 400
+
+    # 获取 AI 配置
+    config = db.fetch_one('SELECT * FROM ai_config WHERE user_id = ?', (current_user.id,))
+    if not config:
+        return jsonify({"error": "请先配置 AI 模型"}), 400
+
+    # 构建系统提示
+    system_prompt = f"""你是 Arthas 命令解释专家。请解释以下 Arthas 命令的:
+1. 命令用途 - 这个命令解决什么问题
+2. 参数说明 - 每个参数的含义
+3. 输出解读 - 如何理解命令输出
+4. 使用场景 - 什么时候使用这个命令
+5. 注意事项 - 使用时的风险和限制
+
+用中文简洁回答,适合初学者理解。"""
+
+    user_msg = f"请解释 Arthas 命令: {command}"
+    if context:
+        user_msg += f"\n\n当前问题上下文: {context}"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg}
+    ]
+
+    try:
+        req, _ = _call_llm(config, messages, stream=False)
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+            explanation = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+        # 审计
+        from services.audit_service import AuditService
+        AuditService._log_raw(current_user.id, 'ai_explain', 'ai_diagnosis',
+                              '', f'AI 解释命令: {command}')
+
+        return jsonify({
+            "ok": True,
+            "command": command,
+            "explanation": explanation
+        })
+    except Exception as e:
+        return jsonify({"error": f"解释失败: {str(e)}"}), 500
+
+
+@ai_bp.route('/api/ai/summarize', methods=['POST'])
+@login_required
+def ai_summarize_result():
+    """总结诊断结果 - 对 Arthas 命令输出进行智能总结"""
+    d = request.json or {}
+    command = d.get('command', '').strip()
+    output = d.get('output', '').strip()
+    scenario = d.get('scenario', '')  # 诊断场景: cpu_high/memory_leak/slow_method 等
+
+    if not command or not output:
+        return jsonify({"error": "命令和输出不能为空"}), 400
+
+    config = db.fetch_one('SELECT * FROM ai_config WHERE user_id = ?', (current_user.id,))
+    if not config:
+        return jsonify({"error": "请先配置 AI 模型"}), 400
+
+    system_prompt = f"""你是 Java 性能诊断专家。请对以下 Arthas 命令输出进行总结:
+
+要求:
+1. 核心发现 - 输出中最关键的信息是什么
+2. 问题判断 - 是否存在性能问题,严重程度如何
+3. 根因分析 - 可能的根本原因
+4. 影响范围 - 问题影响的模块/用户
+5. 优化建议 - 具体的优化方向和优先级
+
+用结构化格式输出,重点突出 actionable 的建议。"""
+
+    user_msg = f"""诊断命令: {command}
+诊断场景: {scenario or '通用'}
+
+命令输出:
+{output[:5000]}"""  # 限制输出长度
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg}
+    ]
+
+    try:
+        req, _ = _call_llm(config, messages, stream=False)
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+            summary = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+        # 审计
+        from services.audit_service import AuditService
+        AuditService._log_raw(current_user.id, 'ai_summarize', 'ai_diagnosis',
+                              '', f'AI 总结诊断结果: {command}, 场景={scenario}')
+
+        return jsonify({
+            "ok": True,
+            "command": command,
+            "scenario": scenario,
+            "summary": summary
+        })
+    except Exception as e:
+        return jsonify({"error": f"总结失败: {str(e)}"}), 500
+
+
+@ai_bp.route('/api/ai/suggest', methods=['POST'])
+@login_required
+def ai_suggest_solutions():
+    """提供排障建议 - 基于问题描述给出诊断步骤和解决方案"""
+    d = request.json or {}
+    problem = d.get('problem', '').strip()
+    symptoms = d.get('symptoms', [])  # 症状列表
+    connection_id = d.get('connection_id', '')  # 可选: 当前连接
+
+    if not problem:
+        return jsonify({"error": "问题描述不能为空"}), 400
+
+    config = db.fetch_one('SELECT * FROM ai_config WHERE user_id = ?', (current_user.id,))
+    if not config:
+        return jsonify({"error": "请先配置 AI 模型"}), 400
+
+    # 获取连接信息(如果有)
+    conn_info = _get_connection_info(connection_id) if connection_id else ''
+
+    system_prompt = f"""你是 Java 应用排障专家。请基于用户描述的问题,给出系统化的诊断建议和解决方案。
+
+要求:
+1. 诊断步骤 - 按优先级排序的诊断流程,每个步骤说明使用的 Arthas 命令
+2. 关键指标 - 需要关注的关键指标和阈值
+3. 常见原因 - 该问题的常见原因列表
+4. 解决方案 - 针对性的解决方案(短期/长期)
+5. 预防措施 - 如何预防此类问题再次发生
+
+输出格式清晰,步骤可执行,适合运维和开发人员使用。"""
+
+    user_msg = f"""问题描述: {problem}"""
+    if symptoms:
+        user_msg += f"\n\n症状列表:\n" + "\n".join(f"- {s}" for s in symptoms)
+    if conn_info:
+        user_msg += f"\n\n当前环境:\n{conn_info}"
+
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg}
+    ]
+
+    try:
+        req, _ = _call_llm(config, messages, stream=False)
+        with urllib.request.urlopen(req, timeout=90) as resp:
+            result = json.loads(resp.read().decode('utf-8'))
+            suggestions = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+
+        # 审计
+        from services.audit_service import AuditService
+        AuditService._log_raw(current_user.id, 'ai_suggest', 'ai_diagnosis',
+                              connection_id or '', f'AI 排障建议: {problem[:100]}')
+
+        return jsonify({
+            "ok": True,
+            "problem": problem,
+            "suggestions": suggestions
+        })
+    except Exception as e:
+        return jsonify({"error": f"建议生成失败: {str(e)}"}), 500
+
+
+@ai_bp.route('/api/ai/cases', methods=['GET'])
+@login_required
+def ai_get_cases():
+    """检索历史案例 - 基于关键词搜索类似的诊断案例"""
+    keyword = request.args.get('keyword', '').strip()
+    category = request.args.get('category', '')  # cpu/memory/thread/gc 等
+    limit = int(request.args.get('limit', '10'))
+
+    # 搜索诊断历史中的相关案例
+    query = '''
+        SELECT * FROM ai_chat_history 
+        WHERE user_id = ? 
+        AND role = 'assistant'
+    '''
+    params = [current_user.id]
+
+    if keyword:
+        query += ' AND content LIKE ?'
+        params.append(f'%{keyword}%')
+
+    if category:
+        query += ' AND content LIKE ?'
+        params.append(f'%{category}%')
+
+    query += ' ORDER BY created_at DESC LIMIT ?'
+    params.append(limit)
+
+    try:
+        rows = db.fetch_all(query, params)
+        cases = []
+        for row in rows:
+            cases.append({
+                "id": row['id'],
+                "content_preview": row['content'][:300],
+                "created_at": row['created_at']
+            })
+
+        return jsonify({
+            "ok": True,
+            "cases": cases,
+            "total": len(cases)
+        })
+    except Exception as e:
+        return jsonify({"error": f"案例检索失败: {str(e)}"}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 # 数据库表初始化
 # ═══════════════════════════════════════════════════════════════════════════════
 

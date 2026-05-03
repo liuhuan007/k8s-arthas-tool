@@ -13,6 +13,7 @@ def register_blueprints(app: Flask):
     from api.ai_chat import ai_bp
     from api.performance_diagnose import diag_bp
     from api.task_center import task_bp
+    from api.hotfix import hotfix_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(users_bp)
@@ -22,3 +23,4 @@ def register_blueprints(app: Flask):
     app.register_blueprint(ai_bp)
     app.register_blueprint(diag_bp)
     app.register_blueprint(task_bp)
+    app.register_blueprint(hotfix_bp)

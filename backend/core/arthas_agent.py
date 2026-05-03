@@ -65,30 +65,54 @@ class ArthasAgentManager:
 
     def _find_arthas_pids(self) -> List[int]:
         """返回 Pod 内所有 arthas-boot 进程的 PID 列表"""
+        # ✅ 修复: 使用更精确的匹配,排除 grep 自身和 ps 命令
+        # 匹配: java -jar /app/arthas/arthas-boot.jar 或 java -jar arthas.jar
         rc, out, _ = self._exec(
-            "ps -ef 2>/dev/null | grep -i 'arthas-boot\\|arthas.jar' | grep -v grep || true",
+            "ps -ef 2>/dev/null | grep '[j]ava.*arthas-boot\\.jar' | awk '{print $2}' || true",
             timeout=8,
         )
         pids = []
         if rc == 0 and out.strip():
             for line in out.strip().splitlines():
-                parts = line.split()
-                if len(parts) >= 2 and parts[1].isdigit():
-                    pids.append(int(parts[1]))
-        return pids
+                pid_str = line.strip()
+                if pid_str.isdigit():
+                    pids.append(int(pid_str))
+        
+        # ✅ 额外验证: 确保进程确实在监听 8563 端口
+        valid_pids = []
+        for pid in pids:
+            # 检查进程是否还在运行
+            rc2, _, _ = self._exec(f"kill -0 {pid} 2>/dev/null", timeout=3)
+            if rc2 == 0:
+                valid_pids.append(pid)
+            else:
+                log.warning("[Arthas] PID %d 已不存在,跳过", pid)
+        
+        return valid_pids
 
     def _kill_stale_arthas(self, pids: List[int]) -> str:
         """清理残留 arthas-boot 进程"""
         if not pids:
             return ""
+        
         pid_str = " ".join(str(p) for p in pids)
+        log.info("[Arthas] 清理残留进程: %s", pid_str)
+        
+        # ✅ 分阶段清理: 先 SIGTERM, 再 SIGKILL
         self._exec(
-            f"kill {pid_str} 2>/dev/null; sleep 1; "
-            f"kill -9 {pid_str} 2>/dev/null; true",
-            timeout=8,
+            f"kill {pid_str} 2>/dev/null; sleep 2; "
+            f"kill -9 {pid_str} 2>/dev/null; sleep 1; true",
+            timeout=10,
         )
-        log.info("Killed stale arthas pids: %s", pid_str)
-        return f"已清理残留进程 {pid_str}"
+        
+        # ✅ 验证清理结果
+        remaining = self._find_arthas_pids()
+        if remaining:
+            log.warning("[Arthas] 清理后仍有残留进程: %s", remaining)
+            return f"已清理残留进程 {pid_str}, 但仍残留 {remaining}"
+        else:
+            log.info("[Arthas] 清理成功,无残留进程")
+            return f"已清理残留进程 {pid_str}"
 
     def _resolve_jar(self) -> bool:
         """确认 JAR 路径可用；找不到时按优先级探测备选路径"""
@@ -130,13 +154,20 @@ class ArthasAgentManager:
         """确保 Arthas agent 在 Pod 内运行"""
         port = self.t.arthas_http_port
 
-        # 情况 A: HTTP 已响应，直接复用
+        # 情况 A: HTTP 已响应，但需要验证是否真的是 Arthas
         if self._http_reachable():
-            log.info("Arthas HTTP already reachable on port %d — reusing", port)
-            # 复用时也要获取 java_pid
-            if not self._pid:
-                self.find_java_pid()
-            return True, f"Arthas 已在运行，直接复用 (port {port})"
+            # ✅ 验证: 检查是否有 arthas-boot 进程在运行
+            arthas_pids = self._find_arthas_pids()
+            if arthas_pids:
+                log.info("Arthas HTTP reachable and agent process found (PIDs: %s) — reusing", arthas_pids)
+                # 复用时也要获取 java_pid
+                if not self._pid:
+                    self.find_java_pid()
+                return True, f"Arthas 已在运行，直接复用 (port {port})"
+            else:
+                log.warning("Arthas HTTP reachable but NO agent process found — will restart")
+                # HTTP 可达但没有进程,可能是残留端口,需要清理
+                # 继续执行后续逻辑,会清理残留并重启
 
         # 情况 B: HTTP 不通，先清理残留进程
         stale_pids = self._find_arthas_pids()

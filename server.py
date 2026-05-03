@@ -349,9 +349,16 @@ def _check_conn_owner(conn_id: str) -> bool:
 
 
 def _get_conn(conn_id: str):
-    """获取连接对象"""
+    """获取连接对象(带权限检查)"""
     entry = _connections.get(conn_id)
-    return entry.get('conn') if entry else None
+    if not entry:
+        return None
+    
+    # 权限检查: 非 admin 只能访问自己的连接
+    if not current_user.is_admin and entry.get('user_id') != current_user.id:
+        return None
+    
+    return entry.get('conn')
 
 
 @app.route('/api/arthas/connect', methods=['POST'])
@@ -388,6 +395,8 @@ def arthas_connect():
     try:
         ok, msg = conn.connect()
         if not ok:
+            if isinstance(msg, dict):
+                return jsonify({"ok": False, **msg}), 400
             return jsonify({"ok": False, "error": msg}), 400
         
         # 检测 MCP 端点是否可用
@@ -402,6 +411,10 @@ def arthas_connect():
             db.update('connections', {
                 'level': 'arthas',
                 'local_port': conn.local_port,
+                'java_pid': conn.java_pid,
+                'arthas_version': conn.arthas_version,
+                'status': 'ready',
+                'last_ping_at': now_ts,
                 'user_id': current_user.id,
                 'updated_at': now_ts,
             }, 'id = ?', (conn_id,))
@@ -411,8 +424,13 @@ def arthas_connect():
                 'cluster_name': cluster_name,
                 'namespace': namespace,
                 'pod_name': pod,
+                'container_name': '',
                 'level': 'arthas',
                 'local_port': conn.local_port,
+                'java_pid': conn.java_pid,
+                'arthas_version': conn.arthas_version,
+                'status': 'ready',
+                'last_ping_at': now_ts,
                 'user_id': current_user.id,
                 'updated_at': now_ts,
             })
@@ -513,7 +531,8 @@ def _ensure_connection(conn_id: str, d: dict):
     conn = ArthasConnection(runner, target)
     ok, msg = conn.connect()
     if not ok:
-        return None, f"连接已丢失，自动重连失败: {msg}"
+        err_str = msg.get("message", str(msg)) if isinstance(msg, dict) else msg
+        return None, f"连接已丢失，自动重连失败: {err_str}"
 
     with _connections_lock:
         # 双重检查：防止并发时其他线程已经创建
@@ -525,6 +544,10 @@ def _ensure_connection(conn_id: str, d: dict):
                 db.update('connections', {
                     'level': 'arthas',
                     'local_port': conn.local_port,
+                    'java_pid': conn.java_pid,
+                    'arthas_version': conn.arthas_version,
+                    'status': 'ready',
+                    'last_ping_at': now_ts,
                     'user_id': current_user.id,
                     'updated_at': now_ts,
                 }, 'id = ?', (conn_id,))
@@ -534,8 +557,13 @@ def _ensure_connection(conn_id: str, d: dict):
                     'cluster_name': cluster_name,
                     'namespace': namespace,
                     'pod_name': pod,
+                    'container_name': '',
                     'level': 'arthas',
                     'local_port': conn.local_port,
+                    'java_pid': conn.java_pid,
+                    'arthas_version': conn.arthas_version,
+                    'status': 'ready',
+                    'last_ping_at': now_ts,
                     'user_id': current_user.id,
                     'updated_at': now_ts,
                 })
@@ -605,25 +633,6 @@ def arthas_status():
     })
 
 
-@app.route('/api/arthas/connections', methods=['GET'])
-@login_required
-def get_arthas_connections():
-    """获取连接列表（从数据库，按 updated_at 降序）"""
-    try:
-        if current_user.is_admin:
-            rows = db.fetch_all('SELECT * FROM connections ORDER BY updated_at DESC')
-        else:
-            rows = db.fetch_all(
-                'SELECT * FROM connections WHERE user_id = ? ORDER BY updated_at DESC',
-                (current_user.id,)
-            )
-        connections = [dict(r) for r in (rows or [])]
-        return jsonify({"ok": True, "connections": connections})
-    except Exception as e:
-        log.exception('获取连接列表失败')
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-
 @app.route('/api/arthas/connections/cleanup-stale', methods=['POST'])
 @login_required
 def cleanup_stale_connections():
@@ -650,12 +659,14 @@ def cleanup_stale_connections():
         entry = None
         with _connections_lock:
             entry = _connections.pop(conn_id, None)
+        
+        # 安全获取 conn 对象
         conn = entry.get('conn') if entry else None
         if conn:
             try:
                 conn.disconnect()
-            except Exception:
-                pass
+            except Exception as e:
+                log.warning(f"断开连接 {conn_id} 失败: {e}")
 
         cleanup_pod = getattr(app, 'cleanup_pod_connection_by_id', None)
         if cleanup_pod:

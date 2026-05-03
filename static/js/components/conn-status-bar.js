@@ -5,7 +5,7 @@
  * - 连接类型（Pod连接 / Arthas连接 / 未连接）
  * - 目标 Pod 信息（集群 / 命名空间 / Pod名）
  * - 运行时信息（Java版本、PID 等）
- * - 快捷操作按钮（连接 / 启动Arthas / 断开）
+ * - 快捷操作按钮（连接 / 查看详情 / 断开）
  *
  * 数据来源：window._connState / window._connections / window._currentConnId / window._runtimeInfo
  * 更新时机：连接状态变化时调用 csbRefresh()
@@ -115,20 +115,16 @@ const ConnStatusBar = (function () {
 
     // 快捷操作按钮：根据状态显示不同文本和样式
     if (_action) {
-      _action.classList.remove('csb-action-connect', 'csb-action-upgrade', 'csb-action-connected');
+      _action.classList.remove('csb-action-connect', 'csb-action-connected');
       if (level === 'none') {
         _action.textContent = '🔌 连接';
         _action.classList.add('csb-action-connect');
         _action.style.display = '';
       } else if (level === 'pod') {
-        const rt = _getRuntimeInfo();
-        if (rt && rt.type === 'java') {
-          _action.textContent = '⚡ 启动 Arthas';
-          _action.classList.add('csb-action-upgrade');
-          _action.style.display = '';
-        } else {
-          _action.style.display = 'none';
-        }
+        // Pod 连接状态：显示查看详情按钮（升级操作在连接中心处理）
+        _action.textContent = '📋 查看详情';
+        _action.classList.add('csb-action-detail');
+        _action.style.display = '';
       } else if (level === 'arthas') {
         _action.textContent = '🔌 断开';
         _action.classList.add('csb-action-disconnect');
@@ -153,9 +149,9 @@ const ConnStatusBar = (function () {
     if (level === 'none') {
       if (typeof podConnect === 'function') podConnect();
     } else if (level === 'pod') {
-      const rt = _getRuntimeInfo();
-      if (rt && rt.type === 'java') {
-        if (typeof upgradeToArthas === 'function') upgradeToArthas();
+      // 查看详情（打开连接详情面板）
+      if (typeof openConnectionDetail === 'function') {
+        openConnectionDetail();
       }
     } else if (level === 'arthas') {
       if (typeof arthasDC === 'function') arthasDC();

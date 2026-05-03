@@ -14,6 +14,7 @@ const ConnectionGuard = (function () {
   const REQUIREMENTS = {
     'profiler':    'arthas',   // 🔥 采样工具
     'console':     'arthas',   // ⚡ Arthas 命令
+    'hotfix':      'arthas',   // 🔧 热修复 (jad/mc/redefine)
     'diag.jvm':    'arthas',   // 🔬 JVM 深度诊断 (dashboard/threads/trace)
     'monitor':     'pod',      // 📊 Pod 监控
     'filebrowser': 'pod',      // 📂 文件下载

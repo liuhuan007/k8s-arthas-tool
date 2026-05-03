@@ -49,6 +49,8 @@ document.addEventListener('DOMContentLoaded', function() {
 <script src="js/components/clusters.js"></script>
 <script src="js/ai-chat.js"></script>
 <script src="js/components/diagnose.js?v=20260411"></script>
+<script src="js/components/hotfix.js?v=20260503"></script>
+<script src="js/components/multi-conn-selector.js?v=20260503"></script>
 <script>console.log('🔍 script-check: API=' + typeof API + ', safePost=' + typeof safePost + ', diagQuickTool=' + typeof window.diagQuickTool + ', diagSelectScene=' + typeof window.diagSelectScene + ', diagStart=' + typeof window.diagStart);</script>
 
 <!-- 应用入口 -->
@@ -107,7 +109,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <div class="side-nav-items">
         <button class="side-nav-item" data-nav-tab="profiler" onclick="switchTab('profiler')"><span>🔥</span><span>采样工具</span></button>
         <button class="side-nav-item" data-nav-tab="console" onclick="switchTab('console')"><span>⚡</span><span>Arthas命令</span></button>
-        <button class="side-nav-item" data-nav-tab="hotswap" onclick="switchTab('hotswap')"><span>🔄</span><span>热替换工作台</span></button>
+        <button class="side-nav-item" data-nav-tab="hotfix" onclick="switchTab('hotfix')"><span>🔧</span><span>热修复</span></button>
         <button class="side-nav-item" data-nav-tab="terminal" onclick="switchTab('terminal')"><span>🖥️</span><span>终端</span></button>
         <button class="side-nav-item" data-nav-tab="monitor" onclick="switchTab('monitor')"><span>📊</span><span>Pod 监控</span></button>
         <button class="side-nav-item" data-nav-tab="filebrowser" onclick="switchTab('filebrowser')"><span>📂</span><span>文件下载</span></button>
@@ -163,7 +165,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="tb-tab on" id="tab-connections" onclick="switchTab('connections')">🔌 连接中心</div>
     <div class="tb-tab" id="tab-profiler" onclick="switchTab('profiler')">🔥 采样工具</div>
     <div class="tb-tab"    id="tab-console"  onclick="switchTab('console')">⚡ Arthas命令</div>
-    <div class="tb-tab"    id="tab-hotswap"  onclick="switchTab('hotswap')">🔄 热替换</div>
+    <div class="tb-tab"    id="tab-hotfix"  onclick="switchTab('hotfix')">🔧 热修复</div>
     <div class="tb-tab"    id="tab-terminal" onclick="switchTab('terminal')">🖥️ 终端</div>
     <div class="tb-tab-sep"></div>
     <div class="tb-tab"    id="tab-monitor"  onclick="switchTab('monitor')">📊 Pod 监控</div>
@@ -265,6 +267,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 <button class="pt-btn ghost" onclick="checkPod()">🔍 检查 Pod / JVM</button>
               </div>
               <div class="conn-step-note">Pod 连接成功后，Pod 监控、终端、文件下载会立即可用；不会自动启动 Arthas。</div>
+              <div id="podConnStatus" style="display:none;margin-top:8px"></div>
 
               <div class="conn-step conn-step-gap">
                 <div class="conn-step-no">4</div>
@@ -274,9 +277,11 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
               </div>
               <div class="conn-step-action">
-                <button class="pt-btn success" onclick="upgradeToArthas()">⚡ 启动 Arthas</button>
+                <button class="pt-btn success" id="ptUpgradeBtn" onclick="upgradeToArthas()">⚡ 启动 Arthas</button>
               </div>
               <div class="conn-step-note arthas">非 Java Pod 可保持 Pod 连接；Java Pod 需要深度诊断时再升级。</div>
+              <div id="arthasUpgradeStatus" style="display:none;margin-top:8px"></div>
+              
               <div class="pt-stat" id="ptStat"></div>
               <div id="runtimeInfo" style="display:none;margin-top:8px"></div>
               <div id="connStatus" style="display:none"></div>
@@ -300,7 +305,7 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
 
     <!-- Connection Detail Panel -->
-    <div class="panel" id="panel-connection-detail" style="display:none">
+    <div class="panel" id="panel-connection-detail">
       <div class="conn-detail-hero">
         <div>
           <div class="conn-detail-kicker">Connection Detail</div>
@@ -895,6 +900,89 @@ document.addEventListener('DOMContentLoaded', function() {
               <div class="cin-ta"><textarea id="cmdTa" rows="1" placeholder="输入 Arthas 命令...  Enter=执行  Shift+Enter=换行  ↑↓=历史" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea></div>
               <button class="cin-run" id="runBtn" onclick="runCmd()" disabled>执行 ▶</button>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 热修复工作台 P1b-1 -->
+    <div class="panel" id="panel-hotfix">
+      <div class="hotfix-container" style="padding:20px">
+        <div style="margin-bottom:20px">
+          <h2 style="margin:0 0 8px 0">🔧 热修复工作台</h2>
+          <p style="color:var(--tx3);margin:0;font-size:13px">jad → 在线编辑/上传 → mc 编译 → redefine 热更新 → 验证报告</p>
+        </div>
+
+        <!-- 步骤 1: 查看源码 -->
+        <div class="hotfix-step" style="background:var(--bg2);padding:16px;border-radius:8px;margin-bottom:16px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+            <h3 style="margin:0;font-size:15px">📖 步骤 1: 查看源码</h3>
+            <button class="ib" onclick="hotfixShowLimitations()">⚠️ redefine 限制</button>
+          </div>
+          <div style="display:flex;gap:10px;margin-bottom:12px">
+            <input id="hfClassName" placeholder="类名: com.example.Service" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--tx)" />
+            <button class="ib primary" onclick="hotfixJad()" id="btnJad">🔍 查看源码</button>
+          </div>
+          <div id="hfSourceView" style="display:none">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <span style="font-size:13px;color:var(--tx3)">源码预览</span>
+              <!-- 在线编辑按钮已移至步骤 2 -->
+            </div>
+            <pre id="hfSourceCode" style="background:var(--bg);padding:12px;border-radius:4px;overflow-x:auto;max-height:400px;font-size:12px;line-height:1.5"></pre>
+          </div>
+        </div>
+
+        <!-- 步骤 2: 编辑/上传 -->
+        <div class="hotfix-step" style="background:var(--bg2);padding:16px;border-radius:8px;margin-bottom:16px">
+          <h3 style="margin:0 0 12px 0;font-size:15px">📝 步骤 2: 编辑或上传</h3>
+          <div style="display:flex;gap:10px;margin-bottom:12px">
+            <button class="ib" id="btnEditJava" onclick="hotfixEditJava()" disabled>.java 在线编辑</button>
+            <button class="ib primary" id="btnSaveEdit" onclick="hotfixSaveEdit()" style="display:none">💾 保存修改</button>
+            <button class="ib" onclick="document.getElementById('hfFileUpload').click()">📤 本地上传</button>
+            <input type="file" id="hfFileUpload" accept=".java,.class" style="display:none" onchange="hotfixUploadFile(this)" />
+          </div>
+          <div id="hfEditStatus" style="margin-bottom:8px;font-size:12px;color:var(--tx3);display:none"></div>
+          <textarea id="hfEditor" style="width:100%;min-height:300px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--tx);padding:12px;font-family:monospace;font-size:12px;display:none" placeholder="在此编辑 Java 源码..."></textarea>
+          <div id="hfUploadStatus" style="margin-top:10px;font-size:13px;color:var(--tx3)"></div>
+        </div>
+
+        <!-- 步骤 3: 编译 -->
+        <div class="hotfix-step" style="background:var(--bg2);padding:16px;border-radius:8px;margin-bottom:16px">
+          <h3 style="margin:0 0 12px 0;font-size:15px">🔨 步骤 3: 编译 (可选)</h3>
+          <div style="display:flex;gap:10px">
+            <button class="ib primary" onclick="hotfixCompile()" id="btnCompile" disabled>🔨 执行 mc 编译</button>
+            <button class="ib" onclick="hotfixSkipCompile()">⏭️ 跳过(已上传 .class)</button>
+          </div>
+          <pre id="hfCompileOutput" style="display:none;margin-top:12px;background:var(--bg);padding:12px;border-radius:4px;overflow-x:auto;max-height:200px;font-size:12px"></pre>
+        </div>
+
+        <!-- 步骤 4: Redefine -->
+        <div class="hotfix-step" style="background:var(--bg2);padding:16px;border-radius:8px;margin-bottom:16px">
+          <h3 style="margin:0 0 12px 0;font-size:15px">⚡ 步骤 4: 执行 redefine</h3>
+          <div style="background:#2d1f1f;border:1px solid #c53030;border-radius:4px;padding:12px;margin-bottom:12px">
+            <div style="color:#fc8181;font-size:13px;margin-bottom:8px">⚠️ 高风险操作</div>
+            <ul style="color:#fed7d7;font-size:12px;margin:0;padding-left:20px">
+              <li>redefine 不会重启 Pod,只影响当前 JVM 内存中的 class</li>
+              <li>Pod 重启后将回到镜像中的原始代码</li>
+              <li>不支持修改方法签名、字段、父类/接口、注解</li>
+            </ul>
+          </div>
+          <div style="display:flex;gap:10px;align-items:center">
+            <input id="hfConfirmText" placeholder="输入 CONFIRM 确认执行" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--tx)" />
+            <button class="ib danger" onclick="hotfixRedefine()" id="btnRedefine" disabled>⚡ 执行 redefine</button>
+          </div>
+          <pre id="hfRedefineOutput" style="display:none;margin-top:12px;background:var(--bg);padding:12px;border-radius:4px;overflow-x:auto;max-height:200px;font-size:12px"></pre>
+        </div>
+
+        <!-- 步骤 5: 验证 -->
+        <div class="hotfix-step" style="background:var(--bg2);padding:16px;border-radius:8px">
+          <h3 style="margin:0 0 12px 0;font-size:15px">✅ 步骤 5: 验证与回滚</h3>
+          <div style="display:flex;gap:10px;margin-bottom:12px">
+            <button class="ib" onclick="hotfixVerify()" id="btnVerify" disabled>🔍 生成验证报告</button>
+            <button class="ib" onclick="hotfixShowRollbackGuide()">🔄 回滚指引</button>
+          </div>
+          <div id="hfVerificationReport" style="display:none;background:var(--bg);padding:16px;border-radius:4px;max-height:500px;overflow-y:auto">
+            <pre id="hfReportContent" style="font-size:12px;line-height:1.6"></pre>
           </div>
         </div>
       </div>

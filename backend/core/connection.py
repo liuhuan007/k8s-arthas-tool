@@ -10,9 +10,76 @@ import socket
 import subprocess
 import threading
 import time
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable
+
+from .connection_state import ConnectionState
 
 log = logging.getLogger(__name__)
+
+
+# ── Structured error helpers ───────────────────────────────────────────────
+
+def _rbac_error(msg: str) -> dict:
+    return {
+        "error_code": "KUBECTL_RBAC_DENIED",
+        "message": msg,
+        "suggestion": "请确认当前账号具有该 Pod 的 exec 权限，或联系集群管理员配置 RBAC 规则（verbs: ['create'], resources: ['pods/exec']）。",
+        "details": msg,
+    }
+
+
+def _java_pid_error(msg: str) -> dict:
+    return {
+        "error_code": "JAVA_PID_NOT_FOUND",
+        "message": msg,
+        "suggestion": "请确认 Pod 内已启动 Java 进程，或使用 /api/check 接口查看可用进程列表。",
+        "details": msg,
+    }
+
+
+def _jar_missing_error(msg: str, jar_path: str = "") -> dict:
+    return {
+        "error_code": "ARTHAS_JAR_MISSING",
+        "message": msg,
+        "suggestion": "请在左侧配置正确路径，或在 Pod 内安装 Arthas: curl -Lo /app/arthas/arthas-boot.jar https://arthas.aliyun.com/arthas-boot.jar",
+        "details": f"JAR path: {jar_path}" if jar_path else msg,
+    }
+
+
+def _agent_start_error(msg: str) -> dict:
+    return {
+        "error_code": "ARTHAS_START_FAILED",
+        "message": msg,
+        "suggestion": "请检查启动日志 /tmp/arthas_start.log，确认 JVM 参数兼容性或尝试手动启动。",
+        "details": msg,
+    }
+
+
+def _port_forward_error(msg: str) -> dict:
+    return {
+        "error_code": "ARTHAS_PORT_FORWARD_FAILED",
+        "message": msg,
+        "suggestion": "请检查本地 kubectl 权限和网络连通性，或尝试更换本地端口范围。",
+        "details": msg,
+    }
+
+
+def _http_timeout_error(msg: str) -> dict:
+    return {
+        "error_code": "ARTHAS_HTTP_TIMEOUT",
+        "message": msg,
+        "suggestion": "Arthas 启动后 HTTP 服务未就绪，请检查 Pod 内 /tmp/arthas_start.log 或增大超时时间重试。",
+        "details": msg,
+    }
+
+
+def _generic_error(msg: str) -> dict:
+    return {
+        "error_code": "UNKNOWN_ERROR",
+        "message": msg,
+        "suggestion": "请检查网络连接和集群状态后重试。",
+        "details": msg,
+    }
 
 # 端口分配起始值
 PF_BASE_PORT = 32000
@@ -61,6 +128,7 @@ class ArthasConnection:
         # 连接状态标记
         self._pod_connected = False  # Pod 连接是否成功
         self._arthas_ready = False   # Arthas 是否就绪
+        self._on_state_change: Optional[Callable[[ConnectionState, str], None]] = None
 
     # ── Port allocation ────────────────────────────────────────────────────────
 
@@ -126,6 +194,16 @@ class ArthasConnection:
         self.local_port = 0
         return False, f"port-forward 超时，本地端口 {failed_port} 无法连接"
 
+    # ── State change callback ────────────────────────────────────────────────
+
+    def _notify_state_change(self, state: ConnectionState, message: str):
+        """Notify state change callback if registered."""
+        if self._on_state_change is not None:
+            try:
+                self._on_state_change(state, message)
+            except Exception as e:
+                log.debug("state change callback error: %s", e)
+
     # ── Public API ─────────────────────────────────────────────────────────────
     
     def connect_pod(self, timeout: int = 10) -> Tuple[bool, str]:
@@ -133,53 +211,74 @@ class ArthasConnection:
         第一步：仅建立 Pod 连接（不启动 Arthas）
         
         返回:
-            (success, message)
+            (success, message)  — 失败时 message 为结构化 dict
         """
         ok, msg = self.pod_conn.connect(timeout)
         if ok:
             self._pod_connected = True
-        return ok, msg
+            return True, msg
+        # Map Pod connection failures to structured errors
+        lowered = msg.lower() if msg else ""
+        if any(k in lowered for k in ("forbidden", "rbac", "permission denied", "unauthorized", "access denied")):
+            return False, _rbac_error(msg)
+        return False, _generic_error(msg)
     
     def connect_arthas(self, timeout: int = 30) -> Tuple[bool, str]:
         """
         第二步：启动 Arthas 诊断环境
-        
+
         前提：Pod 连接已成功建立
-        
+
         返回:
-            (success, message)
+            (success, message)  — 失败时 message 为结构化 dict
         """
         if not self._pod_connected:
-            return False, "Pod 连接未建立，请先调用 connect_pod()"
-        
+            return False, _generic_error("Pod 连接未建立，请先调用 connect_pod()")
+
         # 短路：Arthas 已经就绪
         if self._arthas_ready and self.client and self.client.ping(retries=1, delay=0):
+            self._notify_state_change(ConnectionState.HTTP_REUSABLE, "Existing HTTP connection reusable")
             log.info("Arthas already ready (port=%d) — reusing", self.local_port)
             if not self.arthas_version and hasattr(self.client, '_last_version') and self.client._last_version:
                 self.arthas_version = self.client._last_version
             if not self.arthas_version:
                 self._fetch_version()
+            self._notify_state_change(ConnectionState.READY, f"Arthas ready (port {self.local_port})")
             return True, f"Arthas 已就绪，复用 (port {self.local_port})"
-        
+
         # 若 client 已失效但 port-forward 还在，先停掉
         if self._pf_proc:
             self._stop_port_forward()
             self.client = None
-        
+
         # Step 1: 确保 agent 在 Pod 内运行
+        self._notify_state_change(ConnectionState.START_AGENT, "Starting Arthas agent in Pod")
         ok, agent_msg = self.agent_mgr.ensure_agent_running()
         if not ok:
-            return False, agent_msg
+            if "JAR" in agent_msg or "jar" in agent_msg:
+                self._notify_state_change(ConnectionState.NEED_JAR, agent_msg)
+                err = _jar_missing_error(agent_msg, getattr(self.target, 'arthas_jar', ''))
+            elif "未找到 Java" in agent_msg or "Java PID" in agent_msg or "java" in agent_msg.lower() and "未找到" in agent_msg:
+                err = _java_pid_error(agent_msg)
+            elif "超时" in agent_msg:
+                err = _agent_start_error(agent_msg)
+            else:
+                err = _generic_error(agent_msg)
+            self._notify_state_change(ConnectionState.FAILED, f"Agent start failed: {agent_msg}")
+            return False, err
         self.java_pid = self.agent_mgr._pid
         log.info("Agent ready: %s", agent_msg)
-        
+
         # Step 2: 建立 port-forward
+        self._notify_state_change(ConnectionState.PORT_FORWARD, "Setting up kubectl port-forward")
         ok, pf_msg = self._start_port_forward()
         if not ok:
-            return False, pf_msg
+            self._notify_state_change(ConnectionState.FAILED, f"Port-forward failed: {pf_msg}")
+            return False, _port_forward_error(pf_msg)
         log.info("Port-forward: %s", pf_msg)
-        
+
         # Step 3: 等待 HTTP API 就绪
+        self._notify_state_change(ConnectionState.PING_HTTP, "Pinging Arthas HTTP API")
         from .arthas_client import ArthasHttpClient
         client = ArthasHttpClient(self.local_port)
         if client.ping(retries=8, delay=2.0):
@@ -187,32 +286,48 @@ class ArthasConnection:
             self.http_client = client  # 兼容
             self.arthas_address = f"http://127.0.0.1:{self.local_port}"
             # Step 4: 获取 Arthas 版本信息（优先用 ping 缓存）
-            if hasattr(client, '_last_version') and client._last_version:
+            if hasattr(client, '_last_version') and self.client._last_version:
                 self.arthas_version = client._last_version
                 log.info("Arthas version (from ping cache): %s", self.arthas_version)
             else:
                 self._fetch_version()
             version_suffix = f"  Arthas {self.arthas_version}" if self.arthas_version else ""
-            
+
             self._arthas_ready = True
+            self._notify_state_change(ConnectionState.READY, f"Arthas ready (port {self.local_port})")
             return True, f"Arthas 诊断环境就绪{version_suffix} (port {self.local_port}, pid {self.java_pid})"
         else:
-            return False, "Arthas HTTP API 未响应"
+            self._notify_state_change(ConnectionState.RETRY_PING, "HTTP ping failed, will retry")
+            self._notify_state_change(ConnectionState.FAILED, "Arthas HTTP API 未响应")
+            return False, _http_timeout_error("Arthas HTTP API 未响应")
     
-    def connect(self, timeout: int = 30) -> Tuple[bool, str]:
+    def connect(
+        self,
+        timeout: int = 30,
+        on_state_change: Optional[Callable[[ConnectionState, str], None]] = None,
+    ) -> Tuple[bool, str]:
         """
         建立完整的 Arthas 连接（向后兼容）
-        
+
         内部调用：connect_pod() + connect_arthas()
-        
+
+        Args:
+            timeout: 总超时时间（秒）
+            on_state_change: 可选的状态变更回调
+
         返回:
-            (success, message)
+            (success, message)  — 失败时 message 为结构化 dict
         """
+        self._on_state_change = on_state_change
+
         # 第一步：Pod 连接
+        self._notify_state_change(ConnectionState.POD_SELECTED, "Pod selected, beginning connection")
         ok, msg = self.connect_pod(timeout=10)
         if not ok:
+            self._notify_state_change(ConnectionState.FAILED, f"Pod connection failed: {msg}")
             return False, msg
-        
+        self._notify_state_change(ConnectionState.POD_CHECKED, "Pod connectivity verified")
+
         # 第二步：Arthas 连接
         return self.connect_arthas(timeout=timeout - 10)
 
