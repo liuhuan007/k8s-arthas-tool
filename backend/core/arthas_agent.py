@@ -219,23 +219,29 @@ class ArthasAgentManager:
             f" > /tmp/arthas_start.log 2>&1 </dev/null &"
             f" echo started_pid=$!"
         )
-        rc_s, out_s, _ = self._exec(start_cmd, timeout=15)
-        log.info("Arthas start: rc=%d pid=%d jar=%s out=%s cleanup=%s",
-                 rc_s, pid, self.t.arthas_jar, out_s.strip(), cleanup_msg)
+        log.info("[Arthas Start] 执行启动命令: %s", start_cmd)
+        rc_s, out_s, err_s = self._exec(start_cmd, timeout=15)
+        log.info("[Arthas Start] 执行结果: rc=%d, pid=%d, jar=%s, out=%s, err=%s, cleanup=%s",
+                 rc_s, pid, self.t.arthas_jar, out_s.strip(), err_s.strip(), cleanup_msg)
 
         # 轮询等待 HTTP 就绪（max 40s）
+        log.info("[Arthas Start] 开始轮询 HTTP 就绪...")
         for i in range(40):
             time.sleep(1)
             if self._http_reachable():
+                log.info("[Arthas Start] HTTP 就绪,耗时 %ds", i+1)
                 # ✅ 关键修复: 保存 java_pid
                 self._pid = pid
                 msg = f"Arthas 启动成功 (target PID={pid}, 耗时 {i+1}s)"
                 if cleanup_msg:
                     msg += f"  [{cleanup_msg}]"
                 return True, msg
+            if (i + 1) % 10 == 0:
+                log.info("[Arthas Start] 等待中... %ds/40s", i+1)
 
         _, log_tail, _ = self._exec(
             "tail -25 /tmp/arthas_start.log 2>/dev/null", timeout=5)
+        log.error("[Arthas Start] 启动超时,日志:\n%s", log_tail[:600])
         return False, (
             f"Arthas 启动超时（40s）\n"
             f"JAR: {self.t.arthas_jar}  target PID: {pid}\n"

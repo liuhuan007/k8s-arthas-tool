@@ -684,7 +684,13 @@ def arthas_exec():
         return jsonify({"state": "FAILED", "message": err}), 404
 
     try:
-        result = conn.http_client.exec_once(command)
+        from backend.core.arthas_executor import ArthasCommandExecutor
+        result = ArthasCommandExecutor.execute(
+            conn,
+            command,
+            skip_audit=False,
+            skip_history=False,
+        )
         
         # 保存命令历史
         _save_arthas_command(conn_id, command, json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else str(result), '')

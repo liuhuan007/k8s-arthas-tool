@@ -27,6 +27,7 @@ from flask_login import login_required, current_user
 
 from models.db import db
 from backend import ArthasConnection, PodTarget
+from backend.core.arthas_executor import ArthasCommandExecutor
 
 log = logging.getLogger(__name__)
 
@@ -538,7 +539,7 @@ def _exec_trace_method(conn, args: dict) -> dict:
 
     skip_flag = '--skipJDKMethod true' if skip_jdk else ''
     cmd = f"trace {class_pattern} {method_pattern} -n {sample_count} '{skip_flag} #cost > .1'"
-    result = conn.http_client.exec_once(cmd, timeout_ms=30000)
+    result = ArthasCommandExecutor.execute(conn, cmd, timeout_ms=30000)
 
     body = result.get('body', [])
     trace_lines = []
@@ -561,7 +562,7 @@ def _exec_trace_method(conn, args: dict) -> dict:
 def _exec_dashboard(conn) -> dict:
     """执行 dashboard 命令"""
     import re
-    result = conn.http_client.exec_once("dashboard -n 1", timeout_ms=15000)
+    result = ArthasCommandExecutor.execute(conn, "dashboard -n 1", timeout_ms=15000)
     body = result.get('body', [])
     raw = '\n'.join(str(l) for l in (body if isinstance(body, list) else [body]))
 
@@ -583,7 +584,7 @@ def _exec_dashboard(conn) -> dict:
 
 def _exec_thread_analysis(conn, top_n: int, check_deadlock: bool) -> dict:
     """执行线程分析"""
-    thread_resp = conn.http_client.exec_once(f"thread -n {top_n}", timeout_ms=20000)
+    thread_resp = ArthasCommandExecutor.execute(conn, f"thread -n {top_n}", timeout_ms=20000)
     threads = []
     body = thread_resp.get('body', {})
     if isinstance(body, dict):
@@ -601,7 +602,7 @@ def _exec_thread_analysis(conn, top_n: int, check_deadlock: bool) -> dict:
     deadlock_info = None
     if check_deadlock:
         try:
-            dl_resp = conn.http_client.exec_once("thread -b", timeout_ms=15000)
+            dl_resp = ArthasCommandExecutor.execute(conn, "thread -b", timeout_ms=15000)
             dl_body = dl_resp.get('body', {}) if isinstance(dl_resp, dict) else {}
             bt = dl_body.get('blockingThread')
             if bt and isinstance(bt, dict) and bt.get('threadName'):

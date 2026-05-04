@@ -354,13 +354,13 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                 is_reinstall = (msg == "REINSTALL_NEEDED") or (isinstance(msg, dict) and msg.get('message') == 'REINSTALL_NEEDED')
                 if is_reinstall:
                     log.warning("[Upgrade Arthas] 检测到旧 Arthas 进程不存在,关闭端口转发并重新安装")
-                    log.info("[Upgrade Arthas] 关闭前: local_port=%s, pf_proc=%s", arthas_conn.local_port, arthas_conn._pf_proc)
                     arthas_conn._stop_port_forward()
-                    log.info("[Upgrade Arthas] 关闭后: pf_proc=%s", arthas_conn._pf_proc)
                     
-                    # 重置 Arthas 状态,确保重新执行启动流程
+                    # ✅ 关键修复: 完全重置 Arthas 状态,模拟新连接
                     arthas_conn._arthas_ready = False
                     arthas_conn.client = None
+                    arthas_conn._pf_proc = None  # 确保端口转发被清除
+                    arthas_conn.local_port = 0   # 重置端口
                     
                     # 重新建立端口转发并启动 Arthas
                     log.info("[Upgrade Arthas] 开始重新连接...")

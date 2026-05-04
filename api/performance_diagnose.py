@@ -151,7 +151,8 @@ def _run_diagnosis(conn, target: str, class_pattern: str, method_pattern: str) -
     # ── Step 1: Dashboard 基线 ──────────────────────────────────────
     _step("dashboard")
     try:
-        dash_resp = client.exec_once("dashboard -n 1", timeout_ms=15000)
+        from backend.core.arthas_executor import ArthasCommandExecutor
+        dash_resp = ArthasCommandExecutor.execute(conn, "dashboard -n 1", timeout_ms=15000)
         # 从 Arthas 响应中提取核心指标，避免存储完整响应导致 JSON 过大被截断
         dash_body = dash_resp.get('body', dash_resp) if isinstance(dash_resp, dict) else {}
         dash_results = dash_body.get('results', []) if isinstance(dash_body, dict) else []
@@ -175,7 +176,8 @@ def _run_diagnosis(conn, target: str, class_pattern: str, method_pattern: str) -
     # ── Step 2: Thread 快照 ───────────────────────────────────────
     _step("thread")
     try:
-        thread_resp = client.exec_once("thread -n 15", timeout_ms=20000)
+        from backend.core.arthas_executor import ArthasCommandExecutor
+        thread_resp = ArthasCommandExecutor.execute(conn, "thread -n 15", timeout_ms=20000)
         # 从 Arthas 响应中提取线程列表，避免存储完整响应被截断
         thread_body = thread_resp.get('body', thread_resp) if isinstance(thread_resp, dict) else {}
         thread_results = thread_body.get('results', []) if isinstance(thread_body, dict) else []
@@ -197,9 +199,10 @@ def _run_diagnosis(conn, target: str, class_pattern: str, method_pattern: str) -
     if target in ("method_slow", "general") and class_pattern:
         _step("trace")
         try:
+            from backend.core.arthas_executor import ArthasCommandExecutor
             skip = "--skipJDKMethod true"
             trace_cmd = f"trace {class_pattern} {method_pattern or '*'} -n 10 '{skip} #cost > .5'"
-            trace_resp = client.exec_once(trace_cmd, timeout_ms=30000)
+            trace_resp = ArthasCommandExecutor.execute(conn, trace_cmd, timeout_ms=30000)
             trace_raw = json.dumps(trace_resp, ensure_ascii=False)
             result["metrics"]["trace"] = trace_raw[:2000]
         except Exception:
@@ -291,17 +294,19 @@ def diagnose_tool():
         return jsonify({"error": "Arthas 连接不可用，请先在左侧连接目标 Pod"}), 400
 
     try:
+        from backend.core.arthas_executor import ArthasCommandExecutor
         if tool == 'dashboard':
-            resp = conn.http_client.exec_once("dashboard -n 1", timeout_ms=15000)
+            resp = ArthasCommandExecutor.execute(conn, "dashboard -n 1", timeout_ms=15000)
             return jsonify({"ok": True, "data": resp})
         elif tool == 'threads':
             top_n = args.get('top_n', 15)
-            resp = conn.http_client.exec_once(f"thread -n {top_n}", timeout_ms=20000)
+            from backend.core.arthas_executor import ArthasCommandExecutor
+            resp = ArthasCommandExecutor.execute(conn, f"thread -n {top_n}", timeout_ms=20000)
             # 死锁检测
             deadlock = None
             if args.get('check_deadlock', True):
                 try:
-                    dl = conn.http_client.exec_once("thread -b", timeout_ms=15000)
+                    dl = ArthasCommandExecutor.execute(conn, "thread -b", timeout_ms=15000)
                     # thread -b 返回 {body: {blockingThread: null}} 或 {body: {blockingThread: {...}}}
                     # 需要检查 blockingThread 的值是否非空，不能只看字段名
                     dl_body = dl.get('body', {}) if isinstance(dl, dict) else {}
@@ -319,7 +324,8 @@ def diagnose_tool():
             skip = '--skipJDKMethod true' if args.get('skip_jdk', True) else ''
             sample_count = args.get('sample_count', 5)
             cmd = f"trace {cp} {mp} -n {sample_count} '{skip} #cost > .5' '#cost > .1'"
-            resp = conn.http_client.exec_once(cmd, timeout_ms=30000)
+            from backend.core.arthas_executor import ArthasCommandExecutor
+            resp = ArthasCommandExecutor.execute(conn, cmd, timeout_ms=30000)
             return jsonify({"ok": True, "data": resp})
         elif tool == 'watch':
             cp = args.get('class_pattern', '')
@@ -331,14 +337,16 @@ def diagnose_tool():
             cmd = f"watch {cp} {mp} -n {n}"
             if condition:
                 cmd += f" '{condition}'"
-            resp = conn.http_client.exec_once(cmd, timeout_ms=30000)
+            from backend.core.arthas_executor import ArthasCommandExecutor
+            resp = ArthasCommandExecutor.execute(conn, cmd, timeout_ms=30000)
             return jsonify({"ok": True, "data": resp})
         elif tool == 'jad':
             class_name = args.get('class_name', '')
             if not class_name:
                 return jsonify({"error": "class_name 不能为空"}), 400
             cmd = f"jad --source-only {class_name}"
-            resp = conn.http_client.exec_once(cmd, timeout_ms=30000)
+            from backend.core.arthas_executor import ArthasCommandExecutor
+            resp = ArthasCommandExecutor.execute(conn, cmd, timeout_ms=30000)
             return jsonify({"ok": True, "data": resp})
         else:
             return jsonify({"error": f"未知工具: {tool}"}), 400

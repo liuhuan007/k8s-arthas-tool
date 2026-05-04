@@ -554,7 +554,8 @@ def _exec_arthas(command: str, connection_id: str) -> str:
         return json.dumps({"error": "Arthas 连接不可用，请在界面重新连接"})
 
     try:
-        result = conn.http_client.exec_once(command, timeout_ms=60000)
+        from backend.core.arthas_executor import ArthasCommandExecutor
+        result = ArthasCommandExecutor.execute(conn, command, timeout_ms=60000)
 
         # 审计
         from services.audit_service import AuditService
@@ -655,7 +656,8 @@ def _arthas_trace_method(args: dict, connection_id: str) -> str:
     cmd = f"trace {class_pattern} {method_pattern} -n {sample_count} --hack true '{skip_flag} #cost > .1' '#cost > .1'"
 
     try:
-        result = conn.http_client.exec_once(cmd, timeout_ms=30000)
+        from backend.core.arthas_executor import ArthasCommandExecutor
+        result = ArthasCommandExecutor.execute(conn, cmd, timeout_ms=30000)
         state = result.get('state', '')
         body = result.get('body', [])
 
@@ -695,7 +697,8 @@ def _arthas_get_dashboard(connection_id: str) -> str:
 
     try:
         # dashboard -n 1 只输出一次快照
-        result = conn.http_client.exec_once("dashboard -n 1", timeout_ms=15000)
+        from backend.core.arthas_executor import ArthasCommandExecutor
+        result = ArthasCommandExecutor.execute(conn, "dashboard -n 1", timeout_ms=15000)
         state = result.get('state', '')
         body = result.get('body', [])
 
@@ -742,7 +745,8 @@ def _arthas_analyze_threads(top_n: int, check_deadlock: bool, connection_id: str
 
     try:
         # 1. 获取耗时最高的 N 个线程
-        thread_resp = conn.http_client.exec_once(f"thread -n {top_n}", timeout_ms=30000)
+        from backend.core.arthas_executor import ArthasCommandExecutor
+        thread_resp = ArthasCommandExecutor.execute(conn, f"thread -n {top_n}", timeout_ms=30000)
         thread_state = thread_resp.get('state', '')
 
         threads = []
@@ -765,7 +769,8 @@ def _arthas_analyze_threads(top_n: int, check_deadlock: bool, connection_id: str
         deadlock_info = None
         if check_deadlock:
             try:
-                dl_resp = conn.http_client.exec_once("thread -b", timeout_ms=15000)
+                from backend.core.arthas_executor import ArthasCommandExecutor
+                dl_resp = ArthasCommandExecutor.execute(conn, "thread -b", timeout_ms=15000)
                 dl_body = dl_resp.get('body', {}) if isinstance(dl_resp, dict) else {}
                 bt = dl_body.get('blockingThread')
                 if bt and isinstance(bt, dict) and bt.get('threadName'):
@@ -820,7 +825,8 @@ def _arthas_diagnose_performance(target: str, class_pattern: str, method_pattern
     try:
         # 1. Dashboard 基线
         try:
-            dash_resp = conn.http_client.exec_once("dashboard -n 1", timeout_ms=15000)
+            from backend.core.arthas_executor import ArthasCommandExecutor
+            dash_resp = ArthasCommandExecutor.execute(conn, "dashboard -n 1", timeout_ms=15000)
             dash_raw = json.dumps(dash_resp, ensure_ascii=False)
 
             # 规则预筛：Old区内存高
@@ -845,7 +851,8 @@ def _arthas_diagnose_performance(target: str, class_pattern: str, method_pattern
 
         # 2. 线程快照
         try:
-            thread_resp = conn.http_client.exec_once("thread -n 15", timeout_ms=20000)
+            from backend.core.arthas_executor import ArthasCommandExecutor
+            thread_resp = ArthasCommandExecutor.execute(conn, "thread -n 15", timeout_ms=20000)
             threads_raw = json.dumps(thread_resp, ensure_ascii=False)
 
             # 规则预筛：BLOCKED 线程多
@@ -863,7 +870,8 @@ def _arthas_diagnose_performance(target: str, class_pattern: str, method_pattern
             try:
                 skip_flag = '--skipJDKMethod true'
                 trace_cmd = f"trace {class_pattern} {method_pattern or '*'} -n 10 --hack true '{skip_flag} #cost > .5' '#cost > .1'"
-                trace_resp = conn.http_client.exec_once(trace_cmd, timeout_ms=30000)
+                from backend.core.arthas_executor import ArthasCommandExecutor
+                trace_resp = ArthasCommandExecutor.execute(conn, trace_cmd, timeout_ms=30000)
                 trace_raw = json.dumps(trace_resp, ensure_ascii=False)
 
                 # 规则预筛：方法耗时 > 500ms
@@ -882,7 +890,8 @@ def _arthas_diagnose_performance(target: str, class_pattern: str, method_pattern
         # 4. OOM 场景
         if target == 'oom':
             try:
-                heap_resp = conn.http_client.exec_once("heapdump --live /tmp/diag.hprof", timeout_ms=60000)
+                from backend.core.arthas_executor import ArthasCommandExecutor
+                heap_resp = ArthasCommandExecutor.execute(conn, "heapdump --live /tmp/diag.hprof", timeout_ms=60000, confirmed=True)
                 diagnosis['metrics']['heapdump_triggered'] = True
                 diagnosis['recommendations'].append("Heap dump 已触发，建议下载后使用 MAT 分析")
             except Exception:
