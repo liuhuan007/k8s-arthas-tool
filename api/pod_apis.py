@@ -23,9 +23,9 @@ log = logging.getLogger(__name__)
 def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
     """注册 Pod 连接相关的 API 端点"""
     
-    # Pod 连接状态缓存
-    _pod_connections: Dict[str, dict] = {}
-    _pod_connections_lock = __import__('threading').Lock()
+    # ✅ 修复: 单一连接池,通过 level 字段区分 Pod/Arthas 连接
+    # 移除 _pod_connections,统一使用 _connections
+    _pod_connections_lock = __import__('threading').Lock()  # 保留用于向后兼容
     
     def _make_pod_conn_id(cluster_name: str, namespace: str, pod_name: str) -> str:
         """生成 Pod 连接 ID"""
@@ -34,16 +34,16 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             conn_id = f"{conn_id}@u{current_user.id}"
         return conn_id
     
-    def _get_pod_conn(conn_id: str):
-        """获取 Pod 连接对象"""
-        entry = _pod_connections.get(conn_id)
-        return entry.get('conn') if entry else None
+    def _get_connection_entry(conn_id: str):
+        """获取连接对象 (从统一连接池)"""
+        with _connections_lock:
+            return _connections.get(conn_id)
     
-    def _check_pod_conn_owner(conn_id: str) -> bool:
-        """检查当前用户是否是 Pod 连接的拥有者"""
+    def _check_conn_owner(conn_id: str) -> bool:
+        """检查当前用户是否是连接的拥有者"""
         if current_user.is_admin:
             return True
-        entry = _pod_connections.get(conn_id)
+        entry = _get_connection_entry(conn_id)
         return entry and entry.get('user_id') == current_user.id
     
     @app.route('/api/pod/connect', methods=['POST'])
@@ -71,45 +71,36 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         
         conn_id = _make_pod_conn_id(cluster_name, namespace, pod_name)
         
-        # 检查是否已有连接
-        with _pod_connections_lock:
-            if conn_id in _pod_connections:
-                entry = _pod_connections[conn_id]
+        # ✅ 修复: 从统一连接池检查是否已有连接
+        with _connections_lock:
+            if conn_id in _connections:
+                entry = _connections[conn_id]
                 conn = entry.get('conn')
-                if conn and conn.is_alive():
-                    # ✅ 修复: 即使 is_alive() 返回 true,也要验证 Pod 是否真的存在
-                    try:
-                        current_phase = conn._get_pod_phase(timeout=5)
-                        if not current_phase or current_phase != "Running":
-                            log.warning("[Pod Connect Reuse] Pod 状态异常: %s, 重建连接", current_phase)
-                            _pod_connections.pop(conn_id, None)
-                        else:
-                            from dataclasses import asdict
-                            
-                            # ✅ 调试: 打印复用的 runtime_info
+                # 检查连接是否存活且是 Pod 级别
+                if conn and hasattr(conn, '_healthy') and conn._healthy:
+                    from dataclasses import asdict
+                    
+                    runtime_data = asdict(conn.runtime_info) if hasattr(conn, 'runtime_info') and conn.runtime_info else None
+                    log.info("[Pod Connect Reuse] conn_id=%s, runtime_info=%s", conn_id, runtime_data)
+                    
+                    # 如果 runtime_info 缺失,重新检测
+                    if not runtime_data or not runtime_data.get('runtime_type'):
+                        log.warning("[Pod Connect Reuse] runtime_info 缺失,重新检测")
+                        if hasattr(conn, '_detect_runtime'):
+                            conn._runtime_info = conn._detect_runtime(timeout=10)
                             runtime_data = asdict(conn.runtime_info) if conn.runtime_info else None
-                            log.info("[Pod Connect Reuse] conn_id=%s, runtime_info=%s", conn_id, runtime_data)
-                            
-                            # ✅ 修复: 如果 runtime_info 为 None 或缺少 runtime_type,重新检测
-                            if not runtime_data or not runtime_data.get('runtime_type'):
-                                log.warning("[Pod Connect Reuse] runtime_info 缺失或不完整 (runtime_data=%s),重新检测", runtime_data)
-                                conn._runtime_info = conn._detect_runtime(timeout=10)
-                                runtime_data = asdict(conn.runtime_info) if conn.runtime_info else None
-                                log.info("[Pod Connect Reuse] 重新检测后 runtime_info=%s", runtime_data)
-                            
-                            return jsonify({
-                                "ok": True,
-                                "connection_id": conn_id,
-                                "message": "Pod 连接已存在，复用",
-                                "pod_phase": conn.pod_phase,
-                                "runtime": runtime_data,
-                                "reused": True
-                            })
-                    except Exception as e:
-                        log.warning("[Pod Connect Reuse] 检查 Pod 状态失败: %s, 重建连接", e)
-                        _pod_connections.pop(conn_id, None)
+                    
+                    return jsonify({
+                        "ok": True,
+                        "connection_id": conn_id,
+                        "message": "Pod 连接已存在，复用",
+                        "pod_phase": getattr(conn, 'pod_phase', 'Running'),
+                        "runtime": runtime_data,
+                        "reused": True
+                    })
                 else:
-                    _pod_connections.pop(conn_id, None)
+                    # 连接失效,移除
+                    _connections.pop(conn_id, None)
         
         # 创建新连接
         target = PodTarget(
@@ -127,10 +118,11 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                     return jsonify({"ok": False, **msg}), 400
                 return jsonify({"ok": False, "error": msg}), 400
             
-            with _pod_connections_lock:
-                _pod_connections[conn_id] = {
+            with _connections_lock:
+                _connections[conn_id] = {
                     "conn": conn,
                     "user_id": current_user.id,
+                    "level": "pod",  # ✅ 标记为 Pod 连接
                     "created_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
                 }
             
@@ -178,10 +170,10 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             return jsonify({"error": str(e)}), 500
     
     def cleanup_pod_connection_by_id(conn_id: str) -> bool:
-        """按连接 ID 清理 Pod 连接，供全局失效连接清理复用。"""
+        """按连接 ID 清理 Pod 连接,供全局失效连接清理复用。"""
         entry = None
-        with _pod_connections_lock:
-            entry = _pod_connections.pop(conn_id, None)
+        with _connections_lock:
+            entry = _connections.pop(conn_id, None)
         if entry:
             conn = entry.get('conn')
             if conn:
@@ -206,14 +198,10 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         if not conn_id:
             return jsonify({"error": "connection_id 必填"}), 400
         
-        # ✅ 检查连接是否存在（优先检查 _pod_connections,如果不存在则检查 _connections）
-        entry = _pod_connections.get(conn_id)
-        if not entry:
-            # 尝试从 _connections 中查找（旧版兼容）
-            with _connections_lock:
-                entry = _connections.get(conn_id)
+        # ✅ 修复: 从统一连接池检查
+        entry = _get_connection_entry(conn_id)
         
-        if entry and not _check_pod_conn_owner(conn_id):
+        if entry and not _check_conn_owner(conn_id):
             return jsonify({"error": "无权操作此连接"}), 403
         
         # ✅ 如果连接不存在,直接返回成功（幂等性）
@@ -221,21 +209,18 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             log.info("[断开] 连接不存在（可能已断开）: %s", conn_id)
             return jsonify({"ok": True, "message": "连接已断开"})
 
-        # 1. 释放 Arthas 层（port-forward + 本地端口）
+        # 释放连接资源 (Pod 或 Arthas)
         with _connections_lock:
-            arthas_entry = _connections.pop(conn_id, None)
-        if arthas_entry:
-            arthas_conn = arthas_entry.get('conn')
-            if arthas_conn and hasattr(arthas_conn, 'disconnect'):
+            removed_entry = _connections.pop(conn_id, None)
+        
+        # 释放连接资源
+        if removed_entry:
+            conn = removed_entry.get('conn')
+            if conn:
                 try:
-                    arthas_conn.disconnect()
+                    conn.disconnect()
                 except Exception:
                     pass
-
-        # 2. 释放 Pod 层
-        cleaned = cleanup_pod_connection_by_id(conn_id)
-        if not cleaned:
-            log.warning("[断开] Pod 连接清理失败: %s", conn_id)
 
         # 3. 更新数据库状态为 disconnected（而非删除）
         now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -255,43 +240,56 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
     @app.route('/api/pod/connections', methods=['GET'])
     @login_required
     def list_pod_connections():
-        """列出当前用户的所有 Pod 连接"""
-        connections = []
+        """列出当前用户的所有连接 (Pod + Arthas)"""
+        # ✅ 修复: 从数据库获取历史连接,不仅返回内存中的活跃连接
+        if current_user.is_admin:
+            rows = db.fetch_all(
+                "SELECT * FROM connections ORDER BY last_ping_at DESC LIMIT 50"
+            )
+        else:
+            rows = db.fetch_all(
+                "SELECT * FROM connections WHERE user_id = ? ORDER BY last_ping_at DESC LIMIT 50",
+                (current_user.id,)
+            )
         
-        with _pod_connections_lock:
-            for conn_id, entry in _pod_connections.items():
-                if not current_user.is_admin and entry.get('user_id') != current_user.id:
-                    continue
-                
-                conn = entry.get('conn')
-                if conn:
-                    runtime_type = conn.runtime_info.runtime_type if conn.runtime_info else None
-                    runtime_version = conn.runtime_info.version if conn.runtime_info else None
-                    
-                    # 检查是否有 Arthas 层
-                    arthas_conn = entry.get('arthas_conn')
-                    has_arthas = arthas_conn and arthas_conn.is_alive()
-                    
-                    connections.append({
-                        "id": conn_id,
-                        "connection_id": conn_id,
-                        "cluster_name": conn.target.cluster_name,
-                        "namespace": conn.target.namespace,
-                        "pod_name": conn.target.pod_name,
-                        "container": conn.target.container,
-                        "pod_phase": conn.pod_phase,
-                        "level": "arthas" if has_arthas else "pod",
-                        "runtime": runtime_type,
-                        "runtime_version": runtime_version,
-                        "alive": conn.is_alive(),
-                        "created_at": entry.get('created_at', ''),
-                        # Arthas 层元数据
-                        "local_port": arthas_conn.local_port if has_arthas else None,
-                        "java_pid": arthas_conn.java_pid if has_arthas else None,
-                        "arthas_version": arthas_conn.arthas_version if has_arthas else None,
-                        "arthas_address": arthas_conn.arthas_address if has_arthas else None,
-                        "mcp_available": entry.get('mcp_available', False) if has_arthas else False,
-                    })
+        connections = []
+        for row in rows:
+            conn_id = row['id']
+            
+            # 检查内存中是否有活跃连接
+            with _connections_lock:
+                entry = _connections.get(conn_id)
+            
+            conn = entry.get('conn') if entry else None
+            
+            connections.append({
+                "id": conn_id,
+                "connection_id": conn_id,
+                "cluster_name": row['cluster_name'],
+                "namespace": row['namespace'],
+                "pod_name": row['pod_name'],
+                "container": row.get('container_name', ''),
+                "pod_phase": 'Running',  # 默认值,健康检查会更新
+                "level": row.get('level', 'pod'),
+                "runtime": None,  # 从内存连接获取
+                "runtime_version": None,
+                "alive": conn is not None and (hasattr(conn, '_healthy') and conn._healthy),
+                "created_at": row.get('created_at', ''),
+                "last_ping_at": row.get('last_ping_at', ''),
+                # Arthas 层元数据
+                "local_port": row.get('local_port'),
+                "java_pid": row.get('java_pid'),
+                "arthas_version": row.get('arthas_version'),
+                "arthas_address": row.get('arthas_address'),
+                "mcp_available": row.get('mcp_available', False) or (entry.get('mcp_available', False) if entry else False),
+                "status": row.get('status', 'disconnected'),
+            })
+            
+            # 如果有活跃连接,补充运行时信息
+            if conn and hasattr(conn, 'runtime_info') and conn.runtime_info:
+                connections[-1]['runtime'] = conn.runtime_info.runtime_type
+                connections[-1]['runtime_version'] = conn.runtime_info.version
+                connections[-1]['pod_phase'] = getattr(conn, 'pod_phase', 'Running')
         
         return jsonify({"ok": True, "connections": connections, "count": len(connections)})
     
@@ -309,17 +307,22 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         if not pod_conn_id:
             return jsonify({"error": "connection_id 必填"}), 400
         
-        with _pod_connections_lock:
-            if pod_conn_id not in _pod_connections:
-                return jsonify({"error": "Pod 连接不存在"}), 404
-            
-            if not _check_pod_conn_owner(pod_conn_id):
-                return jsonify({"error": "无权操作此连接"}), 403
-            
-            pod_entry = _pod_connections[pod_conn_id]
-            pod_conn = pod_entry.get('conn')
+        # ✅ 修复: 从统一连接池获取 Pod 连接
+        entry = _get_connection_entry(pod_conn_id)
         
-        if not pod_conn or not pod_conn.is_alive():
+        if not entry:
+            return jsonify({"error": "Pod 连接不存在"}), 404
+        
+        if not _check_conn_owner(pod_conn_id):
+            return jsonify({"error": "无权操作此连接"}), 403
+        
+        pod_conn = entry.get('conn')
+        
+        if not pod_conn:
+            return jsonify({"error": "Pod 连接已失效，请重新连接"}), 400
+        
+        # 检查连接是否健康
+        if hasattr(pod_conn, '_healthy') and not pod_conn._healthy:
             return jsonify({"error": "Pod 连接已失效，请重新连接"}), 400
         auth_err, auth_code = AuthorizationService.require_namespace_access(
             current_user, pod_conn.target.cluster_name, pod_conn.target.namespace)
@@ -342,11 +345,37 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             arthas_conn.agent_mgr._pid = int(java_pid)
         
         try:
+            log.info("[Upgrade Arthas] 第一次连接尝试...")
             ok, msg = arthas_conn.connect_arthas(timeout=30)
+            log.info("[Upgrade Arthas] 第一次连接结果: ok=%s, msg=%s", ok, msg)
+            
             if not ok:
-                if isinstance(msg, dict):
-                    return jsonify({"ok": False, **msg}), 400
-                return jsonify({"ok": False, "error": msg}), 400
+                # ✅ 关键修复: 如果是 REINSTALL_NEEDED,关闭旧端口转发,重新连接
+                is_reinstall = (msg == "REINSTALL_NEEDED") or (isinstance(msg, dict) and msg.get('message') == 'REINSTALL_NEEDED')
+                if is_reinstall:
+                    log.warning("[Upgrade Arthas] 检测到旧 Arthas 进程不存在,关闭端口转发并重新安装")
+                    log.info("[Upgrade Arthas] 关闭前: local_port=%s, pf_proc=%s", arthas_conn.local_port, arthas_conn._pf_proc)
+                    arthas_conn._stop_port_forward()
+                    log.info("[Upgrade Arthas] 关闭后: pf_proc=%s", arthas_conn._pf_proc)
+                    
+                    # 重置 Arthas 状态,确保重新执行启动流程
+                    arthas_conn._arthas_ready = False
+                    arthas_conn.client = None
+                    
+                    # 重新建立端口转发并启动 Arthas
+                    log.info("[Upgrade Arthas] 开始重新连接...")
+                    ok2, msg2 = arthas_conn.connect_arthas(timeout=30)
+                    log.info("[Upgrade Arthas] 重新连接结果: ok=%s, msg=%s", ok2, msg2)
+                    if not ok2:
+                        if isinstance(msg2, dict):
+                            return jsonify({"ok": False, **msg2}), 400
+                        return jsonify({"ok": False, "error": msg2}), 400
+                    ok, msg = ok2, msg2
+                else:
+                    log.error("[Upgrade Arthas] 连接失败: %s", msg)
+                    if isinstance(msg, dict):
+                        return jsonify({"ok": False, **msg}), 400
+                    return jsonify({"ok": False, "error": msg}), 400
             
             is_reused = '复用' in msg or '已在运行' in msg
             mcp_available = arthas_conn.agent_mgr._check_mcp_available(arthas_conn.target.arthas_http_port)
@@ -355,6 +384,7 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                 _connections[pod_conn_id] = {
                     "conn": arthas_conn,
                     "user_id": current_user.id,
+                    "level": "arthas",  # ✅ 升级为 Arthas 连接
                     "mcp_available": mcp_available
                 }
             
@@ -477,19 +507,18 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         if not tool:
             return jsonify({"error": "tool 必填"}), 400
 
-        # 查找 Pod 连接
-        with _pod_connections_lock:
-            entry = _pod_connections.get(conn_id)
+        # ✅ 修复: 从统一连接池查找
+        entry = _get_connection_entry(conn_id)
 
         if not entry:
-            return jsonify({"error": "Pod 连接不存在，请先建立 Pod 连接"}), 404
+            return jsonify({"error": "连接不存在，请先建立连接"}), 404
 
-        if not _check_pod_conn_owner(conn_id):
+        if not _check_conn_owner(conn_id):
             return jsonify({"error": "无权操作此连接"}), 403
 
         conn = entry.get('conn')
-        if not conn or not conn.is_alive():
-            return jsonify({"error": "Pod 连接已失效，请重新连接"}), 400
+        if not conn or (hasattr(conn, '_healthy') and not conn._healthy):
+            return jsonify({"error": "连接已失效，请重新连接"}), 400
         auth_err, auth_code = AuthorizationService.require_namespace_access(
             current_user, conn.target.cluster_name, conn.target.namespace)
         if auth_err:

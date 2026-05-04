@@ -89,7 +89,19 @@ const ConnectionStore = {
    * 设置连接列表 (用于刷新列表)
    */
   setConnections(connections) {
-    this.setState({ connections: connections || [] });
+    this._state.connections = connections || [];
+    
+    // ✅ 修复: 如果有连接但没有选中任何连接,自动选中第一条(最近使用的)
+    if (this._state.connections.length > 0 && !this._state.currentConnId) {
+      this._state.currentConnId = this._state.connections[0].id;
+      console.log('[ConnectionStore] Auto-selected first connection:', this._state.currentConnId);
+    }
+    
+    // ✅ 关键修复: 同步到 window,让状态栏能找到
+    this.syncToGlobal();
+    
+    this._notify();
+    this._persist();
   },
   
   getConnectionState() {
@@ -193,7 +205,7 @@ const ConnectionStore = {
         this._state.podConnId = data.podConnId || null;
         this._state.connHealth = data.connHealth || {};
         
-        console.log('[ConnectionStore] Loaded', this._state.connections.length, 'connections (connState & runtimeInfo cleared)');
+        console.log('[ConnectionStore] Loaded (connState & runtimeInfo cleared, currentConnId=', this._state.currentConnId, ')');
       } else {
         console.log('[ConnectionStore] No stored data found');
       }

@@ -39,15 +39,11 @@ function _initTwoStepConnectionStore() {
   
   // 订阅状态变化
   ConnectionStore.subscribe((newState, oldState) => {
-    // 更新本地变量
-    _connState = newState.connState;
-    _runtimeInfo = newState.runtimeInfo;
-    _podPhase = newState.podPhase;
-    _podConnId = newState.podConnId;
-    
-    // 更新 UI
-    updateConnectionButton();
-    updateRuntimeDisplay();
+    // ✅ 修复: 只更新 UI,不覆盖局部变量
+    // 局部变量由 podConnect/upgradeToArthas 等函数直接管理
+    if (typeof updateConnectionButton === 'function') updateConnectionButton();
+    if (typeof updateRuntimeDisplay === 'function') updateRuntimeDisplay();
+    if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
   });
   
   console.log('[two-step-connection] ConnectionStore synced');
@@ -523,7 +519,11 @@ async function podConnect() {
     // 同步到全局状态
     _syncState && _syncState();
     
-    // ✅ 恢复被 _syncState() 覆盖的状态
+    // ✅ 关键修复: 设置 window._currentConnId,让状态栏能找到当前连接
+    window._currentConnId = d.connection_id;
+    window._connState = ConnectionState.POD_CONNECTED;
+    
+    // 恢复被 _syncState() 覆盖的状态
     console.log('[Pod Connect] _syncState() 完成,恢复状态...');
     _connState = savedConnState;
     _runtimeInfo = savedRuntimeInfo;
@@ -539,6 +539,16 @@ async function podConnect() {
 
     // 刷新连接信息提示条
     if (typeof csbRefresh === 'function') csbRefresh();
+    
+    // ✅ 关键修复: 清除"正在建立"提示,更新为成功状态
+    if (typeof updateConnectionStatus === 'function') {
+      const versionInfo = _runtimeInfo && _runtimeInfo.version ? ` ${_runtimeInfo.version}` : '';
+      const runtimeType = _runtimeInfo ? _runtimeInfo.runtime_type || '未知' : '未知';
+      updateConnectionStatus(
+        `✓ Pod 连接成功 (${runtimeType}${versionInfo}) - ${d.message}`,
+        'success'
+      );
+    }
 
   } catch (e) {
     console.error('Pod 连接失败:', e);
@@ -657,6 +667,17 @@ async function upgradeToArthas() {
     // 同步到全局状态
     _syncState && _syncState();
     renderConnList && renderConnList();
+    
+    // ✅ 关键修复: 更新 window._connections 中的 level 为 arthas
+    const currentConnId = _currentConnId || window._currentConnId;
+    if (currentConnId && window._connections) {
+      const conn = window._connections.find(c => c.id === currentConnId);
+      if (conn) {
+        conn.level = 'arthas';
+        conn.status = 'connected';
+        console.log('[Arthas Upgrade] 更新连接 level=arthas:', currentConnId);
+      }
+    }
 
     // 刷新连接信息提示条
     if (typeof csbRefresh === 'function') csbRefresh();

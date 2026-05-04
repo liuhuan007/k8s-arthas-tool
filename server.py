@@ -174,6 +174,61 @@ from api.task_center import init_task_tables, start_task_scheduler
 init_task_tables()
 start_task_scheduler()
 
+# 启动 task_logs 定时清理服务
+def _start_cleanup_scheduler():
+    """启动 task_logs 清理定时任务"""
+    try:
+        from apscheduler.schedulers.background import BackgroundScheduler
+        from services.task_logs_cleanup_service import TaskLogsCleanupService, get_cleanup_config
+        
+        scheduler = BackgroundScheduler()
+        cleanup_service = TaskLogsCleanupService()
+        
+        # 读取清理配置
+        cleanup_cron = get_cleanup_config('task_logs.cleanup_cron', '0 3 * * *')
+        archive_cleanup_cron = get_cleanup_config('task_logs_archive.cleanup_cron', '0 4 1 * *')
+        
+        # 解析 cron 表达式 (格式: minute hour day month day_of_week)
+        parts = cleanup_cron.split()
+        if len(parts) == 5:
+            scheduler.add_job(
+                lambda: asyncio.run(cleanup_service.cleanup_expired_logs()),
+                'cron',
+                minute=parts[0],
+                hour=parts[1],
+                day=parts[2],
+                month=parts[3],
+                day_of_week=parts[4],
+                id='cleanup_task_logs',
+                replace_existing=True,
+            )
+            log.info("task_logs 清理定时任务已注册: %s", cleanup_cron)
+        
+        parts = archive_cleanup_cron.split()
+        if len(parts) == 5:
+            scheduler.add_job(
+                lambda: asyncio.run(cleanup_service.cleanup_old_archives()),
+                'cron',
+                minute=parts[0],
+                hour=parts[1],
+                day=parts[2],
+                month=parts[3],
+                day_of_week=parts[4],
+                id='cleanup_task_logs_archive',
+                replace_existing=True,
+            )
+            log.info("task_logs_archive 清理定时任务已注册: %s", archive_cleanup_cron)
+        
+        scheduler.start()
+        log.info("APScheduler 定时清理服务已启动")
+        
+    except ImportError:
+        log.warning("APScheduler 未安装，task_logs 清理服务未启动。请运行: pip install apscheduler")
+    except Exception as e:
+        log.error("启动清理调度器失败: %s", e, exc_info=True)
+
+_start_cleanup_scheduler()
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 辅助函数
 

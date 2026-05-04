@@ -289,6 +289,9 @@ class ArthasConnection:
         self._notify_state_change(ConnectionState.START_AGENT, "Starting Arthas agent in Pod")
         ok, agent_msg = self.agent_mgr.ensure_agent_running()
         if not ok:
+            # ✅ 关键修复: REINSTALL_NEEDED 特殊标记,不要包装,直接透传
+            if agent_msg == "REINSTALL_NEEDED":
+                return False, "REINSTALL_NEEDED"
             if "JAR" in agent_msg or "jar" in agent_msg:
                 self._notify_state_change(ConnectionState.NEED_JAR, agent_msg)
                 err = _jar_missing_error(agent_msg, getattr(self.target, 'arthas_jar', ''))

@@ -221,66 +221,213 @@ class Database:
                 )
             ''')
             
-            # ── Schema 迁移：为已有表添加新字段 ──────────────────────────────────
-            # connections 表增加 level 字段（pod / arthas）
+            # ── 任务中心诊断重构：新增表 ──────────────────────────────────
+            # 1. arthas_command_templates 表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS arthas_command_templates (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    capability_id INTEGER NOT NULL UNIQUE,
+                    command_name TEXT NOT NULL,
+                    command_category TEXT,
+                    arthas_command TEXT NOT NULL,
+                    syntax TEXT,
+                    description TEXT,
+                    params_json TEXT DEFAULT '[]',
+                    options_json TEXT DEFAULT '[]',
+                    examples TEXT,
+                    doc_url TEXT,
+                    min_version TEXT,
+                    tags TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_arthas_cmd_templates_name ON arthas_command_templates(command_name)')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_arthas_cmd_templates_category ON arthas_command_templates(command_category)')
+            
+            # 2. diagnosis_scenario_steps 表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS diagnosis_scenario_steps (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    capability_id INTEGER NOT NULL,
+                    step_order INTEGER NOT NULL,
+                    command TEXT NOT NULL,
+                    desc TEXT,
+                    timeout_ms INTEGER DEFAULT 60000,
+                    fail_fast INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE CASCADE,
+                    UNIQUE(capability_id, step_order)
+                )
+            ''')
+            
+            # 3. ai_diagnosis_handlers 表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS ai_diagnosis_handlers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    capability_id INTEGER NOT NULL UNIQUE,
+                    handler TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE CASCADE,
+                    CHECK(handler LIKE 'performance_diagnose.%')
+                )
+            ''')
+            
+            # 4. task_logs_archive 归档表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS task_logs_archive (
+                    id TEXT PRIMARY KEY,
+                    task_id INTEGER,
+                    capability_id INTEGER,
+                    user_id INTEGER,
+                    execution_mode TEXT NOT NULL,
+                    execution_type TEXT NOT NULL,
+                    target_json TEXT,
+                    params_json TEXT,
+                    status TEXT NOT NULL,
+                    stdout TEXT,
+                    stderr TEXT,
+                    exit_code INTEGER,
+                    result_json TEXT,
+                    error_message TEXT,
+                    duration_ms INTEGER,
+                    work_dir TEXT,
+                    started_at TIMESTAMP,
+                    finished_at TIMESTAMP,
+                    created_at TIMESTAMP,
+                    retention_days INTEGER,
+                    is_archived INTEGER DEFAULT 1,
+                    archived_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute('CREATE INDEX IF NOT EXISTS idx_task_logs_archive_finished_at ON task_logs_archive(finished_at)')
+            
+            # 5. system_configs 系统配置表
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS system_configs (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL,
+                    description TEXT,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            
+            # 插入默认清理策略
+            cursor.execute('''
+                INSERT OR IGNORE INTO system_configs (key, value, description) VALUES
+                ('task_logs.retention_days', '30', 'task_logs 活跃日志保留天数'),
+                ('task_logs_archive.retention_days', '365', 'task_logs_archive 归档日志保留天数'),
+                ('arthas_command_logs.retention_days', '30', 'arthas_command_logs 保留天数'),
+                ('task_logs.cleanup_cron', '0 3 * * *', 'task_logs 清理定时任务 Cron 表达式'),
+                ('task_logs_archive.cleanup_cron', '0 4 1 * *', 'task_logs_archive 清理定时任务 Cron 表达式')
+            ''')
+            
+            # ── 任务中心诊断重构：表迁移 ──────────────────────────────────
+            # 重命名 task_runs → task_logs（SQLite 不支持直接检查表是否存在，需要捕获异常）
             try:
-                cursor.execute("SELECT level FROM connections LIMIT 1")
+                cursor.execute('SELECT 1 FROM task_logs LIMIT 1')
             except Exception:
-                cursor.execute("ALTER TABLE connections ADD COLUMN level TEXT NOT NULL DEFAULT 'arthas'")
-                log.info("Schema migrated: connections.level added")
-
-            # connections 表增加 P0 增量字段
+                try:
+                    cursor.execute('ALTER TABLE task_runs RENAME TO task_logs')
+                    log.info("Schema migrated: task_runs renamed to task_logs")
+                except Exception as e:
+                    log.warning("Rename task_runs to task_logs failed: %s", e)
+            
+            # 扩展 task_logs 表字段
             for col, ddl in [
-                ("container_name", "ALTER TABLE connections ADD COLUMN container_name TEXT"),
-                ("java_pid",       "ALTER TABLE connections ADD COLUMN java_pid INTEGER"),
-                ("arthas_version", "ALTER TABLE connections ADD COLUMN arthas_version TEXT"),
-                ("last_ping_at",   "ALTER TABLE connections ADD COLUMN last_ping_at TIMESTAMP"),
-                ("status",         "ALTER TABLE connections ADD COLUMN status TEXT DEFAULT 'disconnected'"),
+                ('capability_id', 'ALTER TABLE task_logs ADD COLUMN capability_id INTEGER REFERENCES diagnosis_capabilities(id)'),
+                ('execution_type', "ALTER TABLE task_logs ADD COLUMN execution_type TEXT DEFAULT 'diagnosis'"),
+                ('retention_days', 'ALTER TABLE task_logs ADD COLUMN retention_days INTEGER DEFAULT 30'),
+                ('is_archived', 'ALTER TABLE task_logs ADD COLUMN is_archived INTEGER DEFAULT 0'),
+                ('params_json', "ALTER TABLE task_logs ADD COLUMN params_json TEXT DEFAULT '{}'"),
+                ('result_json', 'ALTER TABLE task_logs ADD COLUMN result_json TEXT'),
             ]:
                 try:
-                    cursor.execute(f"SELECT {col} FROM connections LIMIT 1")
+                    cursor.execute(f'SELECT {col} FROM task_logs LIMIT 1')
                 except Exception:
-                    cursor.execute(ddl)
-                    log.info("Schema migrated: connections.%s added", col)
-
-            # arthas_commands 表增加 P0 增量字段
+                    try:
+                        cursor.execute(ddl)
+                        log.info("Schema migrated: task_logs.%s added", col)
+                    except Exception as e:
+                        log.warning("Add column task_logs.%s failed: %s", col, e)
+            
+            # 重命名 arthas_commands → arthas_command_logs
+            try:
+                cursor.execute('SELECT 1 FROM arthas_command_logs LIMIT 1')
+            except Exception:
+                try:
+                    cursor.execute('ALTER TABLE arthas_commands RENAME TO arthas_command_logs')
+                    log.info("Schema migrated: arthas_commands renamed to arthas_command_logs")
+                except Exception as e:
+                    log.warning("Rename arthas_commands to arthas_command_logs failed: %s", e)
+            
+            # 扩展 arthas_command_logs 表字段
             for col, ddl in [
-                ("template_type", "ALTER TABLE arthas_commands ADD COLUMN template_type TEXT"),
-                ("risk_level",    "ALTER TABLE arthas_commands ADD COLUMN risk_level TEXT DEFAULT 'low'"),
-                ("duration_ms",   "ALTER TABLE arthas_commands ADD COLUMN duration_ms INTEGER"),
-                ("exit_status",   "ALTER TABLE arthas_commands ADD COLUMN exit_status TEXT"),
-                ("masked_output", "ALTER TABLE arthas_commands ADD COLUMN masked_output TEXT"),
+                ('template_id', 'ALTER TABLE arthas_command_logs ADD COLUMN template_id INTEGER REFERENCES arthas_command_templates(id)'),
+                ('step_order', 'ALTER TABLE arthas_command_logs ADD COLUMN step_order INTEGER'),
+                ('command_type', "ALTER TABLE arthas_command_logs ADD COLUMN command_type TEXT"),
             ]:
                 try:
-                    cursor.execute(f"SELECT {col} FROM arthas_commands LIMIT 1")
+                    cursor.execute(f'SELECT {col} FROM arthas_command_logs LIMIT 1')
                 except Exception:
-                    cursor.execute(ddl)
-                    log.info("Schema migrated: arthas_commands.%s added", col)
-
-            # profiler_tasks 表增加 P0 增量字段
+                    try:
+                        cursor.execute(ddl)
+                        log.info("Schema migrated: arthas_command_logs.%s added", col)
+                    except Exception as e:
+                        log.warning("Add column arthas_command_logs.%s failed: %s", col, e)
+            
+            # script_templates 扩展 capability_id
+            try:
+                cursor.execute('SELECT capability_id FROM script_templates LIMIT 1')
+            except Exception:
+                try:
+                    cursor.execute('ALTER TABLE script_templates ADD COLUMN capability_id INTEGER REFERENCES diagnosis_capabilities(id)')
+                    log.info("Schema migrated: script_templates.capability_id added")
+                except Exception as e:
+                    log.warning("Add column script_templates.capability_id failed: %s", e)
+            
+            # connections 表增加 owner_user_id 字段（如果不存在）
+            try:
+                cursor.execute('SELECT owner_user_id FROM connections LIMIT 1')
+            except Exception:
+                try:
+                    cursor.execute("ALTER TABLE connections ADD COLUMN owner_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL")
+                    log.info("Schema migrated: connections.owner_user_id added")
+                except Exception as e:
+                    log.warning("Add column connections.owner_user_id failed: %s", e)
+            
+            # connections 表增加 container_name, java_pid 等字段（如果不存在）
             for col, ddl in [
-                ("artifact_size",    "ALTER TABLE profiler_tasks ADD COLUMN artifact_size INTEGER"),
-                ("artifact_sha256",  "ALTER TABLE profiler_tasks ADD COLUMN artifact_sha256 TEXT"),
-                ("max_duration",     "ALTER TABLE profiler_tasks ADD COLUMN max_duration INTEGER"),
-                ("cancel_reason",    "ALTER TABLE profiler_tasks ADD COLUMN cancel_reason TEXT"),
+                ('container_name', 'ALTER TABLE connections ADD COLUMN container_name TEXT'),
+                ('java_pid', 'ALTER TABLE connections ADD COLUMN java_pid INTEGER'),
+                ('arthas_version', 'ALTER TABLE connections ADD COLUMN arthas_version TEXT'),
+                ('last_ping_at', 'ALTER TABLE connections ADD COLUMN last_ping_at TIMESTAMP'),
+                ('status', "ALTER TABLE connections ADD COLUMN status TEXT DEFAULT 'disconnected'"),
+                ('last_active_at', 'ALTER TABLE connections ADD COLUMN last_active_at TIMESTAMP'),
             ]:
                 try:
-                    cursor.execute(f"SELECT {col} FROM profiler_tasks LIMIT 1")
+                    cursor.execute(f'SELECT {col} FROM connections LIMIT 1')
                 except Exception:
-                    cursor.execute(ddl)
-                    log.info("Schema migrated: profiler_tasks.%s added", col)
+                    try:
+                        cursor.execute(ddl)
+                        log.info("Schema migrated: connections.%s added", col)
+                    except Exception as e:
+                        log.warning("Add column connections.%s failed: %s", col, e)
 
             # ── P0 索引 ──────────────────────────────────────────────────────────
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_connections_user ON connections(owner_user_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_connections_status ON connections(status)")
             cursor.execute("""
-                CREATE INDEX IF NOT EXISTS idx_arthas_commands_user_cluster_created
-                ON arthas_commands(user_id, connection_id, timestamp DESC)
+                CREATE INDEX IF NOT EXISTS idx_arthas_command_logs_user_cluster_created
+                ON arthas_command_logs(user_id, connection_id, timestamp DESC)
             """)
             cursor.execute("""
                 CREATE INDEX IF NOT EXISTS idx_profiler_tasks_user_status_created
                 ON profiler_tasks(user_id, status, created_at DESC)
             """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_user_created ON task_logs(user_id, created_at DESC)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_capability ON task_logs(capability_id)")
             
             # 创建默认 admin 账户
             cursor.execute('SELECT COUNT(*) FROM users')

@@ -1445,6 +1445,7 @@ async function switchConnection(connId) {
 
       // 设置新的当前连接
       _currentConnId = connId;
+      window._currentConnId = connId;  // ✅ 同步到 window,让状态栏能找到
       _connected = true;
       _ap = syncPodTargetFromConnection(conn) || t;
 
@@ -1485,6 +1486,7 @@ async function switchConnection(connId) {
         if (typeof _runtimeInfo !== 'undefined' && d.runtime) _runtimeInfo = d.runtime;
         _connected = true;
         _currentConnId = connId;
+        window._currentConnId = connId;  // ✅ 同步到 window,让状态栏能找到
         
         // ✅ 修复: 同步到 two-step-connection 组件
         if (typeof window.getConnectionState === 'function') {

@@ -31,9 +31,106 @@ from werkzeug.utils import secure_filename
 from backend import Config
 from models.db import db
 from services.authorization_service import AuthorizationService
+from backend.core.parameter_validator import ParameterValidator
+from backend.core.command_builder import build_command
 
 
 task_bp = Blueprint('task_center', __name__, url_prefix='/api/tasks')
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 诊断能力 API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@task_bp.route('/capabilities', methods=['GET'])
+@login_required
+def list_capabilities():
+    """查询诊断能力目录"""
+    type_filter = request.args.get('type')
+    category_filter = request.args.get('category')
+    level_filter = request.args.get('level')
+    
+    where_clauses = []
+    params = []
+    
+    if type_filter:
+        where_clauses.append('type = ?')
+        params.append(type_filter)
+    if category_filter:
+        where_clauses.append('category = ?')
+        params.append(category_filter)
+    if level_filter:
+        where_clauses.append('level = ?')
+        params.append(int(level_filter))
+    
+    where_sql = ' AND '.join(where_clauses) if where_clauses else '1=1'
+    
+    rows = db.fetch_all(
+        f'SELECT * FROM diagnosis_capabilities WHERE {where_sql} ORDER BY level, category, id',
+        tuple(params)
+    )
+    
+    capabilities = []
+    for row in rows:
+        cap = dict(row)
+        # 加载扩展数据
+        cap['extension'] = load_extension(cap['category'], cap['id'])
+        capabilities.append(cap)
+    
+    return jsonify({'capabilities': capabilities})
+
+
+@task_bp.route('/capabilities/<int:cap_id>', methods=['GET'])
+@login_required
+def get_capability(cap_id: int):
+    """获取单个诊断能力详情"""
+    cap = db.fetch_one('SELECT * FROM diagnosis_capabilities WHERE id = ?', (cap_id,))
+    if not cap:
+        return jsonify({'error': '能力不存在'}), 404
+    
+    result = dict(cap)
+    result['extension'] = load_extension(cap['category'], cap_id)
+    return jsonify({'capability': result})
+
+
+def load_extension(cap_type: str, capability_id: int) -> dict:
+    """加载能力扩展数据
+    
+    Args:
+        cap_type: 能力类型 (quick/tool/scenario/ai)
+        capability_id: 能力 ID
+        
+    Returns:
+        dict: 扩展数据
+    """
+    extension = {}
+    
+    if cap_type in ('quick', 'tool'):
+        # 加载 arthas_command_templates
+        template = db.fetch_one(
+            'SELECT * FROM arthas_command_templates WHERE capability_id = ?',
+            (capability_id,)
+        )
+        if template:
+            extension['template'] = dict(template)
+    
+    elif cap_type == 'scenario':
+        # 加载 diagnosis_scenario_steps
+        steps = db.fetch_all(
+            'SELECT * FROM diagnosis_scenario_steps WHERE capability_id = ? ORDER BY step_order',
+            (capability_id,)
+        )
+        extension['steps'] = [dict(s) for s in steps]
+    
+    elif cap_type == 'ai':
+        # 加载 ai_diagnosis_handlers
+        handler = db.fetch_one(
+            'SELECT * FROM ai_diagnosis_handlers WHERE capability_id = ?',
+            (capability_id,)
+        )
+        if handler:
+            extension['handler'] = dict(handler)
+    
+    return extension
 
 _ALLOWED_RUNTIMES = {'python', 'shell'}
 _ALLOWED_EXECUTION_MODES = {'node', 'pod'}
@@ -1467,3 +1564,211 @@ def start_task_scheduler():
         thread.start()
         _SCHEDULER_STARTED = True
         _sched_log.info('任务调度线程已启动 (daemon=True)')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 即时诊断执行 API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@task_bp.route('/diagnosis/execute', methods=['POST'])
+@login_required
+def execute_diagnosis():
+    """即时诊断执行"""
+    data = request.json or {}
+    capability_id = data.get('capability_id')
+    params = data.get('params', {})
+    connection_id = data.get('connection_id')
+    
+    if not capability_id:
+        return _error('capability_id 不能为空')
+    if not connection_id:
+        return _error('connection_id 不能为空')
+    
+    # 1. 获取能力定义
+    capability = db.fetch_one(
+        'SELECT * FROM diagnosis_capabilities WHERE id = ?',
+        (capability_id,)
+    )
+    if not capability:
+        return _error('诊断能力不存在'), 404
+    
+    # 2. 加载扩展数据
+    extension = load_extension(capability['category'], capability_id)
+    
+    # 3. 参数校验
+    error = ParameterValidator.validate(capability.get('parameters_schema', '{}'), params)
+    if error:
+        return _error(error)
+    
+    # 4. 获取连接
+    from backend.core.connection import ArthasConnection
+    connection = db.fetch_one('SELECT * FROM connections WHERE id = ?', (connection_id,))
+    if not connection:
+        return _error('连接不存在'), 404
+    
+    # 5. 执行诊断
+    try:
+        if capability['category'] in ('quick', 'tool'):
+            result = _execute_arthas_command(capability, extension, params, connection)
+        elif capability['category'] == 'scenario':
+            result = _execute_scenario(capability, extension, params, connection)
+        elif capability['category'] == 'ai':
+            result = _execute_ai_diagnosis(capability, extension, params, connection)
+        else:
+            return _error(f'不支持的能力类型: {capability["category"]}')
+    except Exception as e:
+        log.error("诊断执行失败: %s", e, exc_info=True)
+        return _error(f'诊断执行失败: {str(e)}', 500)
+    
+    # 6. 记录执行日志（task_logs）
+    log_id = str(uuid.uuid4().hex)
+    now = _now_text()
+    db.insert('task_logs', {
+        'id': log_id,
+        'task_id': None,  # 即时诊断为空
+        'capability_id': capability_id,
+        'user_id': current_user.id,
+        'execution_mode': 'immediate',
+        'execution_type': 'diagnosis',
+        'status': result.get('status', 'success'),
+        'target_json': _json_dumps({'connection_id': connection_id}),
+        'params_json': _json_dumps(params),
+        'result_json': _json_dumps(result),
+        'duration_ms': result.get('duration_ms', 0),
+        'started_at': now,
+        'finished_at': now,
+    })
+    
+    return jsonify({'ok': True, 'log_id': log_id, 'result': result})
+
+
+def _execute_arthas_command(capability, extension, params, connection):
+    """执行单条 Arthas 命令"""
+    from backend.core.arthas_executor import ArthasCommandExecutor
+    from backend.core.pod_connection import get_pod_connection
+    
+    # 获取 Pod 连接
+    pod_conn = get_pod_connection(connection['id'])
+    if not pod_conn:
+        raise ValueError('连接不可用')
+    
+    # 获取命令模板
+    template = extension.get('template', {})
+    command_template = template.get('arthas_command') or capability.get('arthas_command', '')
+    
+    # 构建命令
+    command = build_command(command_template, params)
+    
+    # 执行命令
+    result = ArthasCommandExecutor.execute(
+        pod_conn,
+        command,
+        skip_audit=False,
+        skip_history=False,
+    )
+    
+    return {
+        'status': 'success' if result.get('state') == 'SUCCEEDED' else 'failed',
+        'result': result,
+        'duration_ms': result.get('duration_ms', 0),
+    }
+
+
+async def _execute_scenario(capability, extension, params, connection):
+    """执行场景方案（多步骤）"""
+    from backend.core.arthas_executor import ArthasCommandExecutor
+    from backend.core.pod_connection import get_pod_connection
+    
+    # 获取 Pod 连接
+    pod_conn = get_pod_connection(connection['id'])
+    if not pod_conn:
+        raise ValueError('连接不可用')
+    
+    # 解析步骤
+    steps = extension.get('steps', [])
+    if not steps:
+        raise ValueError('场景方案未配置步骤')
+    
+    # 执行步骤（支持跨步数据传递）
+    step_outputs = {}
+    step_results = []
+    total_duration = 0
+    
+    for step in steps:
+        # 构建命令（支持 ${stepN.field} 语法）
+        command = build_command(step['command'], params, step_outputs)
+        
+        # 执行命令
+        try:
+            result = ArthasCommandExecutor.execute(
+                pod_conn,
+                command,
+                timeout_ms=step.get('timeout_ms'),
+                skip_audit=True,
+                skip_history=True,
+            )
+            
+            success = result.get('state') == 'SUCCEEDED'
+            
+            # 记录步骤输出（供后续步骤引用）
+            step_outputs[f"step{step['step_order']}"] = result
+            
+            step_results.append({
+                'step_order': step['step_order'],
+                'command': command,
+                'desc': step.get('desc', ''),
+                'success': success,
+                'result': result,
+            })
+            
+            total_duration += result.get('duration_ms', 0)
+            
+            # fail_fast 控制
+            if not success and step.get('fail_fast', 1):
+                break
+            
+        except Exception as e:
+            step_results.append({
+                'step_order': step['step_order'],
+                'command': command,
+                'desc': step.get('desc', ''),
+                'success': False,
+                'error': str(e),
+            })
+            
+            # fail_fast 控制
+            if step.get('fail_fast', 1):
+                break
+    
+    # 判断整体状态
+    all_success = all(r.get('success') for r in step_results)
+    status = 'success' if all_success else 'partial'
+    
+    return {
+        'status': status,
+        'total_steps': len(steps),
+        'completed_steps': len(step_results),
+        'steps': step_results,
+        'duration_ms': total_duration,
+    }
+
+
+def _execute_ai_diagnosis(capability, extension, params, connection):
+    """执行 AI 诊断"""
+    handler = extension.get('handler', {})
+    handler_name = handler.get('handler', '')
+    
+    if not handler_name:
+        raise ValueError('AI 诊断未配置处理器')
+    
+    # 调用 performance_diagnose 模块
+    if handler_name.startswith('performance_diagnose.'):
+        from api.performance_diagnose import run_diagnosis
+        result = run_diagnosis(connection['id'], params)
+        return {
+            'status': 'success',
+            'result': result,
+            'duration_ms': result.get('duration_ms', 0),
+        }
+    
+    raise ValueError(f'不支持的 AI 诊断处理器: {handler_name}')
