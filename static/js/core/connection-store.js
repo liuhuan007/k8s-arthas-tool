@@ -186,13 +186,14 @@ const ConnectionStore = {
         const data = JSON.parse(stored);
         // 不加载 connections (由数据库 API 提供)
         this._state.currentConnId = data.currentConnId || null;
-        this._state.connState = data.connState || ConnectionState.DISCONNECTED;
-        this._state.runtimeInfo = data.runtimeInfo || null;
+        // ✅ 修复: 不加载旧的 connState 和 runtimeInfo,避免覆盖当前状态
+        this._state.connState = ConnectionState.DISCONNECTED;  // 强制重置,等待连接后更新
+        this._state.runtimeInfo = null;  // 强制清空,等待后端返回
         this._state.podPhase = data.podPhase || '';
         this._state.podConnId = data.podConnId || null;
         this._state.connHealth = data.connHealth || {};
         
-        console.log('[ConnectionStore] Loaded', this._state.connections.length, 'connections');
+        console.log('[ConnectionStore] Loaded', this._state.connections.length, 'connections (connState & runtimeInfo cleared)');
       } else {
         console.log('[ConnectionStore] No stored data found');
       }
@@ -239,19 +240,20 @@ window.ConnectionStore = ConnectionStore;
 // DOM Ready 时初始化 (延迟到数据库加载后)
 document.addEventListener('DOMContentLoaded', () => {
   // ✅ 仅初始化,不从 localStorage 加载 connections (由数据库 API 提供)
-  // 保留其他状态 (connState, runtimeInfo 等) 的本地缓存
+  // 保留其他状态 (connState 等) 的本地缓存
   try {
     const stored = localStorage.getItem('arthas_connection_store');
     if (stored) {
       const data = JSON.parse(stored);
       // 不加载 connections,保持为空数组,等待数据库 API 填充
+      // ✅ 修复: 不加载旧的 connState 和 runtimeInfo,避免覆盖当前状态
       ConnectionStore._state.currentConnId = data.currentConnId || null;
-      ConnectionStore._state.connState = data.connState || ConnectionState.DISCONNECTED;
-      ConnectionStore._state.runtimeInfo = data.runtimeInfo || null;
+      ConnectionStore._state.connState = ConnectionState.DISCONNECTED;  // 强制重置,等待连接后更新
+      ConnectionStore._state.runtimeInfo = null;  // 强制清空,等待后端返回
       ConnectionStore._state.podPhase = data.podPhase || '';
       ConnectionStore._state.podConnId = data.podConnId || null;
       ConnectionStore._state.connHealth = data.connHealth || {};
-      console.log('[ConnectionStore] Initialized (connections from DB API)');
+      console.log('[ConnectionStore] Initialized (connState & runtimeInfo cleared)');
     } else {
       console.log('[ConnectionStore] Ready (no cached state)');
     }

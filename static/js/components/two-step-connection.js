@@ -11,24 +11,15 @@
 // ── 连接状态管理 ──────────────────────────────────────────────────────────────
 
 /**
- * 连接状态枚举
+ * ✅ 使用 connection-store.js 中定义的 ConnectionState
+ * 不再重复定义,避免冲突
  */
-const ConnectionState = {
-  DISCONNECTED: 'disconnected',      // 未连接
-  POD_CONNECTING: 'pod_connecting',  // Pod 连接中
-  POD_CONNECTED: 'pod_connected',    // Pod 已连接
-  ARTHAS_UPGRADING: 'arthas_upgrading', // Arthas 升级中
-  ARTHAS_READY: 'arthas_ready'       // Arthas 就绪
-};
 
 /**
  * ✅ 使用 ConnectionStore 统一管理状态
- * 旧变量保留为 ConnectionStore 的引用,保证向后兼容
+ * 不声明本地变量,直接使用 app-ui.js 中的全局变量,避免重复声明
  */
-let _connState = ConnectionState.DISCONNECTED;
-let _podConnId = null;
-let _runtimeInfo = null;
-let _podPhase = null;
+// _connState, _runtimeInfo, _podConnId, _podPhase 由 app-ui.js 声明
 
 /**
  * ✅ 初始化 ConnectionStore 同步
@@ -114,7 +105,12 @@ function updateConnectionButton() {
   const btn = document.getElementById('ptConnBtn');
   const upgradeBtn = document.getElementById('ptUpgradeBtn');
   
-  if (!btn) return;
+  console.log('[updateConnectionButton] 被调用, _connState:', _connState);
+  
+  if (!btn) {
+    console.warn('[updateConnectionButton] ptConnBtn 不存在!');
+    return;
+  }
 
   switch (_connState) {
     case ConnectionState.DISCONNECTED:
@@ -147,8 +143,11 @@ function updateConnectionButton() {
       break;
 
     case ConnectionState.POD_CONNECTED:
+      console.log('[updateConnectionButton] 进入 POD_CONNECTED case');
+      console.log('[updateConnectionButton] canUpgradeToArthas():', canUpgradeToArthas());
       // 步骤3: Pod 已连接
       if (canUpgradeToArthas()) {
+        console.log('[updateConnectionButton] canUpgradeToArthas() = true, 启用 Arthas 按钮');
         btn.textContent = '✓ Pod 已连接';
         btn.className = 'pt-btn success';
         btn.disabled = true;
@@ -160,8 +159,11 @@ function updateConnectionButton() {
           upgradeBtn.style.display = '';  // ✅ 显示按钮
           upgradeBtn.textContent = '⚡ 启动 Arthas';
           upgradeBtn.className = 'pt-btn success';
+          console.log('[updateConnectionButton] Arthas 按钮已启用');
         }
       } else {
+        console.log('[updateConnectionButton] canUpgradeToArthas() = false, 禁用 Arthas 按钮');
+        console.log('[updateConnectionButton] _runtimeInfo:', _runtimeInfo);
         btn.textContent = '✓ Pod 已连接';
         btn.className = 'pt-btn success';
         btn.disabled = true;
@@ -295,8 +297,10 @@ function updateRuntimeDisplay() {
     unknown: '❓'
   };
 
-  const icon = runtimeIcons[_runtimeInfo.runtime_type] || '❓';
-  const version = _runtimeInfo.version ? ` ${_runtimeInfo.version}` : '';
+  // ✅ 空值保护
+  const runtimeType = _runtimeInfo ? _runtimeInfo.runtime_type || 'unknown' : 'unknown';
+  const icon = runtimeIcons[runtimeType] || '❓';
+  const version = _runtimeInfo && _runtimeInfo.version ? ` ${_runtimeInfo.version}` : '';
   const isArthas = _connState === ConnectionState.ARTHAS_READY;
   const isPod = _connState === ConnectionState.POD_CONNECTED;
 
@@ -304,7 +308,7 @@ function updateRuntimeDisplay() {
     <div style="padding: 8px 12px; background: rgba(0,0,0,0.2); border-radius: 4px; font-size: 12px;">
       <div style="color: var(--a5); margin-bottom: 4px;">运行时环境</div>
       <div style="color: var(--fg); font-size: 14px;">
-        ${icon} <strong>${_runtimeInfo.runtime_type}</strong>${version}
+        ${icon} <strong>${runtimeType === 'unknown' ? '未知' : runtimeType}</strong>${version}
       </div>
   `;
 
@@ -438,16 +442,42 @@ async function podConnect() {
 
     const d = await r.json();
 
+    // ✅ 调试: 打印后端返回的数据
+    console.log('[Pod Connect] ========== 收到后端响应 ==========');
+    console.log('[Pod Connect] Backend response:', d);
+    console.log('[Pod Connect] runtime:', d.runtime);
+    console.log('[Pod Connect] d.ok:', d.ok);
+
     if (!d.ok) {
       throw new Error(d.error || 'Pod 连接失败');
     }
 
     // 连接成功
+    console.log('[Pod Connect] ========== 开始更新状态 ==========');
     window._manualTargetDirty = false;
     _connState = ConnectionState.POD_CONNECTED;
+    console.log('[Pod Connect] _connState 设置为:', _connState, '(ConnectionState.POD_CONNECTED =', ConnectionState.POD_CONNECTED, ')');
     _podConnId = d.connection_id;
-    _runtimeInfo = d.runtime;
-    _podPhase = d.pod_phase;
+    _runtimeInfo = d.runtime || null;  // ✅ 空值保护
+    _podPhase = d.pod_phase || null;
+    
+    console.log('[Pod Connect] _runtimeInfo set to:', _runtimeInfo);
+    console.log('[Pod Connect] canUpgradeToArthas():', canUpgradeToArthas());
+    
+    // ✅ 关键修复: 立即保存状态,防止后续操作覆盖
+    const savedConnState = ConnectionState.POD_CONNECTED;
+    const savedRuntimeInfo = _runtimeInfo;
+    const savedPodConnId = _podConnId;
+    const savedPodPhase = _podPhase;
+    console.log('[Pod Connect] 保存正确状态: connState=', savedConnState, ', runtimeInfo=', savedRuntimeInfo);
+    
+    // ✅ 立即更新 UI
+    console.log('[Pod Connect] ========== 立即更新 UI ==========');
+    updateConnectionButton();
+    updateRuntimeDisplay();
+    updateFeatureTabs();
+    
+    console.log('[Pod Connect] ========== 开始同步全局状态 ==========');
 
     // 同步到旧版全局状态：Pod 连接也必须成为当前连接，供监控/文件/终端等 Pod 级功能使用
     if (typeof _currentConnId !== 'undefined') _currentConnId = d.connection_id;
@@ -475,14 +505,15 @@ async function podConnect() {
     }
     if (typeof renderConnList === 'function') renderConnList();
 
-    // 更新 UI
-    updateConnectionButton();
-    updateRuntimeDisplay();
-    updateFeatureTabs();
+    // ✅ UI 已经在前面更新过了,这里不再重复调用
+    // updateConnectionButton();
+    // updateRuntimeDisplay();
+    // updateFeatureTabs();
 
     const versionInfo = _runtimeInfo && _runtimeInfo.version ? ` ${_runtimeInfo.version}` : '';
+    const runtimeType = _runtimeInfo ? _runtimeInfo.runtime_type || '未知' : '未知';
     updateConnectionStatus(
-      `✓ Pod 连接成功 (${_runtimeInfo.runtime_type}${versionInfo}) - ${d.message}`,
+      `✓ Pod 连接成功 (${runtimeType}${versionInfo}) - ${d.message}`,
       'success'
     );
 
@@ -491,6 +522,20 @@ async function podConnect() {
 
     // 同步到全局状态
     _syncState && _syncState();
+    
+    // ✅ 恢复被 _syncState() 覆盖的状态
+    console.log('[Pod Connect] _syncState() 完成,恢复状态...');
+    _connState = savedConnState;
+    _runtimeInfo = savedRuntimeInfo;
+    _podConnId = savedPodConnId;
+    _podPhase = savedPodPhase;
+    
+    console.log('[Pod Connect] 恢复后: _connState=', _connState, ', _runtimeInfo=', _runtimeInfo);
+    
+    // 再次更新 UI
+    updateConnectionButton();
+    updateRuntimeDisplay();
+    updateFeatureTabs();
 
     // 刷新连接信息提示条
     if (typeof csbRefresh === 'function') csbRefresh();
@@ -809,16 +854,8 @@ function initTwoStepConnection() {
 }
 
 // ── 全局函数暴露 ──────────────────────────────────────────────────────────────
-// 将函数暴露到 window 对象，供 HTML onclick 调用
-window.podConnect = podConnect;
-window.podDisconnect = podDisconnect;
-window.upgradeToArthas = upgradeToArthas;
-window.getConnectionState = getConnectionState;
-window.canUpgradeToArthas = canUpgradeToArthas;
-window.initTwoStepConnection = initTwoStepConnection;
-window.resetTwoStepConnectionState = resetTwoStepConnectionState;
-// P0-1: 状态变更时自动同步到 window，让 diagnose.js 等模块可读取
-// 用 getter/setter 拦截，确保外部赋值也能更新内部状态
+// ✅ 延迟到 DOMContentLoaded 后暴露,避免与 ConnectionState 等依赖冲突
+// 使用 getter/setter 拦截 window._connState,确保外部赋值也能更新内部状态
 (function() {
   Object.defineProperty(window, '_connState', {
     get() { return _connState; },
@@ -854,21 +891,38 @@ if (document.readyState === 'loading') {
   _initTwoStepConnectionStore();
 }
 
-// ✅ 暴露全局函数
-console.log('[two-step-connection] ========== 开始暴露全局函数 ==========');
-console.log('[two-step-connection] podConnect function exists:', typeof podConnect);
-console.log('[two-step-connection] upgradeToArthas function exists:', typeof upgradeToArthas);
+// ✅ 暴露全局函数 (延迟到 DOMContentLoaded 后,确保所有依赖已加载)
+function _exposeGlobalFunctions() {
+  console.log('[two-step-connection] ========== 开始暴露全局函数 ==========');
+  console.log('[two-step-connection] podConnect function exists:', typeof podConnect);
+  console.log('[two-step-connection] upgradeToArthas function exists:', typeof upgradeToArthas);
+  console.log('[two-step-connection] getT function exists:', typeof getT);
 
-window.podConnect = podConnect;
-window.upgradeToArthas = upgradeToArthas;
+  // 暴露所有全局函数
+  window.podConnect = podConnect;
+  window.podDisconnect = podDisconnect;
+  window.upgradeToArthas = upgradeToArthas;
+  window.getConnectionState = getConnectionState;
+  window.canUpgradeToArthas = canUpgradeToArthas;
+  window.initTwoStepConnection = initTwoStepConnection;
+  window.resetTwoStepConnectionState = resetTwoStepConnectionState;
 
-console.log('[two-step-connection] window.podConnect:', typeof window.podConnect);
-console.log('[two-step-connection] window.upgradeToArthas:', typeof window.upgradeToArthas);
-console.log('[two-step-connection] ========== 全局函数暴露完成 ==========');
+  console.log('[two-step-connection] window.podConnect:', typeof window.podConnect);
+  console.log('[two-step-connection] window.upgradeToArthas:', typeof window.upgradeToArthas);
+  console.log('[two-step-connection] window.podDisconnect:', typeof window.podDisconnect);
+  console.log('[two-step-connection] ========== 全局函数暴露完成 ==========');
 
-// 立即测试
-if (typeof window.podConnect === 'function') {
-  console.log('✅ SUCCESS: podConnect 已成功暴露到全局!');
+  // 立即测试
+  if (typeof window.podConnect === 'function') {
+    console.log('✅ SUCCESS: podConnect 已成功暴露到全局!');
+  } else {
+    console.error('❌ ERROR: podConnect 暴露失败!');
+  }
+}
+
+// DOM Ready 后暴露全局函数
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _exposeGlobalFunctions);
 } else {
-  console.error('❌ ERROR: podConnect 暴露失败!');
+  _exposeGlobalFunctions();
 }

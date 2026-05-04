@@ -77,14 +77,37 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                 entry = _pod_connections[conn_id]
                 conn = entry.get('conn')
                 if conn and conn.is_alive():
-                    return jsonify({
-                        "ok": True,
-                        "connection_id": conn_id,
-                        "message": "Pod 连接已存在，复用",
-                        "pod_phase": conn.pod_phase,
-                        "runtime": conn.runtime_info.__dict__ if conn.runtime_info else None,
-                        "reused": True
-                    })
+                    # ✅ 修复: 即使 is_alive() 返回 true,也要验证 Pod 是否真的存在
+                    try:
+                        current_phase = conn._get_pod_phase(timeout=5)
+                        if not current_phase or current_phase != "Running":
+                            log.warning("[Pod Connect Reuse] Pod 状态异常: %s, 重建连接", current_phase)
+                            _pod_connections.pop(conn_id, None)
+                        else:
+                            from dataclasses import asdict
+                            
+                            # ✅ 调试: 打印复用的 runtime_info
+                            runtime_data = asdict(conn.runtime_info) if conn.runtime_info else None
+                            log.info("[Pod Connect Reuse] conn_id=%s, runtime_info=%s", conn_id, runtime_data)
+                            
+                            # ✅ 修复: 如果 runtime_info 为 None 或缺少 runtime_type,重新检测
+                            if not runtime_data or not runtime_data.get('runtime_type'):
+                                log.warning("[Pod Connect Reuse] runtime_info 缺失或不完整 (runtime_data=%s),重新检测", runtime_data)
+                                conn._runtime_info = conn._detect_runtime(timeout=10)
+                                runtime_data = asdict(conn.runtime_info) if conn.runtime_info else None
+                                log.info("[Pod Connect Reuse] 重新检测后 runtime_info=%s", runtime_data)
+                            
+                            return jsonify({
+                                "ok": True,
+                                "connection_id": conn_id,
+                                "message": "Pod 连接已存在，复用",
+                                "pod_phase": conn.pod_phase,
+                                "runtime": runtime_data,
+                                "reused": True
+                            })
+                    except Exception as e:
+                        log.warning("[Pod Connect Reuse] 检查 Pod 状态失败: %s, 重建连接", e)
+                        _pod_connections.pop(conn_id, None)
                 else:
                     _pod_connections.pop(conn_id, None)
         
@@ -136,11 +159,16 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             
             AuditService.log_connection_created(current_user.id, conn_id, pod_name, namespace)
             
+            # ✅ 修复: 使用 asdict 转换 dataclass
+            from dataclasses import asdict
+            runtime_data = asdict(conn.runtime_info) if conn.runtime_info else None
+            log.info("[Pod Connect] runtime_info: %s", runtime_data)
+            
             return jsonify({
                 "ok": True,
                 "connection_id": conn_id,
                 "pod_phase": conn.pod_phase,
-                "runtime": conn.runtime_info.__dict__ if conn.runtime_info else None,
+                "runtime": runtime_data,
                 "message": msg,
                 "reused": False
             })

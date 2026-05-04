@@ -197,26 +197,35 @@ class PodConnection:
           3. Python 进程 (python --version)
           4. Go 进程 (特征识别)
         """
-        # 1. 检测 Java
-        java_info = self._detect_java(timeout)
+        # 1. 检测 Java (优先)
+        log.info("[_detect_runtime] 开始检测 Java...")
+        java_info = self._detect_java(min(timeout, 5))
         if java_info:
+            log.info("[_detect_runtime] 检测到 Java: %s", java_info.runtime_type)
             return java_info
         
         # 2. 检测 Node.js
-        node_info = self._detect_node(timeout)
+        log.info("[_detect_runtime] 开始检测 Node.js...")
+        node_info = self._detect_node(min(timeout, 3))
         if node_info:
+            log.info("[_detect_runtime] 检测到 Node.js: %s", node_info.runtime_type)
             return node_info
         
         # 3. 检测 Python
-        python_info = self._detect_python(timeout)
+        log.info("[_detect_runtime] 开始检测 Python...")
+        python_info = self._detect_python(min(timeout, 3))
         if python_info:
+            log.info("[_detect_runtime] 检测到 Python: %s", python_info.runtime_type)
             return python_info
         
         # 4. 检测 Go
-        go_info = self._detect_go(timeout)
+        log.info("[_detect_runtime] 开始检测 Go...")
+        go_info = self._detect_go(min(timeout, 3))
         if go_info:
+            log.info("[_detect_runtime] 检测到 Go: %s", go_info.runtime_type)
             return go_info
         
+        log.info("[_detect_runtime] 未检测到已知运行时,返回 unknown")
         # 未知运行时
         return RuntimeInfo(runtime_type="unknown")
     
@@ -257,11 +266,16 @@ class PodConnection:
         # 获取 Java 版本
         version = self._get_java_version(timeout)
         
-        return RuntimeInfo(
+        runtime_info = RuntimeInfo(
             runtime_type="java",
             version=version,
             processes=java_processes
         )
+        
+        log.info("[_detect_java] Created RuntimeInfo: runtime_type=%s, version=%s, processes=%d",
+                runtime_info.runtime_type, runtime_info.version, len(runtime_info.processes))
+        
+        return runtime_info
     
     def _get_java_version(self, timeout: int = 5) -> Optional[str]:
         """获取 Java 版本"""

@@ -804,6 +804,8 @@ let _ap = null;
 let _connHealth = {};
 let _connState = 'disconnected';
 let _runtimeInfo = null;
+let _podConnId = null;
+let _podPhase = null;
 
 // ✅ 初始化 ConnectionStore 同步
 function _initConnectionStore() {
@@ -1309,7 +1311,8 @@ async function switchConnection(connId) {
     cluster_name: conn.cluster_name,
     namespace: conn.namespace,
     pod_name: conn.pod_name,
-    container: conn.container,
+    // ✅ 修复: 数据库字段是 container_name
+    container: conn.container_name || conn.container,
     arthas_jar: conn.arthas_jar
   };
 
@@ -1466,11 +1469,29 @@ async function switchConnection(connId) {
         if (typeof _podConnId !== 'undefined') _podConnId = d.connection_id || connId;
         if (typeof _podPhase !== 'undefined') _podPhase = d.pod_phase;
         _connected = false; // Pod 连接不代表 Arthas 可用
+        
+        // ✅ 修复: 同步到 two-step-connection 组件
+        if (typeof window.getConnectionState === 'function') {
+          // 触发状态更新
+          if (typeof window.updateConnectionButton === 'function') {
+            window.updateConnectionButton();
+          }
+          if (typeof window.updateRuntimeDisplay === 'function') {
+            window.updateRuntimeDisplay();
+          }
+        }
       } else {
         window._connState = ConnectionState.ARTHAS_READY;
         if (typeof _runtimeInfo !== 'undefined' && d.runtime) _runtimeInfo = d.runtime;
         _connected = true;
         _currentConnId = connId;
+        
+        // ✅ 修复: 同步到 two-step-connection 组件
+        if (typeof window.getConnectionState === 'function') {
+          if (typeof window.updateConnectionButton === 'function') {
+            window.updateConnectionButton();
+          }
+        }
       }
 
       // 同步状态到 window
@@ -2387,7 +2408,8 @@ function normalizeConnTarget(conn) {
     cluster_name: conn.cluster_name || conn.cluster || '',
     namespace: conn.namespace || 'default',
     pod_name: conn.pod_name || conn.pod || '',
-    container: conn.container || '',
+    // ✅ 修复: 数据库字段是 container_name,不是 container
+    container: conn.container_name || conn.container || '',
     arthas_jar: conn.arthas_jar || document.getElementById('ptArthas')?.value || '/app/arthas/arthas-boot.jar',
   };
 }
