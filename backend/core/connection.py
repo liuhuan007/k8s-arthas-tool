@@ -13,6 +13,7 @@ import time
 from typing import Optional, Tuple, Callable
 
 from .connection_state import ConnectionState
+from .arthas_executor import ArthasCommandExecutor
 
 log = logging.getLogger(__name__)
 
@@ -379,7 +380,7 @@ class ArthasConnection:
                 log.info("Arthas version: %s", version)
                 return
             # 兜底：用 exec_once 手动解析
-            resp = self.client.exec_once("version", timeout_ms=5000)
+            resp = ArthasCommandExecutor.execute(self, "version", timeout_ms=5000, skip_audit=True, skip_history=True)
             if resp.get("state") in ("SUCCEEDED", "succeeded"):
                 body = resp.get("body", {})
                 # body 可能是 dict 或 JSON 字符串

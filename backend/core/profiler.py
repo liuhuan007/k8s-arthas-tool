@@ -10,6 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from backend.core.arthas_executor import ArthasCommandExecutor
+
 log = logging.getLogger(__name__)
 
 

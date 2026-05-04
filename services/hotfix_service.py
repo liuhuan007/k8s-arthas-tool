@@ -7,6 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any
 
+from backend.core.arthas_executor import ArthasCommandExecutor
+
 log = logging.getLogger(__name__)
 
 
@@ -121,7 +123,7 @@ class HotfixService:
         try:
             # 执行 jad 命令
             command = f"jad {class_name}"
-            result = connection.client.exec_once(command)
+            result = ArthasCommandExecutor.execute(connection, command)
 
             if result.get('state') in ('SUCCEEDED', 'succeeded'):
                 # 从 body 中提取源码
@@ -472,7 +474,7 @@ class HotfixService:
             # 策略 A: 先尝试查找目标类的 ClassLoader
             class_name = local_path.stem  # 例如: JacksonRedisSerializer
             sc_cmd = f"sc -d *{class_name} 2>/dev/null | grep 'classLoaderHash' | head -1 | awk '{{print $2}}'"
-            sc_result = connection.client.exec_once(sc_cmd, timeout_ms=10000)
+            sc_result = ArthasCommandExecutor.execute(connection, sc_cmd, timeout_ms=10000)
             
             class_loader_hash = ""
             if sc_result.get('state') in ('SUCCEEDED', 'succeeded'):
@@ -497,7 +499,7 @@ class HotfixService:
                 
                 for cl_name in classloader_names:
                     cl_cmd = f"classloader | grep '{cl_name}' | head -1 | awk '{{print $1}}'"
-                    cl_result = connection.client.exec_once(cl_cmd, timeout_ms=10000)
+                    cl_result = ArthasCommandExecutor.execute(connection, cl_cmd, timeout_ms=10000)
                     
                     if cl_result.get('state') in ('SUCCEEDED', 'succeeded'):
                         cl_output = cl_result.get('message', '').strip()
@@ -515,7 +517,7 @@ class HotfixService:
             if not class_loader_hash:
                 log.info("[MC] 尝试获取所有 ClassLoader 列表")
                 all_cl_cmd = "classloader | head -20"
-                all_cl_result = connection.client.exec_once(all_cl_cmd, timeout_ms=10000)
+                all_cl_result = ArthasCommandExecutor.execute(connection, all_cl_cmd, timeout_ms=10000)
                 
                 if all_cl_result.get('state') in ('SUCCEEDED', 'succeeded'):
                     all_cl_output = all_cl_result.get('message', '')
@@ -550,7 +552,7 @@ class HotfixService:
                 
                 for main_class in main_classes:
                     sc_main_cmd = f"sc -d {main_class} 2>/dev/null | grep 'classLoaderHash' | head -1 | awk '{{print $2}}'"
-                    sc_main_result = connection.client.exec_once(sc_main_cmd, timeout_ms=10000)
+                    sc_main_result = ArthasCommandExecutor.execute(connection, sc_main_cmd, timeout_ms=10000)
                     
                     if sc_main_result.get('state') in ('SUCCEEDED', 'succeeded'):
                         sc_main_output = sc_main_result.get('message', '')
@@ -573,7 +575,7 @@ class HotfixService:
             
             log.info("[MC] 执行命令: %s", command)
             
-            result = connection.client.exec_once(command, timeout_ms=60000)
+            result = ArthasCommandExecutor.execute(connection, command, timeout_ms=60000)
             
             log.info("[MC] 响应: state=%s, message=%s", result.get('state'), result.get('message', '')[:200])
             # ✅ 输出完整的 body 结构,帮助诊断
@@ -753,7 +755,7 @@ class HotfixService:
 
             # 执行 redefine 命令
             command = f"redefine {class_file_path}"
-            result = connection.client.exec_once(command)
+            result = ArthasCommandExecutor.execute(connection, command)
 
             if result.get('state') in ('SUCCEEDED', 'succeeded'):
                 output = result.get('message', '')

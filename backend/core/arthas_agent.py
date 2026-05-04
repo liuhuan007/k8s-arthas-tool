@@ -180,6 +180,10 @@ class ArthasAgentManager:
             else:
                 # ✅ 无进程,说明是残留的端口转发,关闭后重新安装
                 log.warning("[Agent Reuse] HTTP reachable but no Arthas process found, closing port-forward and reinstalling")
+                # ✅ 关键修复: 先清理 Pod 内残留的 HTTP 端口占用
+                log.info("[Agent Reuse] 清理 Pod 内残留的 Arthas HTTP 端口 %d", port)
+                self._exec(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
+                time.sleep(1)
                 # 返回特殊标记,让上层关闭端口转发
                 return False, "REINSTALL_NEEDED"
 
