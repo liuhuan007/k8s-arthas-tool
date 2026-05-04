@@ -59,6 +59,29 @@ app = Flask(__name__,
     static_url_path=Config.STATIC_URL_PATH,
 )
 app.secret_key = Config.SECRET_KEY
+
+# ✅ 新增: 初始化 WebSocket
+from backend.websocket_server import init_websocket
+init_websocket(app)
+
+# ✅ 新增: 注册全局异常处理器
+from backend.exceptions import register_error_handlers
+register_error_handlers(app)
+
+# ✅ 新增: 提供 external_links.json 配置
+@app.route('/external_links.json')
+def serve_external_links():
+    """提供外部链接配置"""
+    try:
+        import json
+        with open(Config.EXTERNAL_LINKS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data, 200, {'Content-Type': 'application/json'}
+    except FileNotFoundError:
+        return {'links': [], 'categories': {}}, 200, {'Content-Type': 'application/json'}
+    except Exception as e:
+        return {'error': str(e)}, 500, {'Content-Type': 'application/json'}
+
 CORS(app, supports_credentials=True, resources={
     r"/api/*": {
         "origins": os.environ.get('CORS_ORIGINS', 'http://127.0.0.1:5001,http://localhost:5001').split(','),
@@ -129,6 +152,14 @@ def load_user(user_id: int):
 
 # 注册 API 蓝图
 register_blueprints(app)
+
+# ✅ 关键修复: 首先初始化主数据库表 (users, clusters, connections 等)
+try:
+    db.initialize()
+    print("✓ 数据库初始化成功")
+except Exception as e:
+    print(f"✗ 数据库初始化失败: {e}")
+    raise
 
 # 初始化 MCP 数据库表
 from api.mcp_proxy import init_mcp_tables
@@ -334,6 +365,13 @@ def check_pod():
 _connections: Dict[str, dict] = {}
 _connections_lock = threading.Lock()
 
+# ✅ 关键修复: 初始化 ConnectionStateManager
+from backend.core.connection_state import ConnectionStateManager
+_state_manager = ConnectionStateManager(db)
+# 启动 TTL 清理 (每 30 分钟)
+_state_manager.schedule_ttl_cleanup(interval_seconds=1800)
+log.info("ConnectionStateManager initialized with TTL cleanup (30min interval)")
+
 
 # 注册 Pod 连接 API（轻量级，无需 Arthas）
 from api.pod_apis import register_pod_apis
@@ -386,7 +424,8 @@ def arthas_connect():
     
     # 创建连接
     target = PodTarget(cluster_name=cluster_name, namespace=namespace, pod_name=pod, container=container)
-    conn = ArthasConnection(runner, target)
+    conn = ArthasConnection(runner, target, state_manager=_state_manager)
+    conn.connection_id = conn_id  # ✅ 设置 connection_id 用于状态管理
     
     # 如果用户指定了 PID，设置到 agent manager 中
     if java_pid:
@@ -528,7 +567,8 @@ def _ensure_connection(conn_id: str, d: dict):
         return None, f"连接已丢失，自动重连失败: {err}"
 
     target = PodTarget(cluster_name=cluster_name, namespace=namespace, pod_name=pod, container=container)
-    conn = ArthasConnection(runner, target)
+    conn = ArthasConnection(runner, target, state_manager=_state_manager)
+    conn.connection_id = conn_id  # ✅ 设置 connection_id 用于状态管理
     ok, msg = conn.connect()
     if not ok:
         err_str = msg.get("message", str(msg)) if isinstance(msg, dict) else msg

@@ -104,13 +104,17 @@ class ArthasConnection:
     _used_ports: set = set()
     _port_lock = threading.Lock()  # 端口分配线程安全锁
 
-    def __init__(self, executor, target):
+    def __init__(self, executor, target, state_manager=None):
         from .arthas_agent import ArthasAgentManager
         from .arthas_client import ArthasHttpClient
         from .pod_connection import PodConnection
 
         self.executor = executor
         self.target = target
+        
+        # ✅ 关键修复: 接入 ConnectionStateManager
+        self.state_manager = state_manager
+        self.connection_id = None  # 由外部设置
         
         # 创建底层 Pod 连接
         self.pod_conn = PodConnection(executor, target)
@@ -197,7 +201,28 @@ class ArthasConnection:
     # ── State change callback ────────────────────────────────────────────────
 
     def _notify_state_change(self, state: ConnectionState, message: str):
-        """Notify state change callback if registered."""
+        """Notify state change through ConnectionStateManager and callback."""
+        # ✅ 关键修复: 通过 ConnectionStateManager 统一状态转换
+        if self.state_manager and self.connection_id:
+            try:
+                # 获取当前状态
+                current_info = self.state_manager.get_connection_state(self.connection_id)
+                current_state = current_info.get("state", ConnectionState.DISCONNECTED)
+                
+                # 通过状态管理器执行转换
+                success = self.state_manager.transition_state(
+                    self.connection_id,
+                    current_state,
+                    state,
+                    message=message
+                )
+                if not success:
+                    log.warning("State transition rejected by manager: %s -> %s", 
+                               current_state.value, state.value)
+            except Exception as e:
+                log.error("State manager transition error: %s", e, exc_info=True)
+        
+        # 保持向后兼容: 调用旧版回调
         if self._on_state_change is not None:
             try:
                 self._on_state_change(state, message)
@@ -237,14 +262,23 @@ class ArthasConnection:
 
         # 短路：Arthas 已经就绪
         if self._arthas_ready and self.client and self.client.ping(retries=1, delay=0):
-            self._notify_state_change(ConnectionState.HTTP_REUSABLE, "Existing HTTP connection reusable")
-            log.info("Arthas already ready (port=%d) — reusing", self.local_port)
-            if not self.arthas_version and hasattr(self.client, '_last_version') and self.client._last_version:
-                self.arthas_version = self.client._last_version
-            if not self.arthas_version:
-                self._fetch_version()
-            self._notify_state_change(ConnectionState.READY, f"Arthas ready (port {self.local_port})")
-            return True, f"Arthas 已就绪，复用 (port {self.local_port})"
+            # ✅ 关键修复: 验证 port-forward 进程是否存活
+            if self._pf_proc and self._pf_proc.poll() is not None:
+                log.warning("[Connection Reuse] port-forward process exited (pid=%d), marking connection as stale", 
+                           self._pf_proc.pid)
+                self._arthas_ready = False
+                self._stop_port_forward()
+                self.client = None
+                # 继续执行后续逻辑,重新建立 port-forward
+            else:
+                self._notify_state_change(ConnectionState.HTTP_REUSABLE, "Existing HTTP connection reusable")
+                log.info("Arthas already ready (port=%d) — reusing", self.local_port)
+                if not self.arthas_version and hasattr(self.client, '_last_version') and self.client._last_version:
+                    self.arthas_version = self.client._last_version
+                if not self.arthas_version:
+                    self._fetch_version()
+                self._notify_state_change(ConnectionState.READY, f"Arthas ready (port {self.local_port})")
+                return True, f"Arthas 已就绪，复用 (port {self.local_port})"
 
         # 若 client 已失效但 port-forward 还在，先停掉
         if self._pf_proc:
@@ -374,6 +408,11 @@ class ArthasConnection:
         if not self._arthas_ready:
             return False
         if not self.client:
+            return False
+        # ✅ 关键修复: 验证 port-forward 进程存活
+        if self._pf_proc and self._pf_proc.poll() is not None:
+            log.warning("is_alive: port-forward process exited")
+            self._arthas_ready = False
             return False
         return self.client.ping(retries=1, delay=0)
     

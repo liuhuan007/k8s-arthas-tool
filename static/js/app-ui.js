@@ -794,11 +794,68 @@ function fmtNowTs() {
 
 // ── State ──────────────────────────────────────────────────────────────────────
 let _clusters = [], _ac = null;
-let _connections = [], _currentConnId = null;
-let _connected = false, _ap = null;
-let _connHealth = {};  // { connId: { alive, pod_exists, pod_phase, reason } }
+
+// ✅ 使用 ConnectionStore 统一管理连接状态 (替代全局变量)
+// 旧变量保留为 ConnectionStore 的引用,保证向后兼容
+let _connections = [];
+let _currentConnId = null;
+let _connected = false;
+let _ap = null;
+let _connHealth = {};
+let _connState = 'disconnected';
+let _runtimeInfo = null;
+
+// ✅ 初始化 ConnectionStore 同步
+function _initConnectionStore() {
+  if (typeof ConnectionStore === 'undefined') {
+    console.warn('[app-ui] ConnectionStore not loaded, using legacy state');
+    return;
+  }
+  
+  // 从 ConnectionStore 同步到本地变量
+  const state = ConnectionStore.getState();
+  _connections = state.connections;
+  _currentConnId = state.currentConnId;
+  _connState = state.connState;
+  _runtimeInfo = state.runtimeInfo;
+  _connHealth = state.connHealth;
+  
+  // 订阅状态变化
+  ConnectionStore.subscribe((newState, oldState) => {
+    // 更新本地变量
+    _connections = newState.connections;
+    _currentConnId = newState.currentConnId;
+    _connState = newState.connState;
+    _runtimeInfo = newState.runtimeInfo;
+    _connHealth = newState.connHealth;
+    
+    // 更新 UI
+    if (newState.currentConnId !== oldState.currentConnId) {
+      renderConnList();
+      updateConnectionButton();
+    }
+    if (newState.connState !== oldState.connState) {
+      updateFeatureTabs();
+    }
+  });
+  
+  console.log('[app-ui] ConnectionStore synced');
+}
+
 // 同步模块内部状态到 window，供 ai-chat.js / 外部组件读取
 function _mergeExternalConnectionState() {
+  // ✅ 优先从 ConnectionStore 获取
+  if (typeof ConnectionStore !== 'undefined') {
+    const state = ConnectionStore.getState();
+    _connections = state.connections;
+    _currentConnId = state.currentConnId;
+    _connState = state.connState;
+    _runtimeInfo = state.runtimeInfo;
+    _connHealth = state.connHealth;
+    return;
+  }
+  
+  // 向后兼容: 从 window 变量合并
   const externalConns = Array.isArray(window._connections) ? window._connections : [];
   if (externalConns.length && externalConns !== _connections) {
     const merged = new Map();
@@ -819,6 +876,20 @@ function _mergeExternalConnectionState() {
 
 function _syncState() {
   _mergeExternalConnectionState();
+  
+  // ✅ 优先使用 ConnectionStore
+  if (typeof ConnectionStore !== 'undefined') {
+    ConnectionStore.setState({
+      connections: _connections,
+      currentConnId: _currentConnId,
+      connState: _connState,
+      runtimeInfo: _runtimeInfo,
+      connHealth: _connHealth,
+    });
+    return;
+  }
+  
+  // 向后兼容: 同步到 window
   window._connections  = _connections;
   window._currentConnId = _currentConnId;
   window._connHealth   = _connHealth;
@@ -974,6 +1045,146 @@ function _formatLastActive(timestamp) {
     console.warn('[时间格式化] 失败:', e);
     return timestamp;
   }
+}
+
+/**
+ * ✅ 新增: 一键重连当前连接
+ */
+async function reconnectCurrentConnection() {
+  const connId = _currentConnId;
+  if (!connId) {
+    toast('没有可重连的连接', 'warning');
+    return;
+  }
+  
+  const conn = _connections.find(c => c.id === connId);
+  if (!conn) {
+    toast('连接不存在', 'error');
+    return;
+  }
+  
+  toast(`正在重连 ${conn.pod_name || conn.pod}...`, 'info');
+  
+  try {
+    // 1. 先断开现有连接
+    await disconnectPod(false);
+    
+    // 2. 等待 1 秒
+    await new Promise(r => setTimeout(r, 1000));
+    
+    // 3. 重新建立 Pod 连接
+    await podConnect();
+    
+    // 4. 如果之前是 Arthas 连接,自动升级
+    if (conn.level === 'arthas' || conn.status === 'ready') {
+      toast('正在恢复 Arthas 连接...', 'info');
+      await new Promise(r => setTimeout(r, 1500));
+      await upgradeToArthas();
+    }
+    
+  } catch (e) {
+    console.error('[Reconnect] Error:', e);
+    toast(`重连失败: ${e.message}`, 'error');
+  }
+}
+
+/**
+ * ✅ 新增: 查看 Arthas 启动日志
+ */
+async function viewArthasStartLog() {
+  const conn = _connections.find(c => c.id === _currentConnId);
+  if (!conn) {
+    toast('请先选择连接', 'warning');
+    return;
+  }
+  
+  const connId = _currentConnId;
+  const clusterName = conn.cluster_name || conn.cluster;
+  const namespace = conn.namespace;
+  const podName = conn.pod_name || conn.pod;
+  
+  if (!clusterName || !namespace || !podName) {
+    toast('连接信息不完整', 'error');
+    return;
+  }
+  
+  toast('正在获取 Arthas 启动日志...', 'info');
+  
+  try {
+    const res = await fetch(`${API}/pod/exec`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'include',
+      body: JSON.stringify({
+        cluster_name: clusterName,
+        namespace: namespace,
+        pod_name: podName,
+        command: 'tail -100 /tmp/arthas_start.log 2>&1 || echo "日志文件不存在"'
+      })
+    });
+    
+    const data = await res.json();
+    if (data.ok) {
+      // 显示日志
+      const output = data.stdout || data.message || '无输出';
+      showArthasLogModal(output);
+    } else {
+      toast(`获取日志失败: ${data.message}`, 'error');
+    }
+  } catch (e) {
+    console.error('[ArthasLog] Error:', e);
+    toast(`获取日志失败: ${e.message}`, 'error');
+  }
+}
+
+/**
+ * 显示 Arthas 日志模态框
+ */
+function showArthasLogModal(logContent) {
+  const modal = document.createElement('div');
+  modal.style.cssText = `
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: rgba(0, 0, 0, 0.85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10000;
+  `;
+  
+  const content = document.createElement('div');
+  content.style.cssText = `
+    background: var(--bg-2);
+    border: 1px solid var(--br);
+    border-radius: 8px;
+    width: 80%;
+    max-width: 900px;
+    max-height: 80%;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+  `;
+  
+  content.innerHTML = `
+    <div style="padding: 16px; border-bottom: 1px solid var(--br); display: flex; justify-content: space-between; align-items: center;">
+      <h3 style="margin: 0; color: var(--tx);">Arthas 启动日志</h3>
+      <button onclick="this.closest('div').parentElement.parentElement.remove()" style="background: none; border: none; color: var(--tx-2); cursor: pointer; font-size: 20px; padding: 4px 8px;">&times;</button>
+    </div>
+    <pre style="flex: 1; overflow-y: auto; padding: 16px; margin: 0; background: var(--bg-3); color: var(--tx-2); font-family: monospace; font-size: 12px; white-space: pre-wrap; word-break: break-all;">${logContent}</pre>
+  `;
+  
+  modal.appendChild(content);
+  document.body.appendChild(modal);
+  
+  // 点击背景关闭
+  modal.addEventListener('click', (e) => {
+    if (e.target === modal) {
+      modal.remove();
+    }
+  });
 }
 
 function renderConnList() {
@@ -6006,3 +6217,10 @@ window.hotswapReset = hotswapReset;
 window.hotswapJad = hotswapJad;
 window.hotswapMc = hotswapMc;
 window.hotswapRetransform = hotswapRetransform;
+
+// ✅ 初始化 ConnectionStore (DOM Ready 后)
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initConnectionStore);
+} else {
+  _initConnectionStore();
+}

@@ -342,11 +342,12 @@ class HotfixService:
                 
                 # ✅ 从 clusters.json 查找实际的 kubectl context 和 kubeconfig
                 import json
+                from backend.config import Config
                 context_name = cluster_name  # 默认使用集群名称
                 kubeconfig_path = None  # kubeconfig 文件路径
                 
                 try:
-                    clusters_file = Path(__file__).parents[1] / 'clusters.json'
+                    clusters_file = Path(Config.CLUSTERS_FILE)
                     if clusters_file.exists():
                         with open(clusters_file, 'r', encoding='utf-8') as f:
                             clusters = json.load(f)
@@ -537,9 +538,32 @@ class HotfixService:
                             log.info("[MC] 使用应用 ClassLoader: %s (%s)", class_loader_hash, line)
                             break
             
-            # 策略 D: 最后兜底
+            # 策略 D: 从 Spring Boot 主类提取 ClassLoader
+            if not class_loader_hash:
+                log.info("[MC] 尝试从 Spring Boot 主类提取 ClassLoader")
+                # 常见 Spring Boot 主类
+                main_classes = [
+                    'org.springframework.boot.SpringApplication',
+                    'com.seeyon.boot.Application',  # 致远特定
+                    'org.springframework.boot.loader.Launcher',
+                ]
+                
+                for main_class in main_classes:
+                    sc_main_cmd = f"sc -d {main_class} 2>/dev/null | grep 'classLoaderHash' | head -1 | awk '{{print $2}}'"
+                    sc_main_result = connection.client.exec_once(sc_main_cmd, timeout_ms=10000)
+                    
+                    if sc_main_result.get('state') in ('SUCCEEDED', 'succeeded'):
+                        sc_main_output = sc_main_result.get('message', '')
+                        match = re.search(r'([0-9a-fA-F]{8,16})', sc_main_output)
+                        if match:
+                            class_loader_hash = match.group(1)
+                            log.info("[MC] 从 %s 找到 ClassLoader: %s", main_class, class_loader_hash)
+                            break
+            
+            # 策略 E: 最后兜底
             if not class_loader_hash:
                 log.warning("[MC] 未找到应用 ClassLoader,使用默认 (可能缺少依赖)")
+                log.warning("[MC] 建议: 在 Pod 内执行 'classloader' 命令手动查找 hash")
             
             # 2. 构建 MC 命令 (如果有 ClassLoader hash,使用 -c 参数)
             if class_loader_hash:

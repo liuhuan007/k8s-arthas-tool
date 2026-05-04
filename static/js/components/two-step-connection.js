@@ -22,18 +22,63 @@ const ConnectionState = {
 };
 
 /**
- * 当前连接状态
+ * ✅ 使用 ConnectionStore 统一管理状态
+ * 旧变量保留为 ConnectionStore 的引用,保证向后兼容
  */
 let _connState = ConnectionState.DISCONNECTED;
-let _podConnId = null;       // Pod 连接 ID
-let _runtimeInfo = null;     // 运行时信息
-let _podPhase = null;        // Pod 阶段
+let _podConnId = null;
+let _runtimeInfo = null;
+let _podPhase = null;
+
+/**
+ * ✅ 初始化 ConnectionStore 同步
+ */
+function _initTwoStepConnectionStore() {
+  if (typeof ConnectionStore === 'undefined') {
+    console.warn('[two-step-connection] ConnectionStore not loaded, using legacy state');
+    return;
+  }
+  
+  // 从 ConnectionStore 同步到本地变量
+  const state = ConnectionStore.getState();
+  _connState = state.connState;
+  _runtimeInfo = state.runtimeInfo;
+  _podPhase = state.podPhase;
+  _podConnId = state.podConnId;
+  
+  // 订阅状态变化
+  ConnectionStore.subscribe((newState, oldState) => {
+    // 更新本地变量
+    _connState = newState.connState;
+    _runtimeInfo = newState.runtimeInfo;
+    _podPhase = newState.podPhase;
+    _podConnId = newState.podConnId;
+    
+    // 更新 UI
+    updateConnectionButton();
+    updateRuntimeDisplay();
+  });
+  
+  console.log('[two-step-connection] ConnectionStore synced');
+}
 
 function resetTwoStepConnectionState() {
+  // ✅ 优先使用 ConnectionStore
+  if (typeof ConnectionStore !== 'undefined') {
+    ConnectionStore.setState({
+      connState: ConnectionState.DISCONNECTED,
+      runtimeInfo: null,
+      podPhase: null,
+      podConnId: null,
+    });
+  }
+  
+  // 更新本地变量
   _connState = ConnectionState.DISCONNECTED;
   _podConnId = null;
   _runtimeInfo = null;
   _podPhase = null;
+  
   if (typeof updateConnectionButton === 'function') updateConnectionButton();
   if (typeof updateRuntimeDisplay === 'function') updateRuntimeDisplay();
   const statusEl = document.getElementById('connStatus');
@@ -44,6 +89,10 @@ function resetTwoStepConnectionState() {
  * 获取连接状态
  */
 function getConnectionState() {
+  // ✅ 优先从 ConnectionStore 获取
+  if (typeof ConnectionStore !== 'undefined') {
+    return ConnectionStore.getConnectionState();
+  }
   return _connState;
 }
 
@@ -51,9 +100,8 @@ function getConnectionState() {
  * 检查是否可以升级到 Arthas
  */
 function canUpgradeToArthas() {
-  return _connState === ConnectionState.POD_CONNECTED && 
-         _runtimeInfo && 
-         _runtimeInfo.runtime_type === 'java';
+  // ✅ 移除 Java 检查,因为本工具就是针对 Java 应用的
+  return _connState === ConnectionState.POD_CONNECTED && _runtimeInfo;
 }
 
 // ── UI 更新函数 ──────────────────────────────────────────────────────────────
@@ -276,35 +324,20 @@ function updateRuntimeDisplay() {
       </div>
     `;
   } else if (isPod) {
-    if (_runtimeInfo.runtime_type === 'java') {
-      html += `
-        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--a4);">
-          <div style="margin-bottom: 4px;">💡 Pod 已连接 — 可启动 Arthas 解锁深度诊断</div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <span class="feature-tag">📊 监控</span>
-            <span class="feature-tag">📁 文件</span>
-            <span class="feature-tag">🖥️ 终端</span>
-            <span class="feature-tag">🔬 诊断</span>
-            <span class="feature-tag" style="opacity:.4;text-decoration:line-through">⚡ Arthas</span>
-            <span class="feature-tag" style="opacity:.4;text-decoration:line-through">🔥 采样</span>
-          </div>
+    // ✅ 移除 Java 检查,简化提示
+    html += `
+      <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--a4);">
+        <div style="margin-bottom: 4px;">💡 Pod 已连接 — 可启动 Arthas 解锁深度诊断</div>
+        <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+          <span class="feature-tag">📊 监控</span>
+          <span class="feature-tag">📁 文件</span>
+          <span class="feature-tag">🖥️ 终端</span>
+          <span class="feature-tag">🔬 诊断</span>
+          <span class="feature-tag" style="opacity:.4;text-decoration:line-through">⚡ Arthas</span>
+          <span class="feature-tag" style="opacity:.4;text-decoration:line-through">🔥 采样</span>
         </div>
-      `;
-    } else {
-      html += `
-        <div style="margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); color: var(--a3);">
-          <div style="margin-bottom: 4px;">✓ Pod 已连接（${_runtimeInfo.runtime_type} 运行时）</div>
-          <div style="display: flex; gap: 8px; flex-wrap: wrap;">
-            <span class="feature-tag">📊 监控</span>
-            <span class="feature-tag">📁 文件</span>
-            <span class="feature-tag">🖥️ 终端</span>
-            <span class="feature-tag">🔬 诊断</span>
-            <span class="feature-tag" style="opacity:.4;text-decoration:line-through">⚡ Arthas</span>
-            <span class="feature-tag" style="opacity:.4;text-decoration:line-through">🔥 采样</span>
-          </div>
-        </div>
-      `;
-    }
+      </div>
+    `;
   }
 
   html += `</div>`;
@@ -453,12 +486,8 @@ async function podConnect() {
       'success'
     );
 
-    // 显示提示
-    if (_runtimeInfo.runtime_type === 'java') {
-      toast('Pod 连接成功，可启动 Arthas 进行深度诊断', 'success');
-    } else {
-      toast(`Pod 连接成功 (${_runtimeInfo.runtime_type})，基础运维功能已可用`, 'success');
-    }
+    // ✅ 移除 Java 检查,统一提示
+    toast('Pod 连接成功，可启动 Arthas 进行深度诊断', 'success');
 
     // 同步到全局状态
     _syncState && _syncState();
@@ -817,3 +846,17 @@ window.resetTwoStepConnectionState = resetTwoStepConnectionState;
     configurable: true
   });
 })();
+
+// ✅ 初始化 ConnectionStore (DOM Ready 后)
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initTwoStepConnectionStore);
+} else {
+  _initTwoStepConnectionStore();
+}
+
+// ✅ 暴露全局函数
+console.log('[two-step-connection] Exposing global functions...');
+window.podConnect = podConnect;
+window.upgradeToArthas = upgradeToArthas;
+console.log('[two-step-connection] podConnect exposed:', typeof window.podConnect);
+console.log('[two-step-connection] upgradeToArthas exposed:', typeof window.upgradeToArthas);

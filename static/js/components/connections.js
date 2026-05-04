@@ -8,28 +8,50 @@
  */
 
 // ── State ─────────────────────────────────────────────────────────────────
-// _connections, _currentConnId 在 app-ui.js 中声明，使用 window 访问
+// ✅ 使用 ConnectionStore 统一管理连接状态
 
 // ── 获取/设置 ────────────────────────────────────────────────────────────
 
 function getConnections() {
+  // ✅ 优先从 ConnectionStore 获取
+  if (typeof ConnectionStore !== 'undefined') {
+    return ConnectionStore.getConnections();
+  }
   return window._connections || [];
 }
 
 function setConnections(conns) {
-  window._connections = conns || [];
+  // ✅ 优先使用 ConnectionStore
+  if (typeof ConnectionStore !== 'undefined') {
+    ConnectionStore.setState({ connections: conns || [] });
+  } else {
+    window._connections = conns || [];
+  }
   saveConnections();
 }
 
 function getCurrentConnId() {
+  // ✅ 优先从 ConnectionStore 获取
+  if (typeof ConnectionStore !== 'undefined') {
+    return ConnectionStore.getCurrentConnId();
+  }
   return window._currentConnId || null;
 }
 
 function setCurrentConnId(id) {
-  window._currentConnId = id;
+  // ✅ 优先使用 ConnectionStore
+  if (typeof ConnectionStore !== 'undefined') {
+    ConnectionStore.setCurrentConnection(id);
+  } else {
+    window._currentConnId = id;
+  }
 }
 
 function getCurrentConnection() {
+  // ✅ 优先从 ConnectionStore 获取
+  if (typeof ConnectionStore !== 'undefined') {
+    return ConnectionStore.getCurrentConnection();
+  }
   return (window._connections || []).find(c => c.id === (window._currentConnId || null)) || null;
 }
 

@@ -57,8 +57,17 @@ document.addEventListener('DOMContentLoaded', function() {
 <script src="js/app-ui.js?v=20260411i"></script>
 <script src="js/app.js"></script>
 
+<!-- ✅ 新增: 统一状态管理 -->
+<script src="js/core/connection-store.js?v=20260503"></script>
+
+<!-- ✅ 新增: WebSocket 实时推送 -->
+<script src="js/core/websocket-client.js?v=20260503"></script>
+
+<!-- ✅ 新增: 外部链接菜单 -->
+<script src="js/components/external-links.js?v=20260503"></script>
+
 <!-- 两步连接流程组件 -->
-<script src="js/components/two-step-connection.js?v=20260419a"></script>
+<script src="js/components/two-step-connection.js?v=20260503c"></script>
 
 <!-- 连接引导守卫 -->
 <script src="js/components/connection-guard.js?v=20260419a"></script>
@@ -82,6 +91,15 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="tb-right">
     <div class="tb-srv"><div class="dot" id="svDot"></div><span id="svLbl">连接中...</span></div>
     <span id="arthasVerTop" class="ver-badge-top" style="display:none"></span>
+    <!-- ✅ 新增: 帮助文档链接 -->
+    <div class="tb-links" style="margin-right:12px;">
+      <a href="https://arthas.aliyun.com/en/doc/" target="_blank" class="tb-lnk" style="font-size:12px;color:var(--tx2);">
+        📖 文档
+      </a>
+      <a href="https://arthas.aliyun.com/en/doc/commands.html" target="_blank" class="tb-lnk" style="font-size:12px;color:var(--tx2);">
+        📋 命令手册
+      </a>
+    </div>
     <div class="tb-user tb-dropdown">
       <a class="tb-lnk tb-user-link" href="javascript:void(0)">👤 <span id="loginUser">—</span> ▾</a>
       <div class="tb-dropdown-menu tb-dropdown-menu-right">
@@ -98,15 +116,16 @@ document.addEventListener('DOMContentLoaded', function() {
 <!-- ── Sidebar ── -->
 <div class="sidebar">
   <div class="side-nav">
-    <div class="side-nav-group" data-side-group="base">
+    <div class="side-nav-group side-nav-group-expanded" data-side-group="base">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>基础能力</span><span class="side-nav-arrow">▾</span></button>
-      <div class="side-nav-items">
+      <div class="side-nav-items" style="display:block;">
         <button class="side-nav-item primary" data-nav-tab="connections" onclick="openConnectionCenter()"><span>🔌</span><span>连接中心</span></button>
       </div>
     </div>
-    <div class="side-nav-group" data-side-group="diagnosis">
+    <!-- ✅ 默认展开: 诊断工作台 -->
+    <div class="side-nav-group side-nav-group-expanded" data-side-group="diagnosis">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>诊断工作台</span><span class="side-nav-arrow">▾</span></button>
-      <div class="side-nav-items">
+      <div class="side-nav-items" style="display:block;">
         <button class="side-nav-item" data-nav-tab="profiler" onclick="switchTab('profiler')"><span>🔥</span><span>采样工具</span></button>
         <button class="side-nav-item" data-nav-tab="console" onclick="switchTab('console')"><span>⚡</span><span>Arthas命令</span></button>
         <button class="side-nav-item" data-nav-tab="hotfix" onclick="switchTab('hotfix')"><span>🔧</span><span>热修复</span></button>
@@ -117,33 +136,34 @@ document.addEventListener('DOMContentLoaded', function() {
         <button class="side-nav-item" data-nav-tab="history" onclick="switchTab('history')"><span>📋</span><span>历史记录</span></button>
       </div>
     </div>
-    <div class="side-nav-group" data-side-group="ai">
-      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>AI 能力</span><span class="side-nav-arrow">▾</span></button>
+    <div class="side-nav-group collapsed" data-side-group="ai">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>AI 能力</span><span class="side-nav-arrow"></span></button>
       <div class="side-nav-items">
         <button class="side-nav-item" data-nav-tab="ai" onclick="switchTab('ai')"><span>🤖</span><span>AI 助手</span></button>
         <button class="side-nav-item" data-nav-tab="model-config" onclick="switchTab('model-config')"><span>⚙️</span><span>模型配置</span></button>
         <button class="side-nav-item" data-nav-tab="mcp-center" onclick="switchTab('mcp-center')"><span>🔌</span><span>MCP 接入</span></button>
       </div>
     </div>
-    <div class="side-nav-group" data-side-group="extension">
-      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>扩展能力</span><span class="side-nav-arrow">▾</span></button>
+    <div class="side-nav-group collapsed" data-side-group="extension">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>扩展能力</span><span class="side-nav-arrow"></span></button>
       <div class="side-nav-items">
-        <button class="side-nav-item" data-nav-tab="task-center" onclick="openTaskCenter()"><span>⏱️</span><span>任务中心</span></button>
+        <button class="side-nav-item" data-nav-tab="task-center" onclick="openTaskCenter()"><span>️</span><span>任务中心</span></button>
         <button class="side-nav-item" data-nav-tab="toolchain-center" onclick="openToolchainCenter()"><span>🧰</span><span>工具链</span></button>
       </div>
     </div>
-    <div class="side-nav-group admin-only" data-side-group="system">
-      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>系统管理</span><span class="side-nav-arrow">▾</span></button>
+    <!-- ✅ 新增: 外部系统菜单 (默认折叠) -->
+    <div class="side-nav-group collapsed" data-side-group="external">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>外部系统</span><span class="side-nav-arrow"></span></button>
+      <div class="side-nav-items" id="externalLinksMenu">
+        <!-- 动态加载 -->
+        <div class="sb-empty">加载中...</div>
+      </div>
+    </div>
+    <div class="side-nav-group admin-only collapsed" data-side-group="system">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>系统管理</span><span class="side-nav-arrow"></span></button>
       <div class="side-nav-items">
         <button class="side-nav-item" data-nav-tab="user-management" onclick="switchTab('user-management')"><span>👥</span><span>用户管理</span></button>
         <button class="side-nav-item" data-nav-tab="audit-logs" onclick="switchTab('audit-logs')"><span>📋</span><span>审计日志</span></button>
-      </div>
-    </div>
-    <div class="side-nav-group" data-side-group="help">
-      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>帮助文档</span><span class="side-nav-arrow">▾</span></button>
-      <div class="side-nav-items">
-        <button class="side-nav-item" onclick="window.open('https://arthas.aliyun.com/en/doc/','_blank')"><span>📖</span><span>Arthas 官方文档</span></button>
-        <button class="side-nav-item" onclick="window.open('https://arthas.aliyun.com/en/doc/commands.html','_blank')"><span>📋</span><span>命令手册</span></button>
       </div>
     </div>
   </div>
@@ -196,6 +216,49 @@ document.addEventListener('DOMContentLoaded', function() {
 
   <div class="panels">
 
+    <!-- ✅ 新增: 外部系统 iframe 面板 -->
+    <div class="panel" id="panel-external-system">
+      <div style="display:flex;flex-direction:column;height:100%;">
+        <!-- 工具栏 -->
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;border-bottom:1px solid var(--ln);background:var(--bg1);">
+          <button class="ib" onclick="closeExternalSystem()" title="关闭">✕</button>
+          <span id="externalSystemTitle" style="font-weight:600;color:var(--tx);">外部系统</span>
+          <div style="flex:1;"></div>
+          <button class="ib" onclick="reloadExternalSystem()" title="刷新">↻</button>
+          <button class="ib" onclick="openExternalInNewTab()" title="在新标签页打开">🔗</button>
+        </div>
+        <!-- iframe 容器 -->
+        <div style="flex:1;position:relative;background:var(--bg);">
+          <iframe 
+            id="externalSystemIframe" 
+            style="width:100%;height:100%;border:none;display:none;"
+            sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+            referrerpolicy="no-referrer"
+          ></iframe>
+          <!-- 加载状态 -->
+          <div id="externalSystemLoading" style="position:absolute;top:0;left:0;right:0;bottom:0;display:flex;align-items:center;justify-content:center;background:var(--bg);">
+            <div style="text-align:center;">
+              <div style="font-size:48px;margin-bottom:16px;">⏳</div>
+              <div style="color:var(--tx2);">加载中...</div>
+            </div>
+          </div>
+          <!-- 错误提示 -->
+          <div id="externalSystemError" style="position:absolute;top:0;left:0;right:0;bottom:0;display:none;align-items:center;justify-content:center;background:var(--bg);">
+            <div style="text-align:center;max-width:500px;padding:32px;">
+              <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
+              <div style="font-size:16px;font-weight:600;color:var(--tx);margin-bottom:8px;">无法嵌入此系统</div>
+              <div style="color:var(--tx2);font-size:13px;margin-bottom:24px;">
+                该外部系统可能不允许 iframe 嵌入 (X-Frame-Options 限制)
+              </div>
+              <button class="pt-btn" onclick="openExternalInNewTab()">
+                🔗 在新标签页打开
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- Connection Center -->
     <div class="panel on" id="panel-connections">
       <div class="conn-center">
@@ -218,6 +281,12 @@ document.addEventListener('DOMContentLoaded', function() {
               <div>
                 <div class="conn-card-title">连接配置</div>
                 <div class="conn-card-sub">按“选择集群 → 选择目标 → 建立 Pod 连接 → 按需升级 Arthas”的顺序操作</div>
+              </div>
+              <div style="display:flex;gap:8px">
+                <!-- ✅ 新增: 一键重连 -->
+                <button class="mini-action" onclick="reconnectCurrentConnection()" title="一键重连">🔁</button>
+                <!-- ✅ 新增: 查看日志 -->
+                <button class="mini-action" onclick="viewArthasStartLog()" title="查看 Arthas 启动日志">📄</button>
               </div>
             </div>
             <div class="conn-builder-body">

@@ -7,8 +7,9 @@ const API_BASE = (() => {
 })();
 
 let currentPage = 0;
-const pageSize = 50;
+let pageSize = 50;  // ✅ 默认50条,可修改
 let allLogs = [];
+let totalLogs = 0;  // 记录总数
 
 // 页面加载时获取用户列表和日志
 document.addEventListener('DOMContentLoaded', async () => {
@@ -72,6 +73,7 @@ async function loadLogs() {
     if (endDate) params.append('end_date', endDate);
     params.append('limit', pageSize);
     params.append('offset', currentPage * pageSize);
+    params.append('page_size', pageSize);  // ✅ 传递每页条数
 
     try {
         const res = await fetch(`${API_BASE}/audit-logs?${params}`, { credentials: 'include' });
@@ -82,8 +84,10 @@ async function loadLogs() {
             return;
         }
         const data = await res.json();
-        renderLogs(data.logs || []);
-        updatePagination(data.logs?.length || 0);
+        allLogs = data.logs || [];
+        totalLogs = data.total || 0;  // ✅ 记录总数
+        renderLogs(allLogs);
+        updatePagination(allLogs.length, totalLogs);  // ✅ 传递总数
     } catch (e) {
         console.error('加载审计日志失败:', e);
         tbody.innerHTML = '<tr><td colspan="7" class="empty-state">加载失败</td></tr>';
@@ -175,10 +179,50 @@ function escapeHtml(text) {
     return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function updatePagination(count) {
-    document.getElementById('pageInfo').textContent = `第 ${currentPage + 1} 页`;
+function updatePagination(currentCount, total) {
+    const totalPages = Math.ceil(total / pageSize) || 1;
+    const currentPageNum = currentPage + 1;
+    
+    // ✅ 更新分页信息
+    document.getElementById('pageInput').value = currentPageNum;
+    document.getElementById('pageInput').max = totalPages;
+    document.getElementById('pageInfo').textContent = `/ ${totalPages} 页`;
+    document.getElementById('totalInfo').textContent = `(共 ${total} 条)`;
+    
     document.getElementById('prevBtn').disabled = currentPage === 0;
-    document.getElementById('nextBtn').disabled = count < pageSize;
+    document.getElementById('nextBtn').disabled = currentPage >= totalPages - 1 || currentCount === 0;
+}
+
+/**
+ * ✅ 新增: 跳转到指定页
+ */
+function jumpToPage() {
+    const input = document.getElementById('pageInput');
+    const pageNum = parseInt(input.value);
+    const totalPages = Math.ceil(totalLogs / pageSize) || 1;
+    
+    if (isNaN(pageNum) || pageNum < 1) {
+        input.value = 1;
+        return;
+    }
+    
+    if (pageNum > totalPages) {
+        input.value = totalPages;
+        return;
+    }
+    
+    currentPage = pageNum - 1;
+    loadLogs();
+}
+
+/**
+ * ✅ 新增: 改变每页条数
+ */
+function changePageSize() {
+    const select = document.getElementById('pageSizeSelect');
+    pageSize = parseInt(select.value);
+    currentPage = 0;  // 重置到第一页
+    loadLogs();
 }
 
 function prevPage() {
@@ -189,8 +233,11 @@ function prevPage() {
 }
 
 function nextPage() {
-    currentPage++;
-    loadLogs();
+    const totalPages = Math.ceil(totalLogs / pageSize);
+    if (currentPage < totalPages - 1) {
+        currentPage++;
+        loadLogs();
+    }
 }
 
 function resetFilters() {
@@ -261,3 +308,5 @@ window.resetFilters = resetFilters;
 window.exportLogs = exportLogs;
 window.prevPage = prevPage;
 window.nextPage = nextPage;
+window.jumpToPage = jumpToPage;  // ✅ 暴露跳转函数
+window.changePageSize = changePageSize;  // ✅ 暴露条数切换函数

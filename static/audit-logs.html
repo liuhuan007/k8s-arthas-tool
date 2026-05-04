@@ -61,11 +61,27 @@
         .bg-connect{background:rgba(251,191,36,.12);color:var(--a6);border:1px solid rgba(251,191,36,.25)}
 
         /* ── Pagination ── */
-        .pagination{margin-top:16px;display:flex;justify-content:center;align-items:center;gap:8px}
+        .pagination{
+            margin-top:16px;
+            margin-bottom:24px;  /* ✅ 增加底部边距,防止被遮挡 */
+            display:flex;
+            justify-content:center;
+            align-items:center;
+            gap:8px;
+            padding:12px 0;
+            background:var(--bg1);  /* ✅ 添加背景色 */
+            border-top:1px solid var(--ln);  /* ✅ 添加顶部分隔线 */
+        }
         .pagination button{padding:5px 12px;border-radius:4px;font-size:11px;font-family:var(--mono);cursor:pointer;background:var(--bg2);color:var(--tx2);border:1px solid var(--ln);transition:all.15s}
         .pagination button:hover{border-color:var(--a);color:var(--a)}
         .pagination button:disabled{opacity:.4;cursor:not-allowed}
         .pagination .page-info{font-size:11px;color:var(--tx3)}
+        
+        /* ✅ 限制表格最大高度,允许滚动 */
+        .tbl-wrap{
+            max-height:calc(100vh - 320px);  /* 视口高度 - topbar - header - filters - pagination */
+            overflow-y:auto;
+        }
 
         .empty-msg{text-align:center;padding:40px;color:var(--tx3);font-size:12px}
         body.embed { overflow:hidden }
@@ -162,8 +178,31 @@
 
             <div class="pagination">
                 <button id="prevBtn" onclick="prevPage()">← 上一页</button>
-                <span class="page-info" id="pageInfo">第 1 页</span>
+                
+                <!-- ✅ 新增: 页数跳转 -->
+                <span class="page-info">第</span>
+                <input type="number" id="pageInput" min="1" value="1" 
+                       style="width:50px;padding:5px 8px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-family:var(--mono);font-size:11px;text-align:center;"
+                       onkeydown="if(event.key==='Enter'){jumpToPage();}">
+                <span class="page-info" id="pageInfo">/ 1 页</span>
+                <button class="ab ab-g" onclick="jumpToPage()" style="padding:5px 10px;font-size:11px;">跳转</button>
+                
                 <button id="nextBtn" onclick="nextPage()">下一页 →</button>
+                
+                <!-- ✅ 新增: 每页条数设置 -->
+                <div class="fg-sep"></div>
+                <label style="font-size:11px;color:var(--tx2);display:flex;align-items:center;gap:6px;">
+                    每页
+                    <select id="pageSizeSelect" onchange="changePageSize()" 
+                            style="padding:5px 8px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-family:var(--mono);font-size:11px;">
+                        <option value="20">20 条</option>
+                        <option value="50" selected>50 条</option>
+                        <option value="100">100 条</option>
+                        <option value="200">200 条</option>
+                    </select>
+                </label>
+                
+                <span class="page-info" id="totalInfo" style="margin-left:8px;">(共 0 条)</span>
             </div>
         </div>
     </div>

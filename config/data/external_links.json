@@ -1,0 +1,72 @@
+{
+  "version": "1.0",
+  "links": [
+    {
+      "id": "k8s_dashboard",
+      "name": "K8s Dashboard",
+      "icon": "📊",
+      "url": "http://v8ops.seeyonv8.com/",
+      "category": "monitoring",
+      "description": "Kubernetes 集群管理面板",
+      "enabled": true
+    },
+    {
+      "id": "grafana",
+      "name": "Grafana",
+      "icon": "",
+      "url": "https://grafana.example.com/d/kubernetes",
+      "category": "monitoring",
+      "description": "监控指标可视化",
+      "enabled": false
+    },
+    {
+      "id": "jaeger",
+      "name": "Jaeger",
+      "icon": "🔍",
+      "url": "https://jaeger.example.com/search",
+      "category": "tracing",
+      "description": "分布式链路追踪",
+      "enabled": false
+    },
+    {
+      "id": "seeyon_log",
+      "name": "seeyon_log",
+      "icon": "📋",
+      "url": "https://v8omp.seeyonv8.com/",
+      "category": "logging",
+      "description": "日志检索与分析",
+      "enabled": true
+    },
+    {
+      "id": "nacos",
+      "name": "Nacos",
+      "icon": "️",
+      "url": "http://v8nacos.seeyonv8.com/nacos/",
+      "category": "config",
+      "description": "服务注册与配置中心",
+      "enabled": true
+    }
+  ],
+  "categories": {
+    "monitoring": {
+      "name": "监控",
+      "icon": "📊",
+      "order": 1
+    },
+    "tracing": {
+      "name": "链路追踪",
+      "icon": "🔍",
+      "order": 2
+    },
+    "logging": {
+      "name": "日志",
+      "icon": "📋",
+      "order": 3
+    },
+    "config": {
+      "name": "配置管理",
+      "icon": "⚙️",
+      "order": 4
+    }
+  }
+}

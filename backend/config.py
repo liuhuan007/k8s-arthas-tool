@@ -9,8 +9,15 @@ _DEFAULT_SECRET = 'dev-secret-key-change-in-production'
 class Config:
     """应用配置"""
     
+    # 基础路径
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
     # 数据库
-    DB_FILE = os.environ.get('DB_FILE', 'arthas.db')
+    DB_FILE = os.environ.get('DB_FILE', os.path.join(BASE_DIR, 'config', 'db', 'arthas.db'))
+    
+    # 配置文件
+    CLUSTERS_FILE = os.environ.get('CLUSTERS_FILE', os.path.join(BASE_DIR, 'config', 'data', 'clusters.json'))
+    EXTERNAL_LINKS_FILE = os.environ.get('EXTERNAL_LINKS_FILE', os.path.join(BASE_DIR, 'config', 'data', 'external_links.json'))
     
     # Flask
     SECRET_KEY = os.environ.get('SECRET_KEY', _DEFAULT_SECRET)

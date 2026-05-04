@@ -31,8 +31,18 @@ class ArthasAgentManager:
     # ── Java PID discovery ────────────────────────────────────────────────────
 
     def find_java_pid(self, force: bool = False) -> Optional[int]:
+        """查找 Java 进程 PID
+        
+        ✅ 关键修复: 增加 PID 验证,避免返回已失效的 PID
+        """
         if self._pid and not force:
-            return self._pid
+            # ✅ 验证 PID 是否还在运行
+            rc, _, _ = self._exec(f"kill -0 {self._pid} 2>/dev/null", timeout=3)
+            if rc == 0:
+                return self._pid
+            else:
+                log.warning("[PID Cache] Cached PID %d is stale, will rediscover", self._pid)
+                self._pid = None  # 清空缓存
 
         rc, out, _ = self._exec(
             "jps -l 2>/dev/null || ps -ef 2>/dev/null | grep java | grep -v grep")
@@ -160,14 +170,40 @@ class ArthasAgentManager:
             arthas_pids = self._find_arthas_pids()
             if arthas_pids:
                 log.info("Arthas HTTP reachable and agent process found (PIDs: %s) — reusing", arthas_pids)
+                # ✅ 关键修复: 验证 PID 是否匹配预期
+                if self._pid and self._pid not in arthas_pids:
+                    log.warning("[Agent Reuse] Expected PID %d not found, current PIDs: %s, updating to latest",
+                               self._pid, arthas_pids)
+                    self._pid = arthas_pids[0]  # 更新为最新 PID
                 # 复用时也要获取 java_pid
                 if not self._pid:
                     self.find_java_pid()
                 return True, f"Arthas 已在运行，直接复用 (port {port})"
             else:
-                log.warning("Arthas HTTP reachable but NO agent process found — will restart")
-                # HTTP 可达但没有进程,可能是残留端口,需要清理
-                # 继续执行后续逻辑,会清理残留并重启
+                # ✅ 修复: HTTP 可达但没有进程,先尝试用 Arthas API 验证
+                # 可能是进程名不匹配或其他原因,但 HTTP 确实可用
+                log.warning("[Agent Reuse] HTTP reachable but no process found, trying Arthas API verification")
+                try:
+                    from .arthas_client import ArthasHttpClient
+                    test_client = ArthasHttpClient(port)
+                    if test_client.ping(retries=2, delay=1):
+                        log.info("[Agent Reuse] Arthas API verified, reusing existing connection")
+                        # 获取 java_pid
+                        if not self._pid:
+                            self.find_java_pid()
+                        return True, f"Arthas 已在运行，直接复用 (port {port})"
+                except Exception as e:
+                    log.warning("[Agent Reuse] Arthas API verification failed: %s", e)
+                
+                # 验证失败,才返回错误
+                log.error("[Agent Reuse] HTTP reachable but Arthas API not responding")
+                return False, (
+                    f"Arthas HTTP 端口 {port} 无响应\n"
+                    f"请检查:\n"
+                    f"1. Pod 内是否已安装 Arthas JAR\n"
+                    f"2. 端口 {port} 是否被其他进程占用\n"
+                    f"3. 在 Pod 内执行: ss -tlnp | grep {port}"
+                )
 
         # 情况 B: HTTP 不通，先清理残留进程
         stale_pids = self._find_arthas_pids()

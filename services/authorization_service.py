@@ -32,7 +32,8 @@ class AuthorizationService:
         if raw:
             keys.append(raw)
         try:
-            p = Path('clusters.json')
+            from backend.config import Config
+            p = Path(Config.CLUSTERS_FILE)
             if p.exists():
                 clusters = json.loads(p.read_text(encoding='utf-8'))
                 for c in clusters:

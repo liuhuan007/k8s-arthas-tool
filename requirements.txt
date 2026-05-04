@@ -3,5 +3,6 @@
 
 flask>=3.0.0        # Web 框架，提供 REST API
 flask-cors>=4.0.0   # 跨域支持（浏览器直接打开 index.html 时必须）
+flask-sock>=0.7.0   # WebSocket 实时推送支持
 flask-login>=0.6.3    # 用户认证和会话管理
 bcrypt>=4.0.0        # 密码哈希

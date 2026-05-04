@@ -27,7 +27,8 @@ def admin_required(f):
 # 加载集群配置的辅助函数
 def _load_clusters() -> list:
     """加载集群配置"""
-    p = Path('clusters.json')
+    from backend.config import Config
+    p = Path(Config.CLUSTERS_FILE)
     if p.exists():
         with open(p, encoding='utf-8') as f:
             return json.load(f)
@@ -36,8 +37,9 @@ def _load_clusters() -> list:
 
 def _save_clusters(clusters: list):
     """保存集群配置（线程安全）"""
+    from backend.config import Config
     with _clusters_lock:
-        with open('clusters.json', 'w', encoding='utf-8') as f:
+        with open(Config.CLUSTERS_FILE, 'w', encoding='utf-8') as f:
             json.dump(clusters, f, indent=2, ensure_ascii=False)
 
 

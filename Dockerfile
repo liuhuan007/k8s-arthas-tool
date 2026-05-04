@@ -20,7 +20,7 @@ COPY services ./services
 COPY backend ./backend
 COPY static ./static
 COPY openspec ./openspec
-COPY clusters.json ./
+COPY config ./config
 COPY rbac.yaml ./
 
 # 创建输出目录
