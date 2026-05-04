@@ -113,6 +113,7 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             
             # 持久化到数据库（保存完整上下文）
             now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+            
             conn_data = {
                 'cluster_name': cluster_name,
                 'namespace': namespace,

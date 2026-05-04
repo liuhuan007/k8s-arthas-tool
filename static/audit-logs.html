@@ -7,8 +7,19 @@
     <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/app.css">
     <style>
-        body { background:var(--bg); color:var(--tx); font-family:var(--mono); margin:0; overflow:auto }
-        .admin-page { display:flex; flex-direction:column; min-height:100vh }
+        body { 
+            background:var(--bg); 
+            color:var(--tx); 
+            font-family:var(--mono); 
+            margin:0; 
+            overflow:hidden;  /* ✅ 防止整个页面滚动 */
+            height:100vh;      /* ✅ 占满视口 */
+        }
+        .admin-page { 
+            display:flex; 
+            flex-direction:column; 
+            height:100vh;      /* ✅ 固定高度 */
+        }
 
         /* ── Topbar (与主页一致) ── */
         .topbar{height:44px;background:var(--bg1);border-bottom:1px solid var(--ln);display:flex;align-items:center;flex-shrink:0}
@@ -23,8 +34,26 @@
         .tb-srv{display:flex;align-items:center;gap:6px;padding:0 14px;border-left:1px solid var(--ln);font-size:11px;color:var(--tx2)}
 
         /* ── Content ── */
-        .admin-content{flex:1;padding:24px 30px;max-width:1400px;margin:0 auto;width:100%}
-        .admin-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--ln)}
+        .admin-content{
+            flex:1;
+            padding:24px 30px;
+            max-width:1400px;
+            margin:0 auto;
+            width:100%;
+            /* ✅ 使用 flex 布局,让表格和分页合理分配空间 */
+            display:flex;
+            flex-direction:column;
+            overflow:hidden;
+            gap:16px;  /* ✅ 各部分之间的间距 */
+        }
+        .admin-header{
+            display:flex;
+            justify-content:space-between;
+            align-items:center;
+            padding-bottom:14px;
+            border-bottom:1px solid var(--ln);
+            flex-shrink:0;
+        }
         .admin-header h1{font-family:var(--sans);font-size:18px;font-weight:700;color:var(--tx);margin:0}
         .admin-header h1 span{color:var(--a)}
 
@@ -36,14 +65,33 @@
         .ab-w{background:rgba(251,191,36,.12);color:var(--a6);border:1px solid rgba(251,191,36,.25)}.ab-w:hover{background:rgba(251,191,36,.2)}
 
         /* ── Filters ── */
-        .filters{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;padding:16px 18px;margin-bottom:16px;display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+        .filters{
+            background:var(--bg1);
+            border:1px solid var(--ln);
+            border-radius:8px;
+            padding:16px 18px;
+            display:flex;
+            flex-wrap:wrap;
+            gap:12px;
+            align-items:center;
+            flex-shrink:0;
+        }
         .filters label{font-size:11px;color:var(--tx2);display:flex;align-items:center;gap:6px}
         .filters select,.filters input[type=date]{padding:5px 8px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-family:var(--mono);font-size:11px;outline:none;transition:border-color.15s}
         .filters select:focus,.filters input:focus{border-color:var(--a)}
         .filters .fg-sep{width:1px;height:22px;background:var(--ln);margin:0 4px}
 
-        /* ── Table ── */
-        .tbl-wrap{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;overflow:hidden}
+        /* ── Table ─ */
+        .tbl-wrap{
+            background:var(--bg1);
+            border:1px solid var(--ln);
+            border-radius:8px;
+            overflow:hidden;
+            /* ✅ 表格区域自适应填充剩余空间 */
+            flex:1;
+            overflow-y:auto;
+            min-height:0;
+        }
         .tbl{width:100%;border-collapse:collapse}
         .tbl th{background:var(--bg2);color:var(--tx2);padding:11px 14px;text-align:left;font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--ln)}
         .tbl td{padding:10px 14px;border-bottom:1px solid var(--ln);color:var(--tx);font-size:12px}
@@ -62,26 +110,21 @@
 
         /* ── Pagination ── */
         .pagination{
-            margin-top:16px;
-            margin-bottom:24px;  /* ✅ 增加底部边距,防止被遮挡 */
+            margin-top:0;
+            margin-bottom:0;
             display:flex;
             justify-content:center;
             align-items:center;
             gap:8px;
             padding:12px 0;
-            background:var(--bg1);  /* ✅ 添加背景色 */
-            border-top:1px solid var(--ln);  /* ✅ 添加顶部分隔线 */
+            background:var(--bg1);
+            border-top:1px solid var(--ln);
+            flex-shrink:0;
         }
         .pagination button{padding:5px 12px;border-radius:4px;font-size:11px;font-family:var(--mono);cursor:pointer;background:var(--bg2);color:var(--tx2);border:1px solid var(--ln);transition:all.15s}
         .pagination button:hover{border-color:var(--a);color:var(--a)}
         .pagination button:disabled{opacity:.4;cursor:not-allowed}
         .pagination .page-info{font-size:11px;color:var(--tx3)}
-        
-        /* ✅ 限制表格最大高度,允许滚动 */
-        .tbl-wrap{
-            max-height:calc(100vh - 320px);  /* 视口高度 - topbar - header - filters - pagination */
-            overflow-y:auto;
-        }
 
         .empty-msg{text-align:center;padding:40px;color:var(--tx3);font-size:12px}
         body.embed { overflow:hidden }
@@ -207,7 +250,7 @@
         </div>
     </div>
 
-    <script src="js/audit-logs.js"></script>
+    <script src="js/audit-logs.js?v=20260503b"></script>
     <script>
     (async function() {
       try {

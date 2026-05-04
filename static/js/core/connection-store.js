@@ -85,6 +85,13 @@ const ConnectionStore = {
     return this._state.connections;
   },
   
+  /**
+   * 设置连接列表 (用于刷新列表)
+   */
+  setConnections(connections) {
+    this.setState({ connections: connections || [] });
+  },
+  
   getConnectionState() {
     return this._state.connState;
   },
@@ -177,13 +184,14 @@ const ConnectionStore = {
       const stored = localStorage.getItem('arthas_connection_store');
       if (stored) {
         const data = JSON.parse(stored);
-        this._state.connections = data.connections || [];
+        // 不加载 connections (由数据库 API 提供)
         this._state.currentConnId = data.currentConnId || null;
         this._state.connState = data.connState || ConnectionState.DISCONNECTED;
         this._state.runtimeInfo = data.runtimeInfo || null;
         this._state.podPhase = data.podPhase || '';
         this._state.podConnId = data.podConnId || null;
         this._state.connHealth = data.connHealth || {};
+        
         console.log('[ConnectionStore] Loaded', this._state.connections.length, 'connections');
       } else {
         console.log('[ConnectionStore] No stored data found');
@@ -228,9 +236,27 @@ const ConnectionStore = {
 window.ConnectionState = ConnectionState;
 window.ConnectionStore = ConnectionStore;
 
-// DOM Ready 时初始化
+// DOM Ready 时初始化 (延迟到数据库加载后)
 document.addEventListener('DOMContentLoaded', () => {
-  ConnectionStore.init();
+  // ✅ 仅初始化,不从 localStorage 加载 connections (由数据库 API 提供)
+  // 保留其他状态 (connState, runtimeInfo 等) 的本地缓存
+  try {
+    const stored = localStorage.getItem('arthas_connection_store');
+    if (stored) {
+      const data = JSON.parse(stored);
+      // 不加载 connections,保持为空数组,等待数据库 API 填充
+      ConnectionStore._state.currentConnId = data.currentConnId || null;
+      ConnectionStore._state.connState = data.connState || ConnectionState.DISCONNECTED;
+      ConnectionStore._state.runtimeInfo = data.runtimeInfo || null;
+      ConnectionStore._state.podPhase = data.podPhase || '';
+      ConnectionStore._state.podConnId = data.podConnId || null;
+      ConnectionStore._state.connHealth = data.connHealth || {};
+      console.log('[ConnectionStore] Initialized (connections from DB API)');
+    } else {
+      console.log('[ConnectionStore] Ready (no cached state)');
+    }
+  } catch (e) {
+    console.error('[ConnectionStore] Init error:', e);
+  }
   ConnectionStore.syncToGlobal();
-  console.log('[ConnectionStore] Ready');
 });

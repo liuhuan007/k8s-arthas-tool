@@ -1874,21 +1874,33 @@ async function refreshConnectionList() {
     const d = await r.json();
     if (!r.ok || d.ok === false) throw new Error(d.error || '获取失败');
     
-    // 更新内存和 localStorage
-    _connections = d.connections || [];
-    const user = getCurrentUser();
-    const key = user ? `arthas_connections_${user.username}` : 'arthas_connections';
-    localStorage.setItem(key, JSON.stringify(_connections));
-    _syncState();
+    // ✅ 使用 ConnectionStore 统一管理状态
+    if (typeof ConnectionStore !== 'undefined') {
+      const connections = d.connections || [];
+      ConnectionStore.setConnections(connections);
+      ConnectionStore._persist();
+      console.log('[refreshConnectionList] Updated ConnectionStore with', connections.length, 'connections');
+    } else {
+      // 降级: 使用旧逻辑
+      _connections = d.connections || [];
+      const user = getCurrentUser();
+      const key = user ? `arthas_connections_${user.username}` : 'arthas_connections';
+      localStorage.setItem(key, JSON.stringify(_connections));
+    }
     
     // 重新渲染
     renderConnList();
-    toast(`已刷新，${_connections.length} 个连接`, 'ok');
+    toast(`已刷新，${d.connections ? d.connections.length : 0} 个连接`, 'ok');
   } catch (e) {
     console.error('刷新连接列表失败:', e);
     toast('刷新失败: ' + e.message, 'error');
-    // 降级：从 localStorage 加载
-    loadConnections();
+    // 降级：从 ConnectionStore 加载
+    if (typeof ConnectionStore !== 'undefined') {
+      ConnectionStore.init();
+      renderConnList();
+    } else {
+      loadConnections();
+    }
   }
 }
 
@@ -1989,21 +2001,28 @@ function saveConnections() {
 
 function loadConnections() {
   try {
-    // 按用户隔离：只加载当前用户的连接数据
-    const user = getCurrentUser();
-    const key = user ? `arthas_connections_${user.username}` : 'arthas_connections';
-    const data = localStorage.getItem(key);
-    if (data) {
-      _connections = JSON.parse(data);
-      renderConnList();
+    // ✅ 使用 ConnectionStore 统一管理状态
+    if (typeof ConnectionStore !== 'undefined') {
+      // ConnectionStore 已经在 DOM Ready 时初始化
+      const state = ConnectionStore.getState();
+      _connections = state.connections || [];
+      console.log('[loadConnections] Loaded', _connections.length, 'connections from ConnectionStore');
     } else {
-      _connections = [];
-      renderConnList();
+      // 降级: 使用旧逻辑
+      const user = getCurrentUser();
+      const key = user ? `arthas_connections_${user.username}` : 'arthas_connections';
+      const data = localStorage.getItem(key);
+      if (data) {
+        _connections = JSON.parse(data);
+      } else {
+        _connections = [];
+      }
     }
-    // 【关键修复】同步到 window，供 ai-chat.js / 外部组件读取
-    _syncState();
+    
+    renderConnList();
 
     // 自动恢复上次活跃连接（延迟执行，不阻塞页面初始化）
+    const user = getCurrentUser();
     const activeKey = user ? `arthas_active_conn_${user.username}` : 'arthas_active_conn';
     const levelKey = user ? `arthas_active_level_${user.username}` : 'arthas_active_level';
     const savedConnId = localStorage.getItem(activeKey);
@@ -4481,6 +4500,121 @@ function pfClearLog() {
   }
 }
 
+// ── Profiler History Pagination ───────────────────────────────────────────────
+
+let pfHistCurrentPage = 0;
+let pfHistPageSize = 20;
+let pfHistAllTasks = [];
+
+function pfHistPrevPage() {
+  if (pfHistCurrentPage > 0) {
+    pfHistCurrentPage--;
+    renderPfHistoryPage();
+  }
+}
+
+function pfHistNextPage() {
+  const totalPages = Math.ceil(pfHistAllTasks.length / pfHistPageSize) || 1;
+  if (pfHistCurrentPage < totalPages - 1) {
+    pfHistCurrentPage++;
+    renderPfHistoryPage();
+  }
+}
+
+function pfHistJumpToPage() {
+  const input = document.getElementById('pfHistPageInput');
+  const pageNum = parseInt(input.value);
+  const totalPages = Math.ceil(pfHistAllTasks.length / pfHistPageSize) || 1;
+  
+  if (isNaN(pageNum) || pageNum < 1) {
+    input.value = 1;
+    return;
+  }
+  
+  if (pageNum > totalPages) {
+    input.value = totalPages;
+    return;
+  }
+  
+  pfHistCurrentPage = pageNum - 1;
+  renderPfHistoryPage();
+}
+
+function pfHistChangePageSize() {
+  const select = document.getElementById('pfHistPageSize');
+  pfHistPageSize = parseInt(select.value);
+  pfHistCurrentPage = 0;
+  renderPfHistoryPage();
+}
+
+function renderPfHistoryPage() {
+  const el = document.getElementById('pfl-history-list');
+  if (!el) return;
+  
+  const totalPages = Math.ceil(pfHistAllTasks.length / pfHistPageSize) || 1;
+  const start = pfHistCurrentPage * pfHistPageSize;
+  const end = Math.min(start + pfHistPageSize, pfHistAllTasks.length);
+  const pageTasks = pfHistAllTasks.slice(start, end);
+  
+  // 更新分页信息
+  document.getElementById('pfHistPageInput').value = pfHistCurrentPage + 1;
+  document.getElementById('pfHistPageInput').max = totalPages;
+  document.getElementById('pfHistPageInfo').textContent = `/ ${totalPages} 页`;
+  document.getElementById('pfHistTotalInfo').textContent = `(共 ${pfHistAllTasks.length} 条)`;
+  
+  // 渲染当前页数据
+  if (pageTasks.length === 0) {
+    el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:20px">暂无历史记录</div>';
+    return;
+  }
+  
+  const icons = {completed:'',failed:'',running:'⏳',starting:'⏳'};
+  const labels = {completed:'完成',failed:'失败',running:'运行中',starting:'启动中'};
+  const bcls = {completed:'st-ok',failed:'st-fail',running:'st-run',starting:'st-run'};
+  const showUser = typeof isAdmin === 'function' && isAdmin();
+  
+  el.innerHTML = pageTasks.map(t => {
+    const mode = t.config.mode || 'profiler';
+    const event = t.config.event || '-';
+    const duration = t.config.duration || 0;
+    const format = t.config.format || 'html';
+    
+    const eventLabels = {
+      'threaddump': '线程转储',
+      'heapdump': '堆转储',
+      'cpu': 'CPU 采样',
+      'alloc': '内存分配',
+      'lock': '锁竞争',
+      'wall': 'Wall 时间',
+      'default': 'JFR 默认',
+      'profile': 'JFR Profile'
+    };
+    const eventDisplay = eventLabels[event] || event;
+    const durationDisplay = (mode === 'threaddump' || mode === 'heapdump' || duration === 0) ? '-' : `${duration}s`;
+    const formatDisplay = mode === 'threaddump' ? 'HTML' : mode === 'heapdump' ? 'HPROF' : format;
+    
+    const metaParts = [`事件: ${eventDisplay}`, `时长: ${durationDisplay} · 格式: ${formatDisplay}`];
+    if (showUser && t.username) metaParts.push(`<span style="color:var(--a)">@${esc(t.username)}</span>`);
+    
+    return `
+      <div style="padding:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:6px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <span style="font-size:14px">${icons[t.status]||'❓'}</span>
+          <span style="font-size:11px;color:var(--tx2)">${mode}</span>
+          <span class="st-badge ${bcls[t.status]||''}" style="font-size:10px">${labels[t.status]||t.status}</span>
+          <span style="margin-left:auto;font-size:10px;color:var(--tx3)">${fmtTs(t.created_at)}</span>
+        </div>
+        <div style="font-size:10px;color:var(--tx2);line-height:1.5">
+          ${metaParts.map(p => `<div>${p}</div>`).join('')}
+        </div>
+        ${t.has_file?`<div style="margin-top:6px;padding:6px 8px;background:rgba(122,162,247,.08);border-radius:4px;font-size:10px;font-family:monospace;color:var(--a)">
+           ${t.file_name||'output'}
+        </div><button class="btn btn-dl" style="display:inline-block;margin-top:6px;padding:4px 10px;font-size:10px;cursor:pointer" onclick="downloadProfilerTask('${t.id}', '${t.file_name||'output'}')">↓ 下载</button>`:''}
+      </div>
+    `;
+  }).join('');
+}
+
 function togglePfHistory() {
   const logPanel = document.getElementById('pfl-panel-log');
   const historyPanel = document.getElementById('pfl-panel-history');
@@ -5544,6 +5678,14 @@ document.addEventListener('DOMContentLoaded', async function() {
     if (r.ok && d.ok && d.connections) {
       console.log('[初始化] 从数据库加载连接:', d.connections.length, '个');
       _connections = d.connections;
+      
+      // ✅ 同步到 ConnectionStore (确保连接中心能正确渲染)
+      if (typeof ConnectionStore !== 'undefined') {
+        ConnectionStore.setConnections(d.connections);
+        ConnectionStore._persist();
+        console.log('[初始化] 已同步到 ConnectionStore');
+      }
+      
       const user = getCurrentUser();
       const key = user ? `arthas_connections_${user.username}` : 'arthas_connections';
       localStorage.setItem(key, JSON.stringify(_connections));

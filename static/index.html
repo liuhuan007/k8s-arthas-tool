@@ -54,11 +54,11 @@ document.addEventListener('DOMContentLoaded', function() {
 <script>console.log('🔍 script-check: API=' + typeof API + ', safePost=' + typeof safePost + ', diagQuickTool=' + typeof window.diagQuickTool + ', diagSelectScene=' + typeof window.diagSelectScene + ', diagStart=' + typeof window.diagStart);</script>
 
 <!-- 应用入口 -->
-<script src="js/app-ui.js?v=20260411i"></script>
+<script src="js/app-ui.js?v=20260503c"></script>
 <script src="js/app.js"></script>
 
 <!-- ✅ 新增: 统一状态管理 -->
-<script src="js/core/connection-store.js?v=20260503"></script>
+<script src="js/core/connection-store.js?v=20260503b"></script>
 
 <!-- ✅ 新增: WebSocket 实时推送 -->
 <script src="js/core/websocket-client.js?v=20260503"></script>
@@ -67,7 +67,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <script src="js/components/external-links.js?v=20260503"></script>
 
 <!-- 两步连接流程组件 -->
-<script src="js/components/two-step-connection.js?v=20260503c"></script>
+<script src="js/components/two-step-connection.js?v=20260503d"></script>
 
 <!-- 连接引导守卫 -->
 <script src="js/components/connection-guard.js?v=20260419a"></script>
@@ -1211,13 +1211,33 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="o-dim">等待启动...</div>
           </div>
           <!-- Current connection history panel (hidden by default) -->
-          <div id="pfl-panel-history" style="display:none;height:300px;overflow-y:auto;padding:10px 14px;font-size:12px;border-top:1px solid var(--ln);background:var(--bg2)">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+          <div id="pfl-panel-history" style="display:none;height:300px;overflow:hidden;background:var(--bg2)">
+            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--ln)">
               <span style="font-size:11px;color:var(--a);font-weight:600">📋 当前连接的历史记录</span>
               <span style="font-size:10px;color:var(--tx3)">只显示 <span id="pfHistConnName">-</span> 的采样任务</span>
             </div>
-            <div id="pfl-history-list">
+            <!-- ✅ 历史记录列表 (可滚动) -->
+            <div id="pfl-history-list" style="height:calc(300px - 100px);overflow-y:auto;padding:10px 14px">
               <div style="color:var(--tx3);text-align:center;padding:20px">暂无历史记录</div>
+            </div>
+            <!-- ✅ 分页组件 -->
+            <div style="padding:8px 14px;border-top:1px solid var(--ln);display:flex;justify-content:center;align-items:center;gap:8px;">
+              <button onclick="pfHistPrevPage()" style="padding:4px 10px;font-size:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:3px;color:var(--tx2);cursor:pointer">← 上一页</button>
+              <span style="font-size:10px;color:var(--tx3)">第</span>
+              <input type="number" id="pfHistPageInput" min="1" value="1" style="width:40px;padding:3px 6px;background:var(--bg1);border:1px solid var(--ln);border-radius:3px;color:var(--tx);font-size:10px;text-align:center" onkeydown="if(event.key==='Enter'){pfHistJumpToPage();}">
+              <span style="font-size:10px;color:var(--tx3)" id="pfHistPageInfo">/ 1 页</span>
+              <button onclick="pfHistJumpToPage()" style="padding:4px 8px;font-size:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:3px;color:var(--tx2);cursor:pointer">跳转</button>
+              <button onclick="pfHistNextPage()" style="padding:4px 10px;font-size:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:3px;color:var(--tx2);cursor:pointer">下一页 →</button>
+              <span style="width:1px;height:16px;background:var(--ln)"></span>
+              <label style="font-size:10px;color:var(--tx3);display:flex;align-items:center;gap:4px">
+                每页
+                <select id="pfHistPageSize" onchange="pfHistChangePageSize()" style="padding:3px 6px;background:var(--bg1);border:1px solid var(--ln);border-radius:3px;color:var(--tx);font-size:10px">
+                  <option value="10">10 条</option>
+                  <option value="20" selected>20 条</option>
+                  <option value="50">50 条</option>
+                </select>
+              </label>
+              <span style="font-size:10px;color:var(--tx3)" id="pfHistTotalInfo">(共 0 条)</span>
             </div>
           </div>
         </div>

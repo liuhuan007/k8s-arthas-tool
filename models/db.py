@@ -235,7 +235,6 @@ class Database:
                 ("java_pid",       "ALTER TABLE connections ADD COLUMN java_pid INTEGER"),
                 ("arthas_version", "ALTER TABLE connections ADD COLUMN arthas_version TEXT"),
                 ("last_ping_at",   "ALTER TABLE connections ADD COLUMN last_ping_at TIMESTAMP"),
-                ("owner_user_id",  "ALTER TABLE connections ADD COLUMN owner_user_id INTEGER"),
                 ("status",         "ALTER TABLE connections ADD COLUMN status TEXT DEFAULT 'disconnected'"),
             ]:
                 try:

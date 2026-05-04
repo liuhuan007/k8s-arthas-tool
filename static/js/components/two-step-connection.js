@@ -855,8 +855,20 @@ if (document.readyState === 'loading') {
 }
 
 // ✅ 暴露全局函数
-console.log('[two-step-connection] Exposing global functions...');
+console.log('[two-step-connection] ========== 开始暴露全局函数 ==========');
+console.log('[two-step-connection] podConnect function exists:', typeof podConnect);
+console.log('[two-step-connection] upgradeToArthas function exists:', typeof upgradeToArthas);
+
 window.podConnect = podConnect;
 window.upgradeToArthas = upgradeToArthas;
-console.log('[two-step-connection] podConnect exposed:', typeof window.podConnect);
-console.log('[two-step-connection] upgradeToArthas exposed:', typeof window.upgradeToArthas);
+
+console.log('[two-step-connection] window.podConnect:', typeof window.podConnect);
+console.log('[two-step-connection] window.upgradeToArthas:', typeof window.upgradeToArthas);
+console.log('[two-step-connection] ========== 全局函数暴露完成 ==========');
+
+// 立即测试
+if (typeof window.podConnect === 'function') {
+  console.log('✅ SUCCESS: podConnect 已成功暴露到全局!');
+} else {
+  console.error('❌ ERROR: podConnect 暴露失败!');
+}

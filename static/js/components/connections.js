@@ -146,76 +146,14 @@ function loadConnections() {
 
 // ── 渲染 ─────────────────────────────────────────────────────────────────
 
-function renderConnList() {
-  const listEl = document.getElementById('connList');
-  if (!listEl) return;
-  
-  if ((window._connections || []).length === 0) {
-    listEl.innerHTML = '<div class="sb-empty">暂无连接<br>使用下方添加</div>';
-    return;
-  }
-  
-  listEl.innerHTML = (window._connections || []).map(conn => {
-    const isActive = conn.id === (window._currentConnId || null);
-    const level = inferConnLevel(conn);
-    const rt = getConnRuntime(conn);
-    
-    // 层级标识
-    const levelIcon = level === 'arthas' ? '⚡' : '🔵';
-    const levelBadge = `<span class="conn-level ${level}">${level === 'arthas' ? 'Arthas连接' : 'Pod连接'}</span>`;
-    
-    // 运行时信息行（补充：从当前连接状态获取，以防旧缓存中缺失）
-    let runtimeLine = '';
-    if (rt) {
-      const icon = getRuntimeIcon(rt.type);
-      runtimeLine = `<div class="conn-runtime">${icon} ${rt.type}${rt.version ? ' ' + rt.version : ''}${conn.java_pid ? ' · PID ' + conn.java_pid : ''}</div>`;
-    } else if (isActive && window._runtimeInfo) {
-      const ri = window._runtimeInfo;
-      if (ri.runtime_type || ri.type) {
-        const rt2type = ri.type || ri.runtime_type;
-        const rt2ver = ri.version || ri.runtime_version || '';
-        const rt2pid = ri.java_pid || '';
-        runtimeLine = `<div class="conn-runtime">${getRuntimeIcon(rt2type)} ${rt2type}${rt2ver ? ' ' + rt2ver : ''}${rt2pid ? ' · PID ' + rt2pid : ''}</div>`;
-      }
-    }
-    
-    // 升级按钮（Pod + Java → 可升级）
-    let upgradeBtn = '';
-    if (canUpgradeConnection(conn)) {
-      upgradeBtn = `<div class="conn-upgrade-btn" onclick="event.stopPropagation();upgradeConnectionFromList('${esc(conn.id)}')">⚡ 启动 Arthas</div>`;
-    }
-    
-    // 状态图标
-    const h = (window._connHealth || {})[conn.id];
-    let statusIcon = '', statusStyle = '', statusHint = '';
-    if (h) {
-      if (h.pod_exists === false) {
-        statusIcon = '⚠'; statusStyle = 'color:var(--a5)'; statusHint = 'Pod 不存在';
-      } else if (h.alive === false && level === 'arthas') {
-        statusIcon = '◉'; statusStyle = 'color:#f59e0b'; statusHint = 'Arthas 已断开';
-      } else if (h.alive === false) {
-        statusIcon = '◈'; statusStyle = 'color:#f59e0b'; statusHint = '连接已断开';
-      } else if (h.pod_exists === true) {
-        statusIcon = '●'; statusStyle = 'color:var(--a3)'; statusHint = '连接正常';
-      }
-    }
-    
-    return `
-      <div class="conn-itm ${isActive ? 'on' : ''}" data-id="${esc(conn.id)}" onclick="switchConnection('${esc(conn.id)}')" title="${esc(conn.cluster_name || conn.cluster || '')} / ${esc(conn.namespace)} / ${esc(conn.pod_name || conn.pod || '')}${statusHint ? '\n' + statusHint : ''}">
-        <div class="conn-info">
-          <div class="conn-cluster">
-            ${statusIcon ? `<span style="font-size:9px;${statusStyle};margin-right:3px" title="${statusHint}">${statusIcon}</span>` : `<span style="font-size:11px">${levelIcon}</span>`}
-            ${esc(conn.cluster_name || conn.cluster || '')}
-            ${levelBadge}
-          </div>
-          <div class="conn-pod"><span class="conn-ns">${esc(conn.namespace)}</span><span class="conn-slash">/</span><span class="conn-name">${esc(conn.pod_name || conn.pod || '')}</span></div>
-          ${runtimeLine}
-          ${upgradeBtn}
-        </div>
-        <button class="del-conn" onclick="event.stopPropagation();deleteConnection('${esc(conn.id)}')" title="删除连接">✕</button>
-      </div>`;
-  }).join('');
-}
+/**
+ * ✅ renderConnList() 已在 app-ui.js 中重新定义
+ * 此处的版本已被覆盖,保留仅为向后兼容
+ * 实际渲染使用 app-ui.js 中的版本,从 ConnectionStore 获取数据
+ */
+
+// 原 renderConnList 实现已移至 app-ui.js
+// 如需查看实现,请搜索 app-ui.js 中的 renderConnList() 函数
 
 // ── 操作 ─────────────────────────────────────────────────────────────────
 
@@ -296,7 +234,7 @@ if (typeof module !== 'undefined' && module.exports) {
     canUpgradeConnection,
     saveConnections,
     loadConnections,
-    renderConnList,
+    // ✅ renderConnList 已移至 app-ui.js
     addConnection,
     removeConnection,
     switchConnection,
