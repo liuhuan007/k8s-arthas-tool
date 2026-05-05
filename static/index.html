@@ -995,8 +995,8 @@ document.addEventListener('DOMContentLoaded', function() {
             </ul>
           </div>
           <div style="display:flex;gap:10px;align-items:center">
-            <input id="hfConfirmText" placeholder="输入 CONFIRM 确认执行" style="flex:1;padding:8px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--tx)" />
-            <button class="ib danger" onclick="hotfixRedefine()" id="btnRedefine" disabled>⚡ 执行 redefine</button>
+            <!-- ✅ 去掉 CONFIRM 输入框,直接执行 -->
+            <button class="ib danger" onclick="hotfixRedefine()" id="btnRedefine" disabled style="flex:1">⚡ 执行 redefine</button>
           </div>
           <pre id="hfRedefineOutput" style="display:none;margin-top:12px;background:var(--bg);padding:12px;border-radius:4px;overflow-x:auto;max-height:200px;font-size:12px"></pre>
         </div>

@@ -214,11 +214,15 @@ class HotfixService:
             file_path.write_bytes(file_content)
             sha256 = self._calculate_sha256(file_path)
             file_type = 'java' if filename.endswith('.java') else 'class'
+            file_size = len(file_content)
 
             log.info("upload success: %s -> %s (sha256: %s)", filename, file_path, sha256[:16])
             return {
                 "ok": True,
+                "file_name": filename,  # ✅ 前端需要
+                "file_size": file_size,  # ✅ 前端需要
                 "file_path": str(file_path),
+                "artifact_path": str(file_path),  # ✅ 前端需要
                 "file_type": file_type,
                 "sha256": sha256,
                 "timestamp": timestamp
@@ -473,17 +477,35 @@ class HotfixService:
             
             # 策略 A: 先尝试查找目标类的 ClassLoader
             class_name = local_path.stem  # 例如: JacksonRedisSerializer
-            sc_cmd = f"sc -d *{class_name} 2>/dev/null | grep 'classLoaderHash' | head -1 | awk '{{print $2}}'"
+            sc_cmd = f"sc -d *{class_name}"
             sc_result = ArthasCommandExecutor.execute(connection, sc_cmd, timeout_ms=10000)
+            
+            log.info("[MC] sc 命令结果: state=%s", sc_result.get('state'))
             
             class_loader_hash = ""
             if sc_result.get('state') in ('SUCCEEDED', 'succeeded'):
-                sc_output = sc_result.get('message', '')
-                import re
-                match = re.search(r'([0-9a-f]{8,16})', sc_output)
-                if match:
-                    class_loader_hash = match.group(1)
-                    log.info("[MC] 从目标类找到 ClassLoader hash: %s", class_loader_hash)
+                # ✅ 修复: 从 body.results[0].classInfo.classLoaderHash 提取
+                body = sc_result.get('body', {})
+                if isinstance(body, dict):
+                    results = body.get('results', [])
+                    if results and len(results) > 0:
+                        first_result = results[0]
+                        if isinstance(first_result, dict):
+                            class_info = first_result.get('classInfo', {})
+                            if isinstance(class_info, dict):
+                                class_loader_hash = class_info.get('classLoaderHash', '')
+                                if class_loader_hash:
+                                    log.info("[MC] 从 sc 结果找到 ClassLoader hash: %s", class_loader_hash)
+                                else:
+                                    log.warning("[MC] sc 结果中未找到 classLoaderHash 字段")
+                            else:
+                                log.warning("[MC] classInfo 不是 dict 类型: %s", type(class_info).__name__)
+                        else:
+                            log.warning("[MC] results[0] 不是 dict 类型: %s", type(first_result).__name__)
+                    else:
+                        log.warning("[MC] sc 结果为空")
+                else:
+                    log.warning("[MC] body 不是 dict 类型: %s", type(body).__name__)
             
             # 策略 B: 如果找不到,尝试多种 Spring Boot ClassLoader
             if not class_loader_hash:
@@ -516,29 +538,41 @@ class HotfixService:
             # 策略 C: 直接获取所有 ClassLoader,使用第一个非系统 ClassLoader
             if not class_loader_hash:
                 log.info("[MC] 尝试获取所有 ClassLoader 列表")
-                all_cl_cmd = "classloader | head -20"
-                all_cl_result = ArthasCommandExecutor.execute(connection, all_cl_cmd, timeout_ms=10000)
+                all_cl_cmd = "classloader"
+                all_cl_result = ArthasCommandExecutor.execute(connection, all_cl_cmd, timeout_ms=15000)
                 
-                if all_cl_result.get('state') in ('SUCCEEDED', 'succeeded'):
+                log.info("[MC] classloader 命令结果: state=%s, message=%s", all_cl_result.get('state'), all_cl_result.get('message', '')[:300])
+                
+                # ✅ 修复: 从 body.results 提取输出
+                all_cl_output = ''
+                body = all_cl_result.get('body', {})
+                if isinstance(body, dict):
+                    results = body.get('results', [])
+                    if results and len(results) > 0:
+                        all_cl_output = results[0].get('message', '') or results[0].get('java_class', '') or ''
+                
+                # 如果 body 中没有,使用 message
+                if not all_cl_output:
                     all_cl_output = all_cl_result.get('message', '')
-                    log.info("[MC] 所有 ClassLoader:\n%s", all_cl_output[:500])
+                
+                log.info("[MC] 所有 ClassLoader:\n%s", all_cl_output[:500])
+                
+                # 提取所有 hash,跳过系统 ClassLoader
+                lines = all_cl_output.strip().split('\n')
+                for line in lines:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    # 跳过系统 ClassLoader
+                    if any(skip in line for skip in ['BootstrapClassLoader', 'sun.misc.Launcher', 'jdk.internal']):
+                        continue
                     
-                    # 提取所有 hash,跳过系统 ClassLoader
-                    lines = all_cl_output.strip().split('\n')
-                    for line in lines:
-                        line = line.strip()
-                        if not line:
-                            continue
-                        # 跳过系统 ClassLoader
-                        if any(skip in line for skip in ['BootstrapClassLoader', 'sun.misc.Launcher', 'jdk.internal']):
-                            continue
-                        
-                        # 提取 hash
-                        match = re.search(r'^([0-9a-fA-F]+)', line)
-                        if match:
-                            class_loader_hash = match.group(1)
-                            log.info("[MC] 使用应用 ClassLoader: %s (%s)", class_loader_hash, line)
-                            break
+                    # 提取 hash
+                    match = re.search(r'^([0-9a-fA-F]+)', line)
+                    if match:
+                        class_loader_hash = match.group(1)
+                        log.info("[MC] 使用应用 ClassLoader: %s (%s)", class_loader_hash, line)
+                        break
             
             # 策略 D: 从 Spring Boot 主类提取 ClassLoader
             if not class_loader_hash:
@@ -568,48 +602,41 @@ class HotfixService:
                 log.warning("[MC] 建议: 在 Pod 内执行 'classloader' 命令手动查找 hash")
             
             # 2. 构建 MC 命令
-            # ✅ 关键修复: mc 不支持绝对路径,需要先 cd 到文件目录
-            java_file_dir = str(Path(java_file_in_pod).parent)
-            java_file_name = Path(java_file_in_pod).name
-            
-            # 使用 kubectl exec 在 Pod 内执行
+            # ✅ 关键修复: Arthas HTTP API 不支持 mc 绝对路径,改用 kubectl exec
             import subprocess
+            from pathlib import Path
             
-            # 构建 kubectl exec 命令
+            # 获取 kubectl 配置
             cluster_name = connection.target.cluster_name
             namespace = connection.target.namespace
             pod_name = connection.target.pod_name
             container = getattr(connection.target, 'container_name', '')
             
-            # 获取 kubeconfig
+            # 读取集群配置
             kubeconfig_path = None
             context_name = None
             try:
                 import json
-                clusters_file = Path(__file__).parent.parent.parent / 'clusters.json'
+                clusters_file = Path(__file__).parent.parent / 'config' / 'data' / 'clusters.json'
                 if clusters_file.exists():
                     with open(clusters_file, 'r', encoding='utf-8') as f:
                         clusters_data = json.load(f)
-                    for cluster in clusters_data.get('clusters', []):
+                    for cluster in clusters_data:
                         if cluster.get('name') == cluster_name:
                             context_name = cluster.get('context', cluster_name)
                             kubeconfig_path = cluster.get('kubeconfig')
+                            log.info("[MC] 找到集群配置: name=%s, context=%s, kubeconfig=%s", cluster_name, context_name, kubeconfig_path)
                             break
             except Exception as e:
                 log.warning("[MC] 读取 clusters.json 失败: %s", e)
             
             # 构建 mc 命令
             if class_loader_hash:
-                mc_cmd = f"mc -c {class_loader_hash} -d {artifact_dir} {java_file_name}"
+                mc_cmd = f"mc -c {class_loader_hash} -d {artifact_dir} {java_file_in_pod}"
             else:
-                mc_cmd = f"mc -d {artifact_dir} {java_file_name}"
+                mc_cmd = f"mc -d {artifact_dir} {java_file_in_pod}"
             
-            # 完整 shell 命令
-            shell_cmd = f"cd {java_file_dir} && {mc_cmd}"
-            
-            log.info("[MC] 执行命令: %s", shell_cmd)
-            
-            # 构建 kubectl exec
+            # 通过 kubectl exec 在 Pod 内执行
             exec_cmd = ['kubectl', 'exec']
             if kubeconfig_path:
                 exec_cmd.extend(['--kubeconfig', kubeconfig_path])
@@ -618,7 +645,7 @@ class HotfixService:
             exec_cmd.extend(['-n', namespace, pod_name])
             if container:
                 exec_cmd.extend(['-c', container])
-            exec_cmd.extend(['--', 'sh', '-c', shell_cmd])
+            exec_cmd.extend(['--', 'sh', '-c', mc_cmd])
             
             log.info("[MC] kubectl exec: %s", ' '.join(exec_cmd))
             
@@ -819,14 +846,131 @@ class HotfixService:
         try:
             # 计算 class SHA256
             sha256 = self._calculate_sha256(Path(class_file_path))
+            
+            # ✅ 关键修复: 先上传到 Pod,再执行 redefine
+            import subprocess
+            from pathlib import Path as PathLib
+            
+            # 获取 kubectl 配置
+            cluster_name = connection.target.cluster_name
+            namespace = connection.target.namespace
+            pod_name = connection.target.pod_name
+            container = getattr(connection.target, 'container_name', '')
+            
+            # 读取集群配置
+            kubeconfig_path = None
+            context_name = None
+            try:
+                import json
+                clusters_file = PathLib(__file__).parent.parent / 'config' / 'data' / 'clusters.json'
+                if clusters_file.exists():
+                    with open(clusters_file, 'r', encoding='utf-8') as f:
+                        clusters_data = json.load(f)
+                    for cluster in clusters_data:
+                        if cluster.get('name') == cluster_name:
+                            context_name = cluster.get('context', cluster_name)
+                            kubeconfig_path = cluster.get('kubeconfig')
+                            log.info("[Redefine] 找到集群配置: name=%s, context=%s", cluster_name, context_name)
+                            break
+            except Exception as e:
+                log.warning("[Redefine] 读取 clusters.json 失败: %s", e)
+            
+            # 上传到 Pod
+            pod_tmp_dir = f"/tmp/arthas-hotfix/{timestamp}"
+            class_file_name = PathLib(class_file_path).name
+            pod_class_file = f"{pod_tmp_dir}/{class_file_name}"
+            
+            # ✅ 先在 Pod 内创建目录
+            log.info("[Redefine] 在 Pod 内创建目录: %s", pod_tmp_dir)
+            mkdir_cmd = ['kubectl', 'exec']
+            if kubeconfig_path:
+                mkdir_cmd.extend(['--kubeconfig', kubeconfig_path])
+            if context_name:
+                mkdir_cmd.extend(['--context', context_name])
+            mkdir_cmd.extend(['-n', namespace, pod_name])
+            if container:
+                mkdir_cmd.extend(['-c', container])
+            mkdir_cmd.extend(['--', 'sh', '-c', f"mkdir -p {pod_tmp_dir}"])
+            
+            mkdir_result = subprocess.run(
+                mkdir_cmd,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                timeout=10
+            )
+            
+            if mkdir_result.returncode != 0:
+                log.error("[Redefine] 创建目录失败: %s", mkdir_result.stderr)
+                return {
+                    "ok": False,
+                    "error": f"创建目录失败: {mkdir_result.stderr}",
+                    "sha256": sha256,
+                    "timestamp": timestamp
+                }
+            
+            log.info("[Redefine] 目录创建成功: %s", pod_tmp_dir)
+            
+            # 上传文件
+            log.info("[Redefine] 上传文件到 Pod: %s -> %s", class_file_path, pod_class_file)
+            
+            cp_cmd = ['kubectl', 'cp']
+            if kubeconfig_path:
+                cp_cmd.extend(['--kubeconfig', kubeconfig_path])
+            if context_name:
+                cp_cmd.extend(['--context', context_name])
+            cp_cmd.extend(['-n', namespace, class_file_path, f"{pod_name}:{pod_class_file}"])
+            if container:
+                cp_cmd.extend(['-c', container])
+            
+            cp_result = subprocess.run(
+                cp_cmd,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                timeout=30
+            )
+            
+            if cp_result.returncode != 0:
+                log.error("[Redefine] 上传失败: %s", cp_result.stderr)
+                return {
+                    "ok": False,
+                    "error": f"上传文件到 Pod 失败: {cp_result.stderr}",
+                    "sha256": sha256,
+                    "timestamp": timestamp
+                }
+            
+            log.info("[Redefine] 文件上传成功: %s", pod_class_file)
 
-            # 执行 redefine 命令
-            command = f"redefine {class_file_path}"
-            result = ArthasCommandExecutor.execute(connection, command)
-
+            # ✅ 通过 Arthas HTTP API 执行 redefine (使用 Pod 内路径)
+            redefine_cmd = f"redefine {pod_class_file}"
+            log.info("[Redefine] 执行 Arthas 命令: %s", redefine_cmd)
+            
+            result = ArthasCommandExecutor.execute(connection, redefine_cmd, timeout_ms=30000)
+            
+            # ✅ 关键修复: 检查 body.results[0].statusCode
+            body = result.get('body', {})
+            if isinstance(body, dict):
+                results = body.get('results', [])
+                if results and len(results) > 0:
+                    first_result = results[0]
+                    if isinstance(first_result, dict):
+                        status_code = first_result.get('statusCode', 0)
+                        message = first_result.get('message', '')
+                        
+                        # statusCode < 0 表示失败
+                        if status_code < 0:
+                            log.error("[Redefine] 实际失败: statusCode=%d, message=%s", status_code, message)
+                            return {
+                                "ok": False,
+                                "error": message or 'redefine command failed',
+                                "sha256": sha256,
+                                "timestamp": timestamp
+                            }
+            
             if result.get('state') in ('SUCCEEDED', 'succeeded'):
                 output = result.get('message', '')
-                log.info("redefine success: %s (sha256: %s)", class_file_path, sha256[:16])
+                log.info("redefine success: %s (sha256: %s)", pod_class_file, sha256[:16])
                 return {
                     "ok": True,
                     "output": output,
@@ -834,8 +978,8 @@ class HotfixService:
                     "timestamp": timestamp
                 }
             else:
-                error_msg = result.get('error', 'redefine command failed')
-                log.error("redefine failed: %s - %s", class_file_path, error_msg)
+                error_msg = result.get('message', '') or result.get('error', 'redefine command failed')
+                log.error("redefine failed: %s - %s", pod_class_file, error_msg)
                 return {
                     "ok": False,
                     "error": error_msg,

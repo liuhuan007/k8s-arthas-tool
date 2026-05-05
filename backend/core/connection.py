@@ -290,9 +290,16 @@ class ArthasConnection:
         self._notify_state_change(ConnectionState.START_AGENT, "Starting Arthas agent in Pod")
         ok, agent_msg = self.agent_mgr.ensure_agent_running()
         if not ok:
-            # ✅ 关键修复: REINSTALL_NEEDED 特殊标记,不要包装,直接透传
+            # ✅ 关键修复: REINSTALL_NEEDED 特殊标记,清理端口转发并重试
             if agent_msg == "REINSTALL_NEEDED":
-                return False, "REINSTALL_NEEDED"
+                log.warning("[Arthas] Zombie port detected, cleaning up and retrying")
+                # 清理端口转发
+                if self._pf_proc:
+                    self._stop_port_forward()
+                self._arthas_ready = False
+                self.client = None
+                # 重试: 重新建立连接
+                return self.connect_arthas(timeout=timeout)
             if "JAR" in agent_msg or "jar" in agent_msg:
                 self._notify_state_change(ConnectionState.NEED_JAR, agent_msg)
                 err = _jar_missing_error(agent_msg, getattr(self.target, 'arthas_jar', ''))

@@ -233,6 +233,8 @@ async function hotfixUploadFile(input) {
   const file = input.files[0];
   if (!file) return;
 
+  console.log('[Hotfix Upload] 开始上传文件:', file.name, '大小:', file.size);
+
   const connId = getCurrentConnectionId();
   if (!connId) {
     alert('请先建立连接');
@@ -247,19 +249,23 @@ async function hotfixUploadFile(input) {
   formData.append('connection_id', connId);
 
   try {
+    console.log('[Hotfix Upload] 发送请求到 /api/hotfix/upload');
     const resp = await fetch('/api/hotfix/upload', {
       method: 'POST',
       credentials: 'include',
       body: formData
     });
 
+    console.log('[Hotfix Upload] 响应状态:', resp.status);
     const data = await resp.json();
+    console.log('[Hotfix Upload] 响应数据:', data);
     
     if (data.ok) {
       _hfState.uploadedFile = data.file_path;
       _hfState.artifactPath = data.artifact_path;
       
       status.textContent = `✅ 上传成功: ${data.file_name} (${data.file_size} bytes, SHA256: ${data.sha256.substring(0, 16)}...)`;
+      console.log('[Hotfix Upload] 上传成功');
       
       // 如果是 .java 文件,启用编译按钮
       if (file.name.endsWith('.java')) {
@@ -272,9 +278,11 @@ async function hotfixUploadFile(input) {
       }
     } else {
       status.textContent = '❌ 上传失败: ' + data.error;
+      console.error('[Hotfix Upload] 上传失败:', data.error);
     }
   } catch (err) {
     status.textContent = '❌ 请求失败: ' + err.message;
+    console.error('[Hotfix Upload] 请求异常:', err);
   }
 }
 
@@ -373,12 +381,7 @@ function hotfixSkipCompile() {
  * 步骤 4: 执行 redefine
  */
 async function hotfixRedefine() {
-  const confirmText = document.getElementById('hfConfirmText').value.trim();
-  if (confirmText !== 'CONFIRM') {
-    alert('请输入 CONFIRM 确认执行 redefine');
-    return;
-  }
-
+  // ✅ 去掉 CONFIRM 验证,直接执行
   const connId = getCurrentConnectionId();
   if (!connId) {
     alert('请先建立连接');
@@ -409,14 +412,21 @@ async function hotfixRedefine() {
     
     if (data.ok) {
       _hfState.redefineResult = data;
-      output.textContent = data.output;
+      // ✅ 增强展示: 使用 pre 标签格式化输出
+      output.style.display = 'block';
+      output.style.color = '#10b981';  // 绿色
+      output.textContent = '✅ redefine 成功!\n\n' + (data.output || '无输出');
       
       // 启用验证按钮
       document.getElementById('btnVerify').disabled = false;
       
       log('✅ redefine 成功');
     } else {
-      output.textContent = '❌ redefine 失败: ' + data.error;
+      // ✅ 增强展示: 详细错误信息
+      output.style.display = 'block';
+      output.style.color = '#f56565';  // 红色
+      output.textContent = '❌ redefine 失败:\n\n' + (data.error || '未知错误');
+      console.error('[Hotfix Redefine] 失败:', data);
     }
   } catch (err) {
     output.textContent = '❌ 请求失败: ' + err.message;
@@ -513,8 +523,7 @@ function hotfixShowRollbackGuide() {
    - 选择旧版本 .class 文件
    
 3. 执行 redefine
-   - 输入 CONFIRM 确认
-   - 点击"执行 redefine"
+   - 点击"执行 redefine" 按钮
    
 4. 验证回滚
    - 生成验证报告

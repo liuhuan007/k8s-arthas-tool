@@ -264,19 +264,10 @@ def hotfix_redefine():
     """对 .class 执行 Arthas redefine"""
     d = request.json or {}
     conn_id = d.get('connection_id', '')
-    class_file_path = d.get('class_file_path', '')
-    confirmed = d.get('confirmed', False)
-
-    if not conn_id or not class_file_path:
-        return jsonify({"error": "connection_id 和 class_file_path 为必填项"}), 400
-
-    # 二次确认检查
-    if not confirmed:
-        return jsonify({
-            "error": "redefine 是高危操作,需要二次确认",
-            "require_confirm": True,
-            "message": "请输入 CONFIRM 确认执行 redefine"
-        }), 400
+    # ✅ 兼容前端 class_file 参数
+    class_file_path = d.get('class_file_path', '') or d.get('class_file', '')
+    # ✅ 去掉 confirm 验证,直接执行
+    confirmed = True  # 默认已确认
 
     conn, err = _get_connection(conn_id)
     if err:

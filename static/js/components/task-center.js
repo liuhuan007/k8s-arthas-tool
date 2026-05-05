@@ -40,6 +40,7 @@
    * 打开创建任务模态框
    */
   window.openCreateTaskModal = function() {
+    console.log('[TaskCenter] openCreateTaskModal called');
     const modal = document.createElement('div');
     modal.className = 'capability-modal-overlay';
     modal.innerHTML = `

@@ -81,7 +81,8 @@ _COMMAND_TIMEOUT_CONFIG = {
 
 # 高危命令列表（需要二次确认）
 _HIGH_RISK_COMMANDS = {
-    'redefine',      # 类重新定义
+    # ✅ 去掉 redefine,热修复场景需要直接执行
+    # 'redefine',      # 类重新定义
     'retransform',   # 类热替换
     'heapdump',      # 堆Dump（可能影响性能）
     'profiler',      # 性能采样（有一定开销）
@@ -151,12 +152,26 @@ class ArthasCommandExecutor:
         
         # 4. 执行命令
         start_time = time.time()
+        log.info("[ArthasExecutor] ▶ 执行命令: %s (timeout=%dms)", command, timeout_ms)
         try:
             client = connection.http_client
+            if not client:
+                raise ValueError("http_client is None")
             result = client.exec_once(command, timeout_ms=timeout_ms)
             
             duration_ms = int((time.time() - start_time) * 1000)
             result['duration_ms'] = duration_ms
+            
+            log.info("[ArthasExecutor]  执行完成: state=%s, duration=%dms", 
+                    result.get('state'), duration_ms)
+            
+            # ✅ 打印完整 result (格式化输出)
+            import json
+            try:
+                log.info("[ArthasExecutor] 📦 完整返回:\n%s", 
+                        json.dumps(result, ensure_ascii=False, indent=2)[:2000])
+            except Exception:
+                log.info("[ArthasExecutor] 📦 完整返回: %s", str(result)[:2000])
             
         except Exception as e:
             duration_ms = int((time.time() - start_time) * 1000)

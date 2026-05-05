@@ -267,16 +267,15 @@ function showErrorNotification(errorCode, context = {}) {
   const container = document.getElementById('errorNotificationContainer') || createErrorContainer();
   container.appendChild(notification);
   
-  // 自动消失（error 类型不自动消失）
-  if (errorInfo.type !== 'error') {
-    setTimeout(() => {
-      if (notification.parentElement) {
-        notification.style.opacity = '0';
-        notification.style.transform = 'translateX(100%)';
-        setTimeout(() => notification.remove(), 300);
-      }
-    }, 8000);
-  }
+  // 自动消失（所有类型都延迟消失）
+  const autoDismissDelay = errorInfo.type === 'error' ? 15000 : 8000;  // error 15秒，其他 8 秒
+  setTimeout(() => {
+    if (notification.parentElement) {
+      notification.style.opacity = '0';
+      notification.style.transform = 'translateX(100%)';
+      setTimeout(() => notification.remove(), 300);
+    }
+  }, autoDismissDelay);
   
   // 同时显示 toast
   toast(`${errorInfo.icon} ${message}`, errorInfo.type);

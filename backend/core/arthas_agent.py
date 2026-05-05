@@ -75,18 +75,28 @@ class ArthasAgentManager:
 
     def _find_arthas_pids(self) -> List[int]:
         """返回 Pod 内所有 arthas-boot 进程的 PID 列表"""
-        # ✅ 修复: 使用 /proc 文件系统查找,不依赖 ps 命令(某些容器没有 ps)
-        # 遍历 /proc/[pid]/cmdline,查找包含 arthas-boot 的进程
+        # ✅ 优化: 优先检查缓存的 PID 是否存在
+        if self._pid:
+            rc, _, _ = self._exec(f"test -d /proc/{self._pid} 2>/dev/null", timeout=3)
+            if rc == 0:
+                # 验证 cmdline 是否包含 arthas-boot
+                rc2, cmdline, _ = self._exec(f"cat /proc/{self._pid}/cmdline 2>/dev/null | tr '\\0' ' '", timeout=3)
+                if rc2 == 0 and 'arthas-boot' in cmdline:
+                    log.info("[_find_arthas_pids] 缓存 PID %d 有效", self._pid)
+                    return [self._pid]
+                else:
+                    log.warning("[_find_arthas_pids] 缓存 PID %d 不是 arthas-boot", self._pid)
+                    self._pid = None  # 清空缓存
+        
+        # ✅ 优化的 /proc 查找: 使用 find 命令,更快
         rc, out, err = self._exec(
-            "for pid in /proc/[0-9]*/cmdline; do "
-            "  if cat \"$pid\" 2>/dev/null | tr '\\0' ' ' | grep -q 'arthas-boot'; then "
-            "    echo \"$pid\" | grep -o '[0-9]\+'; "
-            "  fi; "
-            "done 2>/dev/null || true",
-            timeout=10,
+            "find /proc -maxdepth 2 -name cmdline -exec sh -c "
+            "'cat \"$1\" 2>/dev/null | tr \"\\0\" \" \" | grep -q arthas-boot && "
+            "basename $(dirname \"$1\")' _ {} \\; 2>/dev/null || true",
+            timeout=8,
         )
         
-        log.info("[_find_arthas_pids] /proc 查找输出: rc=%s, out=%s, err=%s", rc, repr(out), repr(err))
+        log.info("[_find_arthas_pids] /proc 查找输出: rc=%s, out=%s", rc, repr(out[:200]) if out else '')
         
         pids = []
         if rc == 0 and out.strip():
@@ -175,19 +185,27 @@ class ArthasAgentManager:
         """确保 Arthas agent 在 Pod 内运行"""
         port = self.t.arthas_http_port
 
-        # 情况 A: HTTP 已响应，直接复用(不验证进程,避免容器环境误判)
+        # 情况 A: HTTP 已响应，尝试验证进程是否存在
         if self._http_reachable():
-            log.info("[Agent Reuse] HTTP reachable, reusing existing Arthas agent (port %s)", port)
-            # 尝试获取 PID (不强制)
+            log.info("[Agent Reuse] HTTP reachable, checking process (port %s)", port)
+            # 查找 Arthas 进程
             arthas_pids = self._find_arthas_pids()
             if arthas_pids:
+                # ✅ 进程存在,更新 PID 并复用
                 if self._pid and self._pid not in arthas_pids:
                     log.warning("[Agent Reuse] Expected PID %d not found, updating to %d",
                                self._pid, arthas_pids[0])
                     self._pid = arthas_pids[0]
-            if not self._pid:
-                self.find_java_pid()
-            return True, f"Arthas 已在运行，直接复用 (port {port})"
+                elif not self._pid:
+                    self._pid = arthas_pids[0]
+                log.info("[Agent Reuse] Arthas PID %d found, reusing agent", self._pid)
+                return True, f"Arthas 已在运行，直接复用 (port {port}, pid {self._pid})"
+            else:
+                # ✅ 进程不存在,说明是僵尸端口,需要重新安装
+                log.warning("[Agent Reuse] HTTP reachable but NO Arthas process found, zombie port detected")
+                log.info("[Agent Reuse] Returning REINSTALL_NEEDED to trigger cleanup")
+                # 返回特殊标记,让上层 ArthasConnection 清理端口转发并重安装
+                return False, "REINSTALL_NEEDED"
 
         # 情况 B: HTTP 不通，先清理残留进程
         stale_pids = self._find_arthas_pids()

@@ -89,7 +89,10 @@ class PodConnection:
                 return False, msg
             
             # Step 3: 检测运行时环境
+            log.info("[PodConnection] 开始检测运行时环境...")
             self._runtime_info = self._detect_runtime(timeout)
+            log.info("[PodConnection] 运行时检测结果: type=%s, version=%s", 
+                    self._runtime_info.runtime_type, self._runtime_info.version or 'N/A')
             
             self._healthy = True
             runtime_desc = self._runtime_info.runtime_type if self._runtime_info else "unknown"
@@ -231,7 +234,8 @@ class PodConnection:
     
     def _detect_java(self, timeout: int = 8) -> Optional[RuntimeInfo]:
         """检测 Java 运行时"""
-        rc, out, _ = self.executor.exec_pod(
+        log.info("[_detect_java] 开始检测 Java 进程...")
+        rc, out, err = self.executor.exec_pod(
             self.target.namespace,
             self.target.pod_name,
             self.target.container,
@@ -239,7 +243,10 @@ class PodConnection:
             timeout=timeout
         )
         
+        log.info("[_detect_java] rc=%d, out='%s', err='%s'", rc, out[:200] if out else '', err[:100] if err else '')
+        
         if rc != 0 or not out.strip():
+            log.warning("[_detect_java] 未找到 Java 进程 (rc=%d, out 为空)", rc)
             return None
         
         # 解析 Java 进程
