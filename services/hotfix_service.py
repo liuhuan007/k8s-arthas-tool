@@ -567,25 +567,86 @@ class HotfixService:
                 log.warning("[MC] 未找到应用 ClassLoader,使用默认 (可能缺少依赖)")
                 log.warning("[MC] 建议: 在 Pod 内执行 'classloader' 命令手动查找 hash")
             
-            # 2. 构建 MC 命令 (如果有 ClassLoader hash,使用 -c 参数)
-            # ✅ 关键修复: 验证文件是否存在于 Pod 中
-            log.info("[MC] 验证文件是否存在: %s", java_file_in_pod)
-            check_cmd = f"test -f {java_file_in_pod} && echo EXISTS || echo NOT_FOUND"
-            check_result = ArthasCommandExecutor.execute(connection, check_cmd, timeout_ms=5000)
-            log.info("[MC] 文件检查: %s", check_result.get('message', ''))
+            # 2. 构建 MC 命令
+            # ✅ 关键修复: mc 不支持绝对路径,需要先 cd 到文件目录
+            java_file_dir = str(Path(java_file_in_pod).parent)
+            java_file_name = Path(java_file_in_pod).name
             
+            # 使用 kubectl exec 在 Pod 内执行
+            import subprocess
+            
+            # 构建 kubectl exec 命令
+            cluster_name = connection.target.cluster_name
+            namespace = connection.target.namespace
+            pod_name = connection.target.pod_name
+            container = getattr(connection.target, 'container_name', '')
+            
+            # 获取 kubeconfig
+            kubeconfig_path = None
+            context_name = None
+            try:
+                import json
+                clusters_file = Path(__file__).parent.parent.parent / 'clusters.json'
+                if clusters_file.exists():
+                    with open(clusters_file, 'r', encoding='utf-8') as f:
+                        clusters_data = json.load(f)
+                    for cluster in clusters_data.get('clusters', []):
+                        if cluster.get('name') == cluster_name:
+                            context_name = cluster.get('context', cluster_name)
+                            kubeconfig_path = cluster.get('kubeconfig')
+                            break
+            except Exception as e:
+                log.warning("[MC] 读取 clusters.json 失败: %s", e)
+            
+            # 构建 mc 命令
             if class_loader_hash:
-                command = f"mc -c {class_loader_hash} -d {artifact_dir} {java_file_in_pod}"
+                mc_cmd = f"mc -c {class_loader_hash} -d {artifact_dir} {java_file_name}"
             else:
-                command = f"mc -d {artifact_dir} {java_file_in_pod}"
+                mc_cmd = f"mc -d {artifact_dir} {java_file_name}"
             
-            log.info("[MC] 执行命令: %s", command)
+            # 完整 shell 命令
+            shell_cmd = f"cd {java_file_dir} && {mc_cmd}"
             
-            result = ArthasCommandExecutor.execute(connection, command, timeout_ms=60000)
+            log.info("[MC] 执行命令: %s", shell_cmd)
             
-            log.info("[MC] 响应: state=%s, message=%s", result.get('state'), result.get('message', '')[:200])
+            # 构建 kubectl exec
+            exec_cmd = ['kubectl', 'exec']
+            if kubeconfig_path:
+                exec_cmd.extend(['--kubeconfig', kubeconfig_path])
+            if context_name:
+                exec_cmd.extend(['--context', context_name])
+            exec_cmd.extend(['-n', namespace, pod_name])
+            if container:
+                exec_cmd.extend(['-c', container])
+            exec_cmd.extend(['--', 'sh', '-c', shell_cmd])
+            
+            log.info("[MC] kubectl exec: %s", ' '.join(exec_cmd))
+            
+            result = subprocess.run(
+                exec_cmd,
+                capture_output=True,
+                text=True,
+                encoding='utf-8',
+                timeout=60
+            )
+            
+            # 构造 ArthasCommandExecutor 兼容的返回格式
+            if result.returncode == 0:
+                mc_result = {
+                    'state': 'SUCCEEDED',
+                    'message': result.stdout,
+                    'body': {'results': [{'message': result.stdout}]}
+                }
+            else:
+                mc_result = {
+                    'state': 'FAILED',
+                    'message': result.stderr or result.stdout,
+                    'body': {'results': [{'message': result.stderr or result.stdout}]}
+                }
+            
+            log.info("[MC] 响应: state=%s, message=%s", mc_result.get('state'), mc_result.get('message', '')[:200])
             # ✅ 输出完整的 body 结构,帮助诊断
-            body = result.get('body', {})
+            body = mc_result.get('body', {})
             log.info("[MC] body 类型: %s, keys: %s", type(body).__name__, list(body.keys()) if isinstance(body, dict) else 'N/A')
             if isinstance(body, dict):
                 results = body.get('results', [])
@@ -595,8 +656,8 @@ class HotfixService:
                 else:
                     log.warning("[MC] body.results 为空!")
 
-            if result.get('state') in ('SUCCEEDED', 'succeeded'):
-                output = result.get('message', '')
+            if mc_result.get('state') in ('SUCCEEDED', 'succeeded'):
+                output = mc_result.get('message', '')
                 
                 # 从 body.results 提取详细输出 (body 已在上面定义)
                 if isinstance(body, dict):

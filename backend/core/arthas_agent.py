@@ -97,14 +97,16 @@ class ArthasAgentManager:
         
         log.info("[_find_arthas_pids] 解析到 PID 列表: %s", pids)
         
-        # 验证进程是否存在
+        # ✅ 修复: 使用 /proc/[pid]/stat 验证进程是否真实运行
         valid_pids = []
         for pid in pids:
-            rc2, _, _ = self._exec(f"test -d /proc/{pid} 2>/dev/null", timeout=3)
-            if rc2 == 0:
+            # 检查 /proc/[pid]/stat 是否存在(比 test -d 更可靠)
+            rc2, stat_out, _ = self._exec(f"cat /proc/{pid}/stat 2>/dev/null | head -1", timeout=3)
+            if rc2 == 0 and stat_out.strip():
                 valid_pids.append(pid)
+                log.info("[_find_arthas_pids] PID %d 验证成功: %s", pid, stat_out.strip()[:100])
             else:
-                log.warning("[Arthas] PID %d 已不存在,跳过", pid)
+                log.warning("[Arthas] PID %d 已不存在(cmdline残留),跳过", pid)
         
         log.info("[_find_arthas_pids] 有效 PID 列表: %s", valid_pids)
         return valid_pids
@@ -173,25 +175,19 @@ class ArthasAgentManager:
         """确保 Arthas agent 在 Pod 内运行"""
         port = self.t.arthas_http_port
 
-        # 情况 A: HTTP 已响应，验证 Arthas 进程是否存在
+        # 情况 A: HTTP 已响应，直接复用(不验证进程,避免容器环境误判)
         if self._http_reachable():
+            log.info("[Agent Reuse] HTTP reachable, reusing existing Arthas agent (port %s)", port)
+            # 尝试获取 PID (不强制)
             arthas_pids = self._find_arthas_pids()
             if arthas_pids:
-                # ✅ 有进程,直接复用
-                log.info("Arthas HTTP reachable and agent process found (PIDs: %s) — reusing", arthas_pids)
                 if self._pid and self._pid not in arthas_pids:
-                    log.warning("[Agent Reuse] Expected PID %d not found, current PIDs: %s, updating to latest",
-                               self._pid, arthas_pids)
+                    log.warning("[Agent Reuse] Expected PID %d not found, updating to %d",
+                               self._pid, arthas_pids[0])
                     self._pid = arthas_pids[0]
-                if not self._pid:
-                    self.find_java_pid()
-                return True, f"Arthas 已在运行，直接复用 (port {port})"
-            else:
-                # ✅ 无进程,说明是残留的端口转发,关闭后重新安装
-                log.warning("[Agent Reuse] HTTP reachable but no Arthas process found, closing port-forward and reinstalling")
-                # ✅ 关键修复: 不杀进程,只关闭端口转发,避免误杀业务 JVM
-                # 返回特殊标记,让上层关闭端口转发
-                return False, "REINSTALL_NEEDED"
+            if not self._pid:
+                self.find_java_pid()
+            return True, f"Arthas 已在运行，直接复用 (port {port})"
 
         # 情况 B: HTTP 不通，先清理残留进程
         stale_pids = self._find_arthas_pids()
