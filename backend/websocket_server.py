@@ -31,9 +31,14 @@ def init_websocket(app):
         """WebSocket 连接处理"""
         user_id = None
         try:
-            # 等待认证消息
-            data = ws.receive(timeout=10)
+            # ✅ 修复: 缩短认证超时到 3s,避免阻塞
+            import logging
+            log = logging.getLogger(__name__)
+            log.info("[WebSocket] 等待认证...")
+            
+            data = ws.receive(timeout=3)
             if not data:
+                log.warning("[WebSocket] 认证超时,关闭连接")
                 ws.close()
                 return
             
@@ -56,7 +61,7 @@ def init_websocket(app):
                         _ws_clients[user_id] = []
                     _ws_clients[user_id].append(ws)
                 
-                print(f"[WebSocket] User {user_id} connected")
+                log.info(f"[WebSocket] User {user_id} connected")
                 
                 # 发送欢迎消息
                 ws.send(json.dumps({

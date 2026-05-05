@@ -12,6 +12,20 @@
 (function() {
   'use strict';
   
+  // ✅ 临时禁用 WebSocket (保留代码,不执行连接)
+  const WS_ENABLED = false;
+  if (!WS_ENABLED) {
+    console.log('[WebSocket] 功能已禁用');
+    window.WebSocketClient = {
+      connect: () => {},
+      disconnect: () => {},
+      send: () => {},
+      on: () => {},
+      isConnected: () => false,
+    };
+    return;
+  }
+  
   const WS_URL = window.WS_URL || `ws://${window.location.host}/ws`;
   let ws = null;
   let reconnectAttempts = 0;

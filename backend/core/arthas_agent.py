@@ -75,12 +75,19 @@ class ArthasAgentManager:
 
     def _find_arthas_pids(self) -> List[int]:
         """返回 Pod 内所有 arthas-boot 进程的 PID 列表"""
-        # ✅ 修复: 使用更精确的匹配,排除 grep 自身和 ps 命令
-        # 匹配: java -jar /app/arthas/arthas-boot.jar 或 java -jar arthas.jar
-        rc, out, _ = self._exec(
-            "ps -ef 2>/dev/null | grep '[j]ava.*arthas-boot\\.jar' | awk '{print $2}' || true",
-            timeout=8,
+        # ✅ 修复: 使用 /proc 文件系统查找,不依赖 ps 命令(某些容器没有 ps)
+        # 遍历 /proc/[pid]/cmdline,查找包含 arthas-boot 的进程
+        rc, out, err = self._exec(
+            "for pid in /proc/[0-9]*/cmdline; do "
+            "  if cat \"$pid\" 2>/dev/null | tr '\\0' ' ' | grep -q 'arthas-boot'; then "
+            "    echo \"$pid\" | grep -o '[0-9]\+'; "
+            "  fi; "
+            "done 2>/dev/null || true",
+            timeout=10,
         )
+        
+        log.info("[_find_arthas_pids] /proc 查找输出: rc=%s, out=%s, err=%s", rc, repr(out), repr(err))
+        
         pids = []
         if rc == 0 and out.strip():
             for line in out.strip().splitlines():
@@ -88,16 +95,18 @@ class ArthasAgentManager:
                 if pid_str.isdigit():
                     pids.append(int(pid_str))
         
-        # ✅ 额外验证: 确保进程确实在监听 8563 端口
+        log.info("[_find_arthas_pids] 解析到 PID 列表: %s", pids)
+        
+        # 验证进程是否存在
         valid_pids = []
         for pid in pids:
-            # 检查进程是否还在运行
-            rc2, _, _ = self._exec(f"kill -0 {pid} 2>/dev/null", timeout=3)
+            rc2, _, _ = self._exec(f"test -d /proc/{pid} 2>/dev/null", timeout=3)
             if rc2 == 0:
                 valid_pids.append(pid)
             else:
                 log.warning("[Arthas] PID %d 已不存在,跳过", pid)
         
+        log.info("[_find_arthas_pids] 有效 PID 列表: %s", valid_pids)
         return valid_pids
 
     def _kill_stale_arthas(self, pids: List[int]) -> str:
@@ -180,10 +189,7 @@ class ArthasAgentManager:
             else:
                 # ✅ 无进程,说明是残留的端口转发,关闭后重新安装
                 log.warning("[Agent Reuse] HTTP reachable but no Arthas process found, closing port-forward and reinstalling")
-                # ✅ 关键修复: 先清理 Pod 内残留的 HTTP 端口占用
-                log.info("[Agent Reuse] 清理 Pod 内残留的 Arthas HTTP 端口 %d", port)
-                self._exec(f"fuser -k {port}/tcp 2>/dev/null || true", timeout=5)
-                time.sleep(1)
+                # ✅ 关键修复: 不杀进程,只关闭端口转发,避免误杀业务 JVM
                 # 返回特殊标记,让上层关闭端口转发
                 return False, "REINSTALL_NEEDED"
 
@@ -214,6 +220,8 @@ class ArthasAgentManager:
         mcp_config = self._detect_mcp_support(port)
         start_cmd = (
             f"nohup java"
+            f" -Xmx128m -Xms64m"  # ✅ 关键修复: 限制 Arthas 内存,防止 OOM
+            f" -XX:+UseSerialGC"  # 使用轻量级 GC
             f" -Darthas.httpPort={port}"
             f" -Darthas.telnetPort={self.t.arthas_telnet_port}"
             f" -Darthas.ip=127.0.0.1"

@@ -624,48 +624,85 @@ def _ensure_connection(conn_id: str, d: dict):
     target = PodTarget(cluster_name=cluster_name, namespace=namespace, pod_name=pod, container=container)
     conn = ArthasConnection(runner, target, state_manager=_state_manager)
     conn.connection_id = conn_id  # ✅ 设置 connection_id 用于状态管理
-    ok, msg = conn.connect()
+    
+    log.info("[_ensure_connection] 开始建立连接, conn_id=%s", conn_id)
+    
+    # ✅ 关键修复: 先建立 Pod 连接
+    try:
+        ok, msg = conn.pod_conn.connect()
+        log.info("[_ensure_connection] Pod 连接结果: ok=%s, msg=%s", ok, msg)
+    except Exception as e:
+        log.error("[_ensure_connection] Pod 连接异常: %s", e, exc_info=True)
+        return None, f"连接已丢失，自动重连失败: {str(e)}"
+    
     if not ok:
+        # msg 可能是字符串或字典
         err_str = msg.get("message", str(msg)) if isinstance(msg, dict) else msg
         return None, f"连接已丢失，自动重连失败: {err_str}"
+    
+    # ✅ 同步 Pod 连接状态到 ArthasConnection
+    conn._pod_connected = True
+    conn._healthy = True
+    conn._runtime_info = conn.pod_conn._runtime_info
+    conn._pod_phase = conn.pod_conn._pod_phase
+    
+    # ✅ 关键修复: 再建立 Arthas 连接
+    log.info("[_ensure_connection] 开始建立 Arthas 连接...")
+    ok2, msg2 = conn.connect_arthas(timeout=30)
+    log.info("[_ensure_connection] 第一次 Arthas 连接结果: ok=%s, msg=%s, msg_type=%s", ok2, msg2, type(msg2).__name__)
+    if not ok2:
+        # ✅ 如果是 REINSTALL_NEEDED,关闭端口转发,清理残留进程,重试
+        is_reinstall = (msg2 == "REINSTALL_NEEDED") or (isinstance(msg2, dict) and msg2.get('message') == 'REINSTALL_NEEDED')
+        log.info("[_ensure_connection] is_reinstall=%s, msg2=%s", is_reinstall, msg2)
+        if is_reinstall:
+            log.warning("[_ensure_connection] 检测到 REINSTALL_NEEDED,清理后重试")
+            conn._stop_port_forward()
+            conn._arthas_ready = False
+            conn.client = None
+            conn._pf_proc = None
+            conn.local_port = 0
+            # 重试一次
+            log.info("[_ensure_connection] 开始第二次 Arthas 连接...")
+            ok2, msg2 = conn.connect_arthas(timeout=30)
+            log.info("[_ensure_connection] 第二次 Arthas 连接结果: ok=%s, msg=%s", ok2, msg2)
+        
+        if not ok2:
+            err_str = msg2.get("message", str(msg2)) if isinstance(msg2, dict) else msg2
+            return None, f"连接已丢失，自动重连失败: {err_str}"
 
+    # ✅ Arthas 连接成功,更新数据库中的元数据
     with _connections_lock:
-        # 双重检查：防止并发时其他线程已经创建
+        now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        if db.exists('connections', 'id = ?', (conn_id,)):
+            db.update('connections', {
+                'level': 'arthas',
+                'local_port': conn.local_port,
+                'java_pid': conn.java_pid,
+                'arthas_version': conn.arthas_version,
+                'status': 'ready',
+                'last_ping_at': now_ts,
+                'user_id': current_user.id,
+                'updated_at': now_ts,
+            }, 'id = ?', (conn_id,))
+        else:
+            db.insert('connections', {
+                'id': conn_id,
+                'cluster_name': cluster_name,
+                'namespace': namespace,
+                'pod_name': pod,
+                'container_name': '',
+                'level': 'arthas',
+                'local_port': conn.local_port,
+                'java_pid': conn.java_pid,
+                'arthas_version': conn.arthas_version,
+                'status': 'ready',
+                'last_ping_at': now_ts,
+                'user_id': current_user.id,
+                'updated_at': now_ts,
+            })
+        
         if conn_id not in _connections:
             _connections[conn_id] = {"conn": conn, "user_id": current_user.id}
-            # 持久化到数据库
-            now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            if db.exists('connections', 'id = ?', (conn_id,)):
-                db.update('connections', {
-                    'level': 'arthas',
-                    'local_port': conn.local_port,
-                    'java_pid': conn.java_pid,
-                    'arthas_version': conn.arthas_version,
-                    'status': 'ready',
-                    'last_ping_at': now_ts,
-                    'user_id': current_user.id,
-                    'updated_at': now_ts,
-                }, 'id = ?', (conn_id,))
-            else:
-                db.insert('connections', {
-                    'id': conn_id,
-                    'cluster_name': cluster_name,
-                    'namespace': namespace,
-                    'pod_name': pod,
-                    'container_name': '',
-                    'level': 'arthas',
-                    'local_port': conn.local_port,
-                    'java_pid': conn.java_pid,
-                    'arthas_version': conn.arthas_version,
-                    'status': 'ready',
-                    'last_ping_at': now_ts,
-                    'user_id': current_user.id,
-                    'updated_at': now_ts,
-                })
-        else:
-            # 其他线程已创建，关闭我们新建的连接
-            conn.disconnect()
-            conn = _connections[conn_id].get('conn')
     log.info("Auto-reconnected: %s", conn_id)
     return conn, None
 
@@ -704,7 +741,7 @@ def arthas_exec():
 def _save_arthas_command(conn_id: str, command: str, output: str = None, error: str = None):
     """保存 Arthas 命令历史"""
     user_id = current_user.id if current_user.is_authenticated else None
-    db.insert('arthas_commands', {
+    db.insert('arthas_command_logs', {
         'connection_id': conn_id,
         'user_id': user_id,
         'command': command,
@@ -849,12 +886,12 @@ def get_arthas_commands():
     # 非 admin 只能查看自己的命令历史
     if current_user.is_admin:
         commands = db.fetch_all(
-            'SELECT command, output, error, timestamp FROM arthas_commands WHERE connection_id = ? ORDER BY timestamp DESC LIMIT ?',
+            'SELECT command, output, error, timestamp FROM arthas_command_logs WHERE connection_id = ? ORDER BY timestamp DESC LIMIT ?',
             (conn_id, limit)
         )
     else:
         commands = db.fetch_all(
-            'SELECT command, output, error, timestamp FROM arthas_commands WHERE connection_id = ? AND user_id = ? ORDER BY timestamp DESC LIMIT ?',
+            'SELECT command, output, error, timestamp FROM arthas_command_logs WHERE connection_id = ? AND user_id = ? ORDER BY timestamp DESC LIMIT ?',
             (conn_id, current_user.id, limit)
         )
     return jsonify({"ok": True, "commands": [dict(c) for c in (commands or [])]})

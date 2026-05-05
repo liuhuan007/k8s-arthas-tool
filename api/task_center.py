@@ -62,6 +62,19 @@ def list_capabilities():
         where_clauses.append('level = ?')
         params.append(int(level_filter))
     
+    # ✅ Phase 5: 权限过滤
+    user_role = current_user.role if hasattr(current_user, 'role') else 'user'
+    if user_role != 'admin':
+        user_id = current_user.id
+        where_clauses.append(
+            '(visibility = ? OR (visibility = ? AND created_by = ?) OR id IN ('
+            '  SELECT capability_id FROM capability_user_groups WHERE group_id IN ('
+            '    SELECT group_id FROM user_group_members WHERE user_id = ?'
+            '  )'
+            '))'
+        )
+        params.extend(['public', 'private', user_id, user_id])
+    
     where_sql = ' AND '.join(where_clauses) if where_clauses else '1=1'
     
     rows = db.fetch_all(
@@ -653,6 +666,12 @@ def _seed_default_templates(conn):
 
     package_id = conn.execute('SELECT id FROM tool_packages WHERE name = ?', ('builtin',)).fetchone()[0]
     arthas_package_id = conn.execute('SELECT id FROM tool_packages WHERE name = ?', ('builtin-arthas-offline',)).fetchone()[0]
+    
+    # ✅ 停用旧版种子数据（全新架构无需兼容）
+    # 旧版：15 个 user-case 脚本模板 + Arthas 工具脚本
+    # 新版：脚本模板由用户手动创建，关联 diagnosis_capabilities
+    if False:  # 永久停用旧版种子数据
+        pass
     if conn.execute('SELECT COUNT(*) FROM script_templates').fetchone()[0] == 0:
         script = '''#!/usr/bin/env python3
 import os
@@ -1606,21 +1625,64 @@ def execute_diagnosis():
     if not connection:
         return _error('连接不存在'), 404
     
-    # 5. 执行诊断
+    # ✅ Phase 5: 并发控制 - 使用 DiagnosisExecutorPool
+    from backend.core.diagnosis_executor_pool import get_diagnosis_executor_pool, ConcurrencyError
+    from backend.core.connection_aware_executor import get_connection_aware_executor
+    
+    pool = get_diagnosis_executor_pool()
+    connection_executor = get_connection_aware_executor()
+    
+    execution_id = f"exec-{uuid.uuid4().hex[:8]}-{capability_id}"
+    
+    # 1. 获取并发控制锁
     try:
+        submit_result = pool.submit_diagnosis(
+            connection_id=connection_id,
+            capability_id=capability_id,
+            params=params,
+            user_id=current_user.id,
+            execution_id=execution_id
+        )
+    except ConcurrencyError as e:
+        return _error(str(e)), 429  # Too Many Requests
+    
+    if not submit_result['ok']:
+        return _error(submit_result.get('error', '提交失败'))
+    
+    cleanup = submit_result['cleanup']
+    
+    # 2. 执行诊断（带连接保护）
+    def _execute_diagnosis():
+        """实际执行逻辑"""
         if capability['category'] in ('quick', 'tool'):
-            result = _execute_arthas_command(capability, extension, params, connection)
+            return _execute_arthas_command(capability, extension, params, connection)
         elif capability['category'] == 'scenario':
-            result = _execute_scenario(capability, extension, params, connection)
+            return _execute_scenario(capability, extension, params, connection)
         elif capability['category'] == 'ai':
-            result = _execute_ai_diagnosis(capability, extension, params, connection)
+            return _execute_ai_diagnosis(capability, extension, params, connection)
         else:
-            return _error(f'不支持的能力类型: {capability["category"]}')
+            raise ValueError(f'不支持的能力类型: {capability["category"]}')
+    
+    try:
+        result = connection_executor.execute_with_connection_guard(
+            connection_id=connection_id,
+            capability_id=capability_id,
+            params=params,
+            user_id=current_user.id,
+            execution_func=_execute_diagnosis,
+            execution_id=execution_id
+        )
+        
+        # 执行成功
+        cleanup(status='completed')
+        
     except Exception as e:
+        # 执行失败
+        cleanup(status='failed', error=str(e))
         log.error("诊断执行失败: %s", e, exc_info=True)
         return _error(f'诊断执行失败: {str(e)}', 500)
     
-    # 6. 记录执行日志（task_logs）
+    # 3. 记录执行日志（task_logs）
     log_id = str(uuid.uuid4().hex)
     now = _now_text()
     db.insert('task_logs', {
@@ -1772,3 +1834,181 @@ def _execute_ai_diagnosis(capability, extension, params, connection):
         }
     
     raise ValueError(f'不支持的 AI 诊断处理器: {handler_name}')
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 脚本模板 API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@task_bp.route('/script-templates', methods=['GET'])
+@login_required
+def list_script_templates():
+    """查询脚本模板列表"""
+    templates = db.fetch_all(
+        'SELECT * FROM script_templates ORDER BY created_at DESC'
+    )
+    return jsonify({
+        'ok': True,
+        'templates': [dict(t) for t in templates]
+    })
+
+
+@task_bp.route('/script-templates', methods=['POST'])
+@login_required
+def create_script_template():
+    """创建脚本模板"""
+    data = request.get_json()
+    
+    name = data.get('name', '').strip()
+    runtime = data.get('runtime', 'python').strip()
+    script_body = data.get('script_body', '').strip()
+    capability_id = data.get('capability_id')
+    description = data.get('description', '').strip()
+    
+    if not name:
+        return jsonify({'ok': False, 'message': '模板名称不能为空'}), 400
+    if not script_body:
+        return jsonify({'ok': False, 'message': '脚本内容不能为空'}), 400
+    
+    template_id = db.insert('script_templates', {
+        'name': name,
+        'runtime': runtime,
+        'script_body': script_body,
+        'capability_id': capability_id,
+        'description': description,
+        'created_by': current_user.id if hasattr(current_user, 'id') else None,
+    })
+    
+    return jsonify({
+        'ok': True,
+        'id': template_id,
+        'message': '脚本模板创建成功'
+    }), 201
+
+
+@task_bp.route('/script-templates/<int:template_id>', methods=['GET'])
+@login_required
+def get_script_template(template_id):
+    """获取脚本模板详情"""
+    template = db.fetch_one(
+        'SELECT * FROM script_templates WHERE id = ?',
+        (template_id,)
+    )
+    
+    if not template:
+        return jsonify({'ok': False, 'message': '模板不存在'}), 404
+    
+    return jsonify({
+        'ok': True,
+        'template': dict(template)
+    })
+
+
+@task_bp.route('/script-templates/<int:template_id>', methods=['PUT'])
+@login_required
+def update_script_template(template_id):
+    """更新脚本模板"""
+    data = request.get_json()
+    
+    fields = {}
+    if 'name' in data:
+        fields['name'] = data['name'].strip()
+    if 'runtime' in data:
+        fields['runtime'] = data['runtime'].strip()
+    if 'script_body' in data:
+        fields['script_body'] = data['script_body'].strip()
+    if 'capability_id' in data:
+        fields['capability_id'] = data['capability_id']
+    if 'description' in data:
+        fields['description'] = data['description'].strip()
+    
+    if not fields:
+        return jsonify({'ok': False, 'message': '无更新内容'}), 400
+    
+    db.update('script_templates', fields, {'id': template_id})
+    
+    return jsonify({
+        'ok': True,
+        'message': '脚本模板更新成功'
+    })
+
+
+@task_bp.route('/script-templates/<int:template_id>', methods=['DELETE'])
+@login_required
+def delete_script_template(template_id):
+    """删除脚本模板"""
+    template = db.fetch_one(
+        'SELECT id FROM script_templates WHERE id = ?',
+        (template_id,)
+    )
+    
+    if not template:
+        return jsonify({'ok': False, 'message': '模板不存在'}), 404
+    
+    db.execute('DELETE FROM script_templates WHERE id = ?', (template_id,))
+    
+    return jsonify({
+        'ok': True,
+        'message': '脚本模板已删除'
+    })
+
+
+@task_bp.route('/capabilities/<int:cap_id>/versions', methods=['GET'])
+@login_required
+def get_capability_versions(cap_id):
+    """获取能力版本历史"""
+    from backend.core.diagnosis_capabilities import get_capability_versions
+    
+    limit = request.args.get('limit', 20, type=int)
+    versions = get_capability_versions(cap_id, limit)
+    
+    return jsonify({
+        'ok': True,
+        'versions': versions
+    })
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# ✅ Phase 6: 任务中心增强
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@task_bp.route('/health/connections', methods=['GET'])
+@login_required
+def check_connections_health():
+    """检查所有 Arthas 连接健康状态"""
+    from backend.core.connection import ArthasConnection
+    
+    connections = db.fetch_all('SELECT * FROM connections WHERE status = ?', ('active',))
+    
+    health_results = []
+    for conn in connections:
+        conn_id = dict(conn)['id']
+        try:
+            # 尝试 ping Arthas
+            arthas_conn = ArthasConnection(conn_id)
+            is_healthy = arthas_conn.ping(timeout=5)
+            
+            health_results.append({
+                'connection_id': conn_id,
+                'healthy': is_healthy,
+                'last_checked': datetime.now().isoformat(),
+            })
+            
+            # 更新连接状态
+            if not is_healthy:
+                db.update('connections', {'status': 'unhealthy'}, {'id': conn_id})
+        except Exception as e:
+            health_results.append({
+                'connection_id': conn_id,
+                'healthy': False,
+                'error': str(e),
+                'last_checked': datetime.now().isoformat(),
+            })
+            db.update('connections', {'status': 'unhealthy'}, {'id': conn_id})
+    
+    return jsonify({
+        'ok': True,
+        'connections': health_results,
+        'total': len(health_results),
+        'healthy_count': sum(1 for r in health_results if r['healthy']),
+    })

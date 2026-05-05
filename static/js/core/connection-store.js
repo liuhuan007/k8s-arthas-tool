@@ -46,6 +46,11 @@ const ConnectionStore = {
     const oldState = { ...this._state };
     this._state = { ...this._state, ...updates };
     
+    // ✅ 关键修复: 同步到 window 全局变量
+    if (updates.currentConnId !== undefined) {
+      window._currentConnId = updates.currentConnId;
+    }
+    
     // 触发所有监听器
     this._listeners.forEach(fn => {
       try {

@@ -42,7 +42,16 @@ def _get_connection(conn_id: str):
             if not conn:
                 return None, "连接对象为空"
             
-            return conn, None
+            # ✅ 关键修复: 验证 Arthas 连接是否完整
+            if not hasattr(conn, 'http_client') or conn.http_client is None:
+                log.warning(f"[_get_connection] 连接不完整, http_client=None, 删除并重建 conn_id={conn_id}")
+                # 删除不完整的连接
+                with _connections_lock:
+                    if conn_id in _connections:
+                        del _connections[conn_id]
+                # 继续执行后续的重建逻辑
+            else:
+                return conn, None
     
     # ✅ 第二步: 内存中不存在,尝试自动重建
     log.info(f"[_get_connection] 内存中未找到,尝试自动重建 conn_id={conn_id}")

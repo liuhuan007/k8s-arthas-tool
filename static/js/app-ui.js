@@ -299,6 +299,11 @@ async function loadToolchainCenter() {
     }
     renderToolQuickPlans();
     renderArthasUserCaseCapabilities();
+    
+    // ✅ 新增: 渲染工具箱双栏布局
+    if (typeof renderToolboxDualLayout === 'function') {
+      renderToolboxDualLayout();
+    }
   } catch (e) {
     toast(`工具链加载失败：${e.message}`, 'err');
   } finally {
@@ -975,6 +980,7 @@ const WORKSPACE_META = {
   'model-config': { kicker: 'Model Config', title: '模型配置', sub: '配置大模型供应商、Base URL、模型名称和系统提示词' },
   'mcp-center': { kicker: 'MCP Access', title: 'MCP 接入', sub: '管理 MCP Token 和客户端接入配置，按需加载配置详情' },
   diag: { kicker: 'Diagnosis', title: '性能诊断', sub: '按场景组织 JVM 与 Pod 诊断流程' },
+  'diagnosis-cap': { kicker: 'Diagnosis Capabilities', title: '诊断能力', sub: '按层级展示诊断能力，支持快速工具、诊断工具、场景方案、AI 诊断' },
   history: { kicker: 'History', title: '历史记录', sub: '查看命令、采样和文件下载记录' },
   'task-center': { kicker: 'Task Center', title: '任务中心', sub: '规划 Pod 定时脚本、执行结果和任务历史' },
   'toolchain-center': { kicker: 'Toolchain', title: '工具链', sub: '管理 Arthas、async-profiler、jattach 与离线缓存' },
@@ -1498,6 +1504,16 @@ async function switchConnection(connId) {
 
       // 同步状态到 window
       _syncState();
+      
+      // ✅ 关键修复: 同步到 ConnectionStore
+      if (typeof ConnectionStore !== 'undefined') {
+        ConnectionStore.setCurrentConnection(connId);
+        ConnectionStore.updateConnection(connId, {
+          status: 'connected',
+          level: newLevel
+        });
+      }
+      
       renderConnList();
       if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
 
@@ -2261,7 +2277,7 @@ function switchTab(n) {
   }
 
   // 先切 Tab（允许切换到任何 Tab）
-  const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','history','diag','user-management','audit-logs'];
+  const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','history','diag','diagnosis-cap','user-management','audit-logs'];
   allTabs.forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
     document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
@@ -2271,10 +2287,37 @@ function switchTab(n) {
       document.getElementById('panel-'+x)?.classList.remove('panel-locked');
     }
   });
+  
+  // ✅ 第13章: 连接切换时通知 DiagnosisContext
+  if (tab === 'connections' && window.DiagnosisContext && window.currentConnection) {
+    DiagnosisContext.onConnectionChange(window.currentConnection);
+  }
 
   updateWorkspaceHead(tab);
   updateConnectionBarVisibility(tab);
   loadAdminFrameIfNeeded(tab);
+
+  // ✅ 新增: 诊断能力面板初始化
+  if (tab === 'diagnosis-cap') {
+    if (typeof diagCapInit === 'function') {
+      diagCapInit();
+    }
+    if (typeof diagHistoryInit === 'function') {
+      diagHistoryInit();
+    }
+  }
+  
+  // ✅ 新增: 任务中心面板初始化
+  if (tab === 'task-center') {
+    if (typeof initTaskCenterV2 === 'function') {
+      initTaskCenterV2();  // task-center.js
+    }
+  }
+  
+  // ✅ 新增: 工具箱面板初始化
+  if (tab === 'toolchain-center') {
+    loadToolchainCenter();
+  }
 
   // 连接引导检查：允许切 Tab，但不满足要求时显示引导面板 + 禁用操作区
   if (window.ConnectionGuard) {

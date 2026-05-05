@@ -568,6 +568,12 @@ class HotfixService:
                 log.warning("[MC] 建议: 在 Pod 内执行 'classloader' 命令手动查找 hash")
             
             # 2. 构建 MC 命令 (如果有 ClassLoader hash,使用 -c 参数)
+            # ✅ 关键修复: 验证文件是否存在于 Pod 中
+            log.info("[MC] 验证文件是否存在: %s", java_file_in_pod)
+            check_cmd = f"test -f {java_file_in_pod} && echo EXISTS || echo NOT_FOUND"
+            check_result = ArthasCommandExecutor.execute(connection, check_cmd, timeout_ms=5000)
+            log.info("[MC] 文件检查: %s", check_result.get('message', ''))
+            
             if class_loader_hash:
                 command = f"mc -c {class_loader_hash} -d {artifact_dir} {java_file_in_pod}"
             else:

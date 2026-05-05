@@ -30,10 +30,12 @@ document.addEventListener('DOMContentLoaded', function() {
   if (typeof checkServerHealth === 'function') checkServerHealth();
   if (typeof initUserDisplay === 'function') initUserDisplay();
   if (typeof diagInit === 'function') diagInit();
+  if (typeof diagCapInit === 'function') diagCapInit();
 });
 </script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css?v=20260411i">
+<link rel="stylesheet" href="css/components/diagnosis.css?v=20260504a">
 
 <!-- 核心模块（按依赖顺序） -->
 <script src="js/core/api.js"></script>
@@ -54,20 +56,20 @@ document.addEventListener('DOMContentLoaded', function() {
 <script>console.log('🔍 script-check: API=' + typeof API + ', safePost=' + typeof safePost + ', diagQuickTool=' + typeof window.diagQuickTool + ', diagSelectScene=' + typeof window.diagSelectScene + ', diagStart=' + typeof window.diagStart);</script>
 
 <!-- 应用入口 -->
-<script src="js/app-ui.js?v=20260504o"></script>
+<script src="js/app-ui.js?v=20260504p"></script>
 <script src="js/app.js"></script>
 
 <!-- ✅ 新增: 统一状态管理 -->
-<script src="js/core/connection-store.js?v=20260504e"></script>
+<script src="js/core/connection-store.js?v=20260504f"></script>
 
 <!-- ✅ 新增: WebSocket 实时推送 -->
-<script src="js/core/websocket-client.js?v=20260503"></script>
+<script src="js/core/websocket-client.js?v=20260505a"></script>
 
 <!-- ✅ 新增: 外部链接菜单 -->
 <script src="js/components/external-links.js?v=20260503"></script>
 
 <!-- 两步连接流程组件 -->
-<script src="js/components/two-step-connection.js?v=20260504n"></script>
+<script src="js/components/two-step-connection.js?v=20260504o"></script>
 
 <!-- 连接引导守卫 -->
 <script src="js/components/connection-guard.js?v=20260419a"></script>
@@ -77,6 +79,24 @@ document.addEventListener('DOMContentLoaded', function() {
 
 <!-- 精准错误提示组件 -->
 <script src="js/components/error-notification.js?v=20260417a"></script>
+
+<!-- ✅ 新增: 诊断能力模块 -->
+<script src="js/components/diagnosis.js?v=20260504a"></script>
+<script src="js/components/diagnosis-form.js?v=20260504a"></script>
+<script src="js/components/diagnosis-result.js?v=20260504a"></script>
+<script src="js/components/diagnosis-progress.js?v=20260504a"></script>
+<script src="js/components/diagnosis-history.js?v=20260504a"></script>
+
+<!-- ✅ 新增: 工具箱双栏布局 -->
+<script src="js/components/toolbox.js?v=20260504a"></script>
+
+<!-- ✅ 新增: 任务中心重构版 -->
+<script src="js/components/task-center.js?v=20260504a"></script>
+
+<!-- ✅ 新增: 第13章 - 全局执行指示器 + 结果渲染器 + 状态管理 -->
+<script src="js/core/diagnosis-context.js?v=20260504a"></script>
+<script src="js/components/diagnosis-execution.js?v=20260504a"></script>
+<script src="js/components/diagnosis-renderer.js?v=20260504a"></script>
 </head>
 <body>
 
@@ -89,6 +109,8 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
   </div>
   <div class="tb-right">
+    <!-- ✅ 新增: 全局执行指示器 -->
+    <div id="executionIndicator" class="execution-indicator" style="display:none"></div>
     <div class="tb-srv"><div class="dot" id="svDot"></div><span id="svLbl">连接中...</span></div>
     <span id="arthasVerTop" class="ver-badge-top" style="display:none"></span>
     <!-- ✅ 新增: 帮助文档链接 -->
@@ -147,8 +169,9 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="side-nav-group collapsed" data-side-group="extension">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)"><span>扩展能力</span><span class="side-nav-arrow"></span></button>
       <div class="side-nav-items">
-        <button class="side-nav-item" data-nav-tab="task-center" onclick="openTaskCenter()"><span>️</span><span>任务中心</span></button>
-        <button class="side-nav-item" data-nav-tab="toolchain-center" onclick="openToolchainCenter()"><span>🧰</span><span>工具链</span></button>
+        <button class="side-nav-item" data-nav-tab="diagnosis-cap" onclick="switchTab('diagnosis-cap')"><span>🎯</span><span>诊断能力</span></button>
+        <button class="side-nav-item" data-nav-tab="task-center" onclick="openTaskCenter()"><span>⏱️</span><span>任务中心</span></button>
+        <button class="side-nav-item" data-nav-tab="toolchain-center" onclick="openToolchainCenter()"><span>🧰</span><span>工具箱</span></button>
       </div>
     </div>
     <!-- ✅ 新增: 外部系统菜单 (默认折叠) -->
@@ -195,8 +218,9 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="tb-tab" id="tab-model-config" onclick="switchTab('model-config')">⚙️ 模型配置</div>
     <div class="tb-tab" id="tab-mcp-center" onclick="switchTab('mcp-center')">🔌 MCP 接入</div>
     <div class="tb-tab" id="tab-task-center" onclick="switchTab('task-center')">⏱️ 任务中心</div>
-    <div class="tb-tab" id="tab-toolchain-center" onclick="switchTab('toolchain-center')">🧰 工具链</div>
+    <div class="tb-tab" id="tab-toolchain-center" onclick="switchTab('toolchain-center')">🧰 工具箱</div>
     <div class="tb-tab"    id="tab-diag" onclick="switchTab('diag')">🔬 性能诊断</div>
+    <div class="tb-tab"    id="tab-diagnosis-cap" onclick="switchTab('diagnosis-cap')">🎯 诊断能力</div>
     <div class="tb-tab"    id="tab-history" onclick="switchTab('history')">📋 历史记录</div>
   </div>
 
@@ -516,145 +540,48 @@ document.addEventListener('DOMContentLoaded', function() {
       </div>
     </div>
 
-    <!-- Embedded Admin Pages -->
+    <!-- ✅ 新增: 任务中心重构版（第13章） -->
     <div class="panel" id="panel-task-center">
       <div class="ops-page task-center-page">
         <div class="ops-hero">
           <div>
             <div class="ops-kicker">Task Center</div>
-            <h2>通用脚本 / 工具任务中心</h2>
-            <p>提供通用脚本任务平台，当前 M1 支持 Node 本机和 Pod 内手动执行、日志采集和执行历史；定时调度、OSS 同步后续扩展。</p>
+            <h2>任务中心</h2>
+            <p>管理任务定义、执行历史、定时调度，支持脚本/Pod/诊断能力三种任务类型</p>
           </div>
           <div class="task-actions">
-            <button class="btn btn-g" onclick="loadTaskCenter()">刷新</button>
-            <button class="btn btn-p" onclick="createTaskDefinitionFromForm()">创建任务</button>
+            <button class="btn btn-g" onclick="initTaskCenterV2()">刷新</button>
+            <button class="btn btn-p" onclick="openCreateTaskModal()">+ 新建任务</button>
           </div>
         </div>
 
-        <div class="task-summary" id="taskSummary">
-          <div class="task-stat"><span>模板</span><b>-</b></div>
-          <div class="task-stat"><span>任务</span><b>-</b></div>
-          <div class="task-stat"><span>执行</span><b>-</b></div>
-          <div class="task-stat"><span>运行中</span><b>-</b></div>
-          <div class="task-stat"><span>调度</span><b>-</b></div>
+        <!-- 三栏布局 -->
+        <div class="task-center-tabs">
+          <button class="tc-tab active" data-tc-tab="definitions" onclick="switchTCTab('definitions')">任务定义</button>
+          <button class="tc-tab" data-tc-tab="logs" onclick="switchTCTab('logs')">执行历史</button>
+          <button class="tc-tab" data-tc-tab="schedules" onclick="switchTCTab('schedules')">定时调度</button>
         </div>
 
-        <div class="task-layout">
-          <section class="task-card task-form-card">
-            <div class="task-form-shell">
-              <div class="task-form-head">
-                <div>
-                  <div class="task-card-title">创建脚本任务</div>
-                  <div class="task-card-sub">先选执行位置，再选择脚本来源；创建后可手动执行或绑定定时调度。</div>
-                </div>
-                <span class="task-form-badge">M1</span>
-              </div>
-
-              <div class="task-form-section">
-                <div class="task-form-section-title"><span>1</span>基础信息</div>
-                <label class="fl">任务名称</label>
-                <input id="taskName" class="inp" placeholder="例如：Pod 环境巡检">
-              </div>
-
-              <div class="task-form-section">
-                <div class="task-form-section-title"><span>2</span>执行位置</div>
-                <select id="taskExecutionMode" class="inp task-mode-select" onchange="toggleTaskTargetFields()">
-                  <option value="node">Node 本机执行</option>
-                  <option value="pod">Pod 内执行</option>
-                </select>
-                <div class="task-mode-hints">
-                  <div class="task-mode-option"><b>Node 本机</b><span>适合执行平台节点巡检、kubectl/本地工具调用。</span></div>
-                  <div class="task-mode-option"><b>Pod 内执行</b><span>适合进入目标容器执行脚本，采集容器内结果。</span></div>
-                </div>
-                <div id="taskPodTargetBox" class="task-pod-target" style="display:none">
-                  <div class="task-row">
-                    <div>
-                      <label class="fl">集群</label>
-                      <input id="taskCluster" class="inp" placeholder="cluster name">
-                    </div>
-                    <div>
-                      <label class="fl">命名空间</label>
-                      <input id="taskNamespace" class="inp" value="default">
-                    </div>
-                  </div>
-                  <div class="task-row">
-                    <div>
-                      <label class="fl">Pod</label>
-                      <input id="taskPod" class="inp" placeholder="pod name">
-                    </div>
-                    <div>
-                      <label class="fl">容器</label>
-                      <input id="taskContainer" class="inp" placeholder="可选">
-                    </div>
-                  </div>
-                  <button class="btn btn-g task-fill-btn" type="button" onclick="fillTaskPodTargetFromCurrent()">从当前 Pod 连接填充</button>
-                </div>
-              </div>
-
-              <div class="task-form-section">
-                <div class="task-form-section-title"><span>3</span>脚本来源</div>
-                <label class="fl">脚本模板</label>
-                <select id="taskTemplate" class="inp" onchange="syncTaskTemplateRuntime()"></select>
-                <label class="fl">内联脚本（可选，留空则使用模板脚本）</label>
-                <textarea id="taskScript" class="inp task-script" spellcheck="false" placeholder="print('hello task center')"></textarea>
-              </div>
-
-              <div class="task-form-section task-form-compact">
-                <div class="task-form-section-title"><span>4</span>执行参数</div>
-                <div class="task-row">
-                  <div>
-                    <label class="fl">运行时</label>
-                    <select id="taskRuntime" class="inp">
-                      <option value="python">python</option>
-                      <option value="shell">shell</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label class="fl">超时秒数</label>
-                    <input id="taskTimeout" class="inp" type="number" min="1" max="600" value="60">
-                  </div>
-                </div>
-              </div>
-
-              <div class="task-form-footer">
-                <div class="task-help">Node 本机适合平台节点巡检；Pod 内执行会通过 kubectl exec 将脚本临时写入目标容器 /tmp 后执行。</div>
-                <button class="btn btn-p task-form-submit" type="button" onclick="createTaskDefinitionFromForm()">创建任务</button>
-              </div>
-            </div>
-          </section>
-
-          <section class="task-card">
-            <div class="task-card-hd">
-              <div>
-                <div class="task-card-title">任务定义</div>
-                <div class="task-card-sub">当前用户创建的脚本任务</div>
-              </div>
-            </div>
-            <div id="taskDefinitionList" class="task-list"><div class="sb-empty">暂无任务</div></div>
-          </section>
+        <!-- 任务定义列表 -->
+        <div class="tc-panel" id="tcPanel-definitions">
+          <div id="taskDefList" class="task-def-list">
+            <div class="sb-empty">加载中...</div>
+          </div>
         </div>
 
-        <section class="task-card task-runs-card">
-          <div class="task-card-hd">
-            <div>
-              <div class="task-card-title">执行记录</div>
-              <div class="task-card-sub">最近 50 次执行结果，点击“日志”查看 stdout / stderr</div>
-            </div>
+        <!-- 执行历史 -->
+        <div class="tc-panel" id="tcPanel-logs" style="display:none">
+          <div id="taskLogList" class="task-log-list">
+            <div class="sb-empty">加载中...</div>
           </div>
-          <div id="taskRunList" class="task-run-list"><div class="sb-empty">暂无执行记录</div></div>
-        </section>
+        </div>
 
-        <!-- 调度管理 -->
-        <section class="task-card task-schedule-card">
-          <div class="task-card-hd">
-            <div>
-              <div class="task-card-title">定时调度</div>
-              <div class="task-card-sub">为任务绑定 interval 定时调度，后台每 5 秒轮询到期任务自动执行</div>
-            </div>
-            <button class="btn btn-p" onclick="openCreateScheduleModal()">+ 新建调度</button>
+        <!-- 定时调度 -->
+        <div class="tc-panel" id="tcPanel-schedules" style="display:none">
+          <div id="taskScheduleList" class="task-schedule-list">
+            <div class="sb-empty">加载中...</div>
           </div>
-          <div id="taskScheduleList" class="task-list"><div class="sb-empty">暂无调度</div></div>
-        </section>
+        </div>
       </div>
     </div>
 
@@ -680,120 +607,151 @@ document.addEventListener('DOMContentLoaded', function() {
       <div class="ops-page toolchain-page">
         <div class="ops-hero">
           <div>
-            <div class="ops-kicker">Toolchain</div>
-            <h2>诊断工具链管理</h2>
-            <p>上传 Arthas JAR 等离线工具，校验本地缓存，并在 Pod 未预装 Arthas 时一键分发到目标容器。</p>
+            <div class="ops-kicker">Toolbox</div>
+            <h2>诊断工具箱</h2>
+            <p>管理 Arthas JAR 等离线工具，提供诊断能力快捷入口</p>
           </div>
           <div class="toolchain-hero-actions">
             <button class="btn btn-g" onclick="loadToolchainCenter()">刷新</button>
-            <button class="btn btn-p" onclick="uploadToolPackageFromForm()">上传离线工具</button>
-            <button class="btn btn-g" onclick="openTaskCenterFromToolchain()">进入任务中心配置</button>
+            <button class="btn btn-p" onclick="uploadToolPackageFromForm()">上传工具</button>
           </div>
         </div>
-
+    
         <div class="task-summary toolchain-summary" id="toolchainSummary">
           <div class="task-stat"><span>工具包</span><b>-</b></div>
           <div class="task-stat"><span>可用</span><b>-</b></div>
           <div class="task-stat"><span>Arthas</span><b>-</b></div>
           <div class="task-stat"><span>已上传</span><b>-</b></div>
         </div>
-
-        <div class="toolchain-grid">
-          <section class="task-card toolchain-focus-card">
-            <div class="task-card-hd">
-              <div>
-                <div class="task-card-title">Arthas 离线分发</div>
-                <div class="task-card-sub">默认本地路径 /app/arthas/arthas-boot.jar，默认 Pod 安装路径 /tmp/arthas/arthas-boot.jar</div>
+    
+        <!-- 双栏布局 -->
+        <div class="toolchain-dual-layout">
+          <!-- 左栏：工具包管理 -->
+          <div class="toolchain-left-panel">
+            <section class="task-card">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">工具包管理</div>
+                  <div class="task-card-sub">上传、校验、分发 Arthas 等离线工具</div>
+                </div>
               </div>
-              <span class="task-status running">离线 JAR → Pod</span>
-            </div>
-            <div class="toolchain-distribute-box">
-              <div class="task-row">
-                <div><label class="fl">集群</label><input id="toolTargetCluster" class="inp" placeholder="cluster name"></div>
-                <div><label class="fl">命名空间</label><input id="toolTargetNamespace" class="inp" value="default"></div>
+                  
+              <div id="toolPackageList" class="tool-package-list"><div class="sb-empty">加载中...</div></div>
+                  
+              <!-- 上传表单 -->
+              <div class="tool-upload-form" style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border-color)">
+                <div class="task-card-title" style="font-size:14px;margin-bottom:12px">上传离线工具</div>
+                <label class="fl">工具名称</label>
+                <input id="toolPackageName" class="inp" placeholder="例如：arthas-boot-3.7.2">
+                <div class="task-row">
+                  <div><label class="fl">工具类型</label><select id="toolPackageType" class="inp"><option value="arthas">Arthas</option><option value="async-profiler">async-profiler</option><option value="jattach">jattach</option><option value="generic">通用工具</option></select></div>
+                  <div><label class="fl">版本</label><input id="toolPackageVersion" class="inp" placeholder="例如：3.7.2"></div>
+                </div>
+                <label class="fl">默认安装路径</label>
+                <input id="toolPackageInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
+                <label class="fl">二进制文件</label>
+                <div class="toolchain-file-picker">
+                  <input id="toolPackageFile" class="inp toolchain-file-input" type="file" onchange="document.getElementById('toolPackageFileName').textContent = this.files?.[0]?.name || '未选择文件'">
+                  <button class="btn btn-g" type="button" onclick="document.getElementById('toolPackageFile')?.click()">选择文件</button>
+                  <span id="toolPackageFileName">未选择文件</span>
+                </div>
+                <label class="fl">描述</label>
+                <textarea id="toolPackageDesc" class="inp" rows="2" placeholder="说明工具来源、用途"></textarea>
+                <div class="task-form-footer">
+                  <button class="btn btn-g" onclick="createToolPackageFromForm()">仅登记</button>
+                  <button class="btn btn-p" onclick="uploadToolPackageFromForm()">上传并登记</button>
+                </div>
               </div>
-              <div class="task-row">
-                <div><label class="fl">Pod</label><input id="toolTargetPod" class="inp" placeholder="pod name"></div>
-                <div><label class="fl">容器</label><input id="toolTargetContainer" class="inp" placeholder="可选"></div>
+            </section>
+                
+            <!-- Arthas 分发 -->
+            <section class="task-card" style="margin-top:16px">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">Arthas 离线分发</div>
+                  <div class="task-card-sub">将工具包分发到目标 Pod</div>
+                </div>
+                <span class="task-status running">离线 JAR → Pod</span>
               </div>
-              <label class="fl">Pod 安装路径</label>
-              <input id="toolTargetInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
-              <button class="btn btn-g task-fill-btn" type="button" onclick="fillToolchainPodTargetFromCurrent()">从当前 Pod 连接填充</button>
-              <div class="task-help">工具包列表中的“分发到 Pod”会调用 distributeToolPackage(packageId)，使用上方目标信息。</div>
-            </div>
-          </section>
-
-          <section class="task-card toolchain-upload-card">
-            <div class="task-card-hd">
-              <div>
-                <div class="task-card-title">上传离线工具二进制</div>
-                <div class="task-card-sub">上传 arthas-boot.jar、async-profiler 或 jattach，并登记为任务中心可用工具包。</div>
+              <div class="toolchain-distribute-box">
+                <div class="task-row">
+                  <div><label class="fl">集群</label><input id="toolTargetCluster" class="inp" placeholder="cluster name"></div>
+                  <div><label class="fl">命名空间</label><input id="toolTargetNamespace" class="inp" value="default"></div>
+                </div>
+                <div class="task-row">
+                  <div><label class="fl">Pod</label><input id="toolTargetPod" class="inp" placeholder="pod name"></div>
+                  <div><label class="fl">容器</label><input id="toolTargetContainer" class="inp" placeholder="可选"></div>
+                </div>
+                <label class="fl">Pod 安装路径</label>
+                <input id="toolTargetInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
+                <button class="btn btn-g task-fill-btn" type="button" onclick="fillToolchainPodTargetFromCurrent()">从当前 Pod 连接填充</button>
+                <div class="task-help">工具包列表中的"分发到 Pod"会调用 distributeToolPackage(packageId)，使用上方目标信息。</div>
               </div>
-            </div>
-            <label class="fl">工具名称</label>
-            <input id="toolPackageName" class="inp" placeholder="例如：arthas-boot-3.7.2">
-            <div class="task-row">
-              <div><label class="fl">工具类型</label><select id="toolPackageType" class="inp"><option value="arthas">Arthas</option><option value="async-profiler">async-profiler</option><option value="jattach">jattach</option><option value="generic">通用工具</option></select></div>
-              <div><label class="fl">版本</label><input id="toolPackageVersion" class="inp" placeholder="例如：3.7.2"></div>
-            </div>
-            <label class="fl">默认安装路径</label>
-            <input id="toolPackageInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
-            <label class="fl">二进制文件</label>
-            <div class="toolchain-file-picker">
-              <input id="toolPackageFile" class="inp toolchain-file-input" type="file" onchange="document.getElementById('toolPackageFileName').textContent = this.files?.[0]?.name || '未选择文件'">
-              <button class="btn btn-g" type="button" onclick="document.getElementById('toolPackageFile')?.click()">选择文件</button>
-              <span id="toolPackageFileName">未选择文件</span>
-            </div>
-            <label class="fl">描述</label>
-            <textarea id="toolPackageDesc" class="inp" rows="3" placeholder="说明工具来源、用途和适用场景"></textarea>
-            <div class="task-form-footer">
-              <div class="task-help">上传后会计算 SHA256；分发到 Pod 前可先校验本地文件。</div>
-              <div class="task-item-actions">
-                <button class="btn btn-g" onclick="createToolPackageFromForm()">仅登记</button>
-                <button class="btn btn-p" onclick="uploadToolPackageFromForm()">上传并登记</button>
+            </section>
+          </div>
+                    
+          <!-- 右栏：诊断能力目录 + 脚本模板 -->
+          <div class="toolchain-right-panel">
+            <section class="task-card">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">诊断能力目录</div>
+                  <div class="task-card-sub">快速执行诊断任务</div>
+                </div>
+                <button class="btn btn-g" onclick="switchTab('diagnosis-cap')">查看全部 →</button>
               </div>
-            </div>
-          </section>
+                                      
+              <div id="toolchainDiagCaps" class="toolchain-diag-caps">
+                <div class="sb-empty">加载中...</div>
+              </div>
+            </section>
+                                
+            <!-- 脚本模板管理 -->
+            <section class="task-card" style="margin-top:16px">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">脚本模板</div>
+                  <div class="task-card-sub">创建脚本模板，关联诊断能力，支持参数化配置</div>
+                </div>
+                <button class="btn btn-p" onclick="openCreateScriptTemplateModal()">+ 新建模板</button>
+              </div>
+              <div id="scriptTemplateList" class="script-template-list">
+                <div class="sb-empty">加载中...</div>
+              </div>
+            </section>
+                      
+            <!-- 快速工具规划 -->
+            <section class="task-card" style="margin-top:16px">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">快速工具规划</div>
+                  <div class="task-card-sub">常用一次性工具：jad/retransform 热更新、上传源码覆盖、Pod Python 文件下载服务。</div>
+                </div>
+              </div>
+              <div id="toolQuickPlanList" class="tool-quick-plan-list"><div class="sb-empty">加载任务模板后展示快速工具规划</div></div>
+              <div class="toolchain-source-upload">
+                <div class="task-card-title">上传 Java 源码到 Pod</div>
+                <div class="task-card-sub">把修改后的 .java 上传到 /tmp/arthas-sources，随后在 Arthas 中执行 mc + retransform。</div>
+                <div class="task-row">
+                  <div><label class="fl">源码目录</label><input id="arthasSourceDir" class="inp" value="/tmp/arthas-sources"></div>
+                  <div><label class="fl">Java 源码</label><input id="arthasSourceFile" class="inp toolchain-file-input" type="file" accept=".java"></div>
+                </div>
+                <button class="btn btn-p" onclick="uploadArthasSourceFromForm()">上传源码到当前 Pod</button>
+              </div>
+            </section>
+                
+            <!-- Arthas 最佳实践 -->
+            <section class="task-card" style="margin-top:16px">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">Arthas 最佳实践</div>
+                  <div class="task-card-sub">来自 GitHub user-case 的诊断能力</div>
+                </div>
+              </div>
+              <div id="arthasUserCaseList" class="arthas-user-case-list"><div class="sb-empty">正在加载</div></div>
+            </section>
+          </div>
         </div>
-
-        <section class="task-card task-runs-card">
-          <div class="task-card-hd">
-            <div>
-              <div class="task-card-title">快速工具规划</div>
-              <div class="task-card-sub">常用一次性工具：jad/retransform 热更新、上传源码覆盖、Pod Python 文件下载服务。</div>
-            </div>
-          </div>
-          <div id="toolQuickPlanList" class="tool-quick-plan-list"><div class="sb-empty">加载任务模板后展示快速工具规划</div></div>
-          <div class="toolchain-source-upload">
-            <div class="task-card-title">上传 Java 源码到 Pod</div>
-            <div class="task-card-sub">把修改后的 .java 上传到 /tmp/arthas-sources，随后在 Arthas 中执行 mc + retransform。</div>
-            <div class="task-row">
-              <div><label class="fl">源码目录</label><input id="arthasSourceDir" class="inp" value="/tmp/arthas-sources"></div>
-              <div><label class="fl">Java 源码</label><input id="arthasSourceFile" class="inp toolchain-file-input" type="file" accept=".java"></div>
-            </div>
-            <button class="btn btn-p" onclick="uploadArthasSourceFromForm()">上传源码到当前 Pod</button>
-          </div>
-        </section>
-
-        <section class="task-card task-runs-card arthas-user-case-card">
-          <div class="task-card-hd">
-            <div>
-              <div class="task-card-title">Arthas 最佳实践 → 产品工具能力</div>
-              <div class="task-card-sub">来自 GitHub user-case 与 Spectre retransform 工作流，沉淀为可点击的诊断/热替换能力。</div>
-            </div>
-          </div>
-          <div id="arthasUserCaseList" class="arthas-user-case-list"><div class="sb-empty">正在加载 Arthas user-case 能力图谱</div></div>
-        </section>
-
-        <section class="task-card task-runs-card">
-          <div class="task-card-hd">
-            <div>
-              <div class="task-card-title">离线工具包</div>
-              <div class="task-card-sub">支持校验、启停、删除，以及自动把 Arthas JAR 分发到当前 Pod。</div>
-            </div>
-          </div>
-          <div id="toolPackageList" class="toolchain-package-list"><div class="sb-empty">暂无工具包</div></div>
-        </section>
       </div>
     </div>
 
@@ -1560,6 +1518,61 @@ document.addEventListener('DOMContentLoaded', function() {
           </div>
           <div id="diagContent" style="display:none;overflow-y:auto;padding:14px;font-size:12px;line-height:1.7;word-break:break-word"></div>
         </div>
+      </div>
+    </div>
+
+    <!-- ✅ 新增: 诊断能力目录面板 -->
+    <div class="panel" id="panel-diagnosis-cap" style="display:none">
+      <div class="diagnosis-cap-section">
+        <div class="ops-hero">
+          <div>
+            <div class="ops-kicker">Diagnosis Capabilities</div>
+            <h2>诊断能力目录</h2>
+            <p>按层级展示诊断能力，支持快速工具、诊断工具、场景方案、AI 诊断</p>
+          </div>
+          <div class="dashboard-actions">
+            <button class="btn btn-g" onclick="diagCapInit()">🔄 刷新</button>
+          </div>
+        </div>
+        
+        <!-- 筛选器 -->
+        <div class="capability-filters">
+          <button class="capability-filter-btn active" data-level="1">L1 快速工具</button>
+          <button class="capability-filter-btn" data-level="2">L2 诊断工具</button>
+          <button class="capability-filter-btn" data-level="3">L3 场景方案</button>
+          <button class="capability-filter-btn" data-level="4">L4 AI 诊断</button>
+          <button class="capability-filter-btn" data-level="">全部</button>
+        </div>
+        
+        <!-- 能力卡片列表 -->
+        <div id="diagnosisCapList"></div>
+        
+        <!-- 结果展示区 -->
+        <div id="diagResultContainer" style="display:none"></div>
+        
+        <!-- 历史记录 -->
+        <div style="margin-top:32px">
+          <h3 style="margin-bottom:16px;color:var(--text-primary)">历史诊断记录</h3>
+          <div id="diagHistoryContainer"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 表单模态框 -->
+    <div id="diagFormModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); align-items:center; justify-content:center; z-index:9998;">
+      <div id="diagFormContainer"></div>
+    </div>
+
+    <!-- 进度模态框 -->
+    <div id="diagProgressModal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); align-items:center; justify-content:center; z-index:9998;">
+      <div id="diagProgressContainer"></div>
+    </div>
+
+    <!-- 加载遮罩 -->
+    <div id="diagLoadingOverlay">
+      <div class="loading-spinner">
+        <div class="spinner"></div>
+        <div class="loading-text">正在执行诊断...</div>
       </div>
     </div>
 

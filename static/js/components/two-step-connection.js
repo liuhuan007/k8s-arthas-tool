@@ -668,15 +668,17 @@ async function upgradeToArthas() {
     _syncState && _syncState();
     renderConnList && renderConnList();
     
-    // ✅ 关键修复: 更新 window._connections 中的 level 为 arthas
+    // ✅ 关键修复: 更新 ConnectionStore 中的连接状态
     const currentConnId = _currentConnId || window._currentConnId;
-    if (currentConnId && window._connections) {
-      const conn = window._connections.find(c => c.id === currentConnId);
-      if (conn) {
-        conn.level = 'arthas';
-        conn.status = 'connected';
-        console.log('[Arthas Upgrade] 更新连接 level=arthas:', currentConnId);
-      }
+    if (currentConnId && typeof ConnectionStore !== 'undefined') {
+      ConnectionStore.updateConnection(currentConnId, {
+        level: 'arthas',
+        status: 'connected',
+        runtime: _runtimeInfo?.runtime_type || null,
+        runtime_version: _runtimeInfo?.version || null,
+        alive: true
+      });
+      console.log('[Arthas Upgrade] ConnectionStore 更新为 arthas:', currentConnId);
     }
 
     // 刷新连接信息提示条
