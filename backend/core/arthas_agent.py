@@ -185,13 +185,15 @@ class ArthasAgentManager:
         """确保 Arthas agent 在 Pod 内运行"""
         port = self.t.arthas_http_port
 
-        # 情况 A: HTTP 已响应，尝试验证进程是否存在
+        # 情况 A: HTTP 已响应 — Arthas agent 在运行
+        # 注意：Arthas boot 进程启动后会 attach 到目标 JVM，然后 boot 进程退出。
+        # 此时 HTTP API 由 JVM 内的 Arthas agent 线程提供，不再有独立的 arthas-boot 进程。
+        # 所以找不到 arthas-boot PID 是正常的，不应视为 zombie。
         if self._http_reachable():
-            log.info("[Agent Reuse] HTTP reachable, checking process (port %s)", port)
-            # 查找 Arthas 进程
+            log.info("[Agent Reuse] HTTP reachable on port %s, Arthas agent is alive", port)
+            # 尝试查找 arthas-boot 进程（可能已退出，属正常）
             arthas_pids = self._find_arthas_pids()
             if arthas_pids:
-                # ✅ 进程存在,更新 PID 并复用
                 if self._pid and self._pid not in arthas_pids:
                     log.warning("[Agent Reuse] Expected PID %d not found, updating to %d",
                                self._pid, arthas_pids[0])
@@ -199,13 +201,11 @@ class ArthasAgentManager:
                 elif not self._pid:
                     self._pid = arthas_pids[0]
                 log.info("[Agent Reuse] Arthas PID %d found, reusing agent", self._pid)
-                return True, f"Arthas 已在运行，直接复用 (port {port}, pid {self._pid})"
             else:
-                # ✅ 进程不存在,说明是僵尸端口,需要重新安装
-                log.warning("[Agent Reuse] HTTP reachable but NO Arthas process found, zombie port detected")
-                log.info("[Agent Reuse] Returning REINSTALL_NEEDED to trigger cleanup")
-                # 返回特殊标记,让上层 ArthasConnection 清理端口转发并重安装
-                return False, "REINSTALL_NEEDED"
+                # arthas-boot 已退出，agent 在 JVM 内运行 — 这是正常状态
+                log.info("[Agent Reuse] arthas-boot process exited (normal after attach), "
+                         "agent running inside JVM on port %s", port)
+            return True, f"Arthas 已在运行，直接复用 (port {port}, pid {self._pid or 'in-jvm'})"
 
         # 情况 B: HTTP 不通，先清理残留进程
         stale_pids = self._find_arthas_pids()

@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
+import logging
 import os
 import shlex
 import shutil
@@ -36,6 +37,7 @@ from backend.core.command_builder import build_command
 
 
 task_bp = Blueprint('task_center', __name__, url_prefix='/api/tasks')
+log = logging.getLogger(__name__)
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 诊断能力 API
@@ -105,45 +107,255 @@ def get_capability(cap_id: int):
     return jsonify({'capability': result})
 
 
+
 def load_extension(cap_type: str, capability_id: int) -> dict:
-    """加载能力扩展数据
-    
-    Args:
-        cap_type: 能力类型 (quick/tool/scenario/ai)
-        capability_id: 能力 ID
-        
-    Returns:
-        dict: 扩展数据
+    """加载能力扩展数据。
+
+    cap_type is the product category: quick/tool/scenario/ai.
     """
     extension = {}
-    
+
     if cap_type in ('quick', 'tool'):
-        # 加载 arthas_command_templates
         template = db.fetch_one(
             'SELECT * FROM arthas_command_templates WHERE capability_id = ?',
             (capability_id,)
         )
         if template:
             extension['template'] = dict(template)
-    
+
     elif cap_type == 'scenario':
-        # 加载 diagnosis_scenario_steps
         steps = db.fetch_all(
             'SELECT * FROM diagnosis_scenario_steps WHERE capability_id = ? ORDER BY step_order',
             (capability_id,)
         )
         extension['steps'] = [dict(s) for s in steps]
-    
+
     elif cap_type == 'ai':
-        # 加载 ai_diagnosis_handlers
         handler = db.fetch_one(
             'SELECT * FROM ai_diagnosis_handlers WHERE capability_id = ?',
             (capability_id,)
         )
         if handler:
             extension['handler'] = dict(handler)
-    
+
     return extension
+
+
+_CAPABILITY_CATEGORIES = {'quick', 'tool', 'scenario', 'ai'}
+_CAPABILITY_STATUSES = {'active', 'disabled'}
+_CAPABILITY_VISIBILITIES = {'public', 'private'}
+
+
+def _is_admin_user() -> bool:
+    return bool(getattr(current_user, 'is_admin', False) or getattr(current_user, 'role', '') == 'admin')
+
+
+def _require_admin():
+    if not _is_admin_user():
+        return _error('仅管理员可维护诊断能力', 403)
+    return None
+
+
+def _normalize_capability_level(value: Any) -> int:
+    if value in ('pod', 'quick'):
+        return 1
+    if value in ('arthas', 'tool'):
+        return 2
+    if value == 'scenario':
+        return 3
+    if value == 'ai':
+        return 4
+    try:
+        level = int(value or 1)
+    except Exception:
+        raise ValueError('level 必须是整数或 pod/arthas/scenario/ai')
+    return max(1, min(level, 4))
+
+
+def _validate_capability_payload(data: Dict[str, Any], partial: bool = False) -> Dict[str, Any]:
+    fields: Dict[str, Any] = {}
+
+    if not partial or 'name' in data:
+        name = (data.get('name') or '').strip()
+        if not name:
+            raise ValueError('能力名称不能为空')
+        fields['name'] = name
+
+    if not partial or 'category' in data:
+        category = (data.get('category') or '').strip().lower()
+        if category not in _CAPABILITY_CATEGORIES:
+            raise ValueError('category 只能是 quick/tool/scenario/ai')
+        fields['category'] = category
+
+    if 'level' in data:
+        fields['level'] = _normalize_capability_level(data.get('level'))
+    elif not partial:
+        fields['level'] = _normalize_capability_level(data.get('level') or 1)
+
+    if 'description' in data or not partial:
+        fields['description'] = (data.get('description') or '').strip()
+
+    if 'arthas_command' in data:
+        fields['arthas_command'] = (data.get('arthas_command') or '').strip()
+
+    if 'parameters_schema' in data or not partial:
+        schema = data.get('parameters_schema') if 'parameters_schema' in data else {}
+        if isinstance(schema, str):
+            _json_loads(schema, {})
+            fields['parameters_schema'] = schema or '{}'
+        else:
+            fields['parameters_schema'] = _json_dumps(schema or {})
+
+    if 'risk_level' in data:
+        risk_level = (data.get('risk_level') or 'low').strip().lower()
+        if risk_level not in {'low', 'medium', 'high'}:
+            raise ValueError('risk_level 只能是 low/medium/high')
+        fields['risk_level'] = risk_level
+
+    if 'estimated_duration' in data:
+        fields['estimated_duration'] = max(0, int(data.get('estimated_duration') or 0))
+
+    if 'prerequisites' in data:
+        fields['prerequisites'] = _json_dumps(data.get('prerequisites') or [])
+
+    if 'related_capabilities' in data:
+        fields['related_capabilities'] = _json_dumps(data.get('related_capabilities') or [])
+
+    if 'confirm_required' in data:
+        fields['confirm_required'] = 1 if data.get('confirm_required') else 0
+
+    if 'visibility' in data or not partial:
+        visibility = (data.get('visibility') or 'public').strip().lower()
+        if visibility not in _CAPABILITY_VISIBILITIES:
+            raise ValueError('visibility 只能是 public/private')
+        fields['visibility'] = visibility
+
+    if 'status' in data or not partial:
+        status = (data.get('status') or 'active').strip().lower()
+        if status not in _CAPABILITY_STATUSES:
+            raise ValueError('status 只能是 active/disabled')
+        fields['status'] = status
+
+    if 'sort_order' in data:
+        fields['sort_order'] = int(data.get('sort_order') or 0)
+
+    if 'handler_key' in data:
+        fields['handler_key'] = (data.get('handler_key') or '').strip()
+
+    return fields
+
+
+@task_bp.route('/capabilities', methods=['POST'])
+@login_required
+def create_capability():
+    """管理员创建诊断能力。"""
+    admin_error = _require_admin()
+    if admin_error:
+        return admin_error
+
+    data = request.json or {}
+    try:
+        fields = _validate_capability_payload(data)
+    except (ValueError, TypeError) as exc:
+        return _error(str(exc))
+
+    fields.update({
+        'is_builtin': 0,
+        'version': 1,
+        'created_by': current_user.id,
+        'created_at': _now_text(),
+        'updated_at': _now_text(),
+    })
+    cap_id = db.insert('diagnosis_capabilities', fields)
+    cap = db.fetch_one('SELECT * FROM diagnosis_capabilities WHERE id = ?', (cap_id,))
+    return jsonify({'ok': True, 'capability': dict(cap)}), 201
+
+
+@task_bp.route('/capabilities/<int:cap_id>', methods=['PUT'])
+@login_required
+def update_capability(cap_id: int):
+    """管理员更新诊断能力，并递增版本号。"""
+    admin_error = _require_admin()
+    if admin_error:
+        return admin_error
+
+    capability = db.fetch_one('SELECT * FROM diagnosis_capabilities WHERE id = ?', (cap_id,))
+    if not capability:
+        return _error('能力不存在', 404)
+
+    data = request.json or {}
+    try:
+        fields = _validate_capability_payload(data, partial=True)
+    except (ValueError, TypeError) as exc:
+        return _error(str(exc))
+    if not fields:
+        return _error('没有可更新字段')
+
+    fields['version'] = int(capability.get('version') or 1) + 1
+    fields['updated_at'] = _now_text()
+    db.update('diagnosis_capabilities', fields, 'id = ?', (cap_id,))
+    cap = db.fetch_one('SELECT * FROM diagnosis_capabilities WHERE id = ?', (cap_id,))
+    return jsonify({'ok': True, 'capability': dict(cap)})
+
+
+@task_bp.route('/capabilities/<int:cap_id>', methods=['DELETE'])
+@login_required
+def disable_capability(cap_id: int):
+    """管理员禁用诊断能力，避免破坏历史快照。"""
+    admin_error = _require_admin()
+    if admin_error:
+        return admin_error
+
+    capability = db.fetch_one('SELECT * FROM diagnosis_capabilities WHERE id = ?', (cap_id,))
+    if not capability:
+        return _error('能力不存在', 404)
+
+    db.update('diagnosis_capabilities', {
+        'status': 'disabled',
+        'version': int(capability.get('version') or 1) + 1,
+        'updated_at': _now_text(),
+    }, 'id = ?', (cap_id,))
+    return jsonify({'ok': True, 'id': cap_id, 'status': 'disabled'})
+
+
+def _get_active_arthas_connection(connection_id: str, connection_row: Optional[Dict[str, Any]] = None):
+    """Return active ArthasConnection from server runtime state.
+
+    Diagnosis execution must use ArthasConnection because ArthasCommandExecutor
+    depends on `connection.http_client.exec_once()`. DB rows or PodConnection are
+    metadata only and cannot execute Arthas HTTP commands.
+    """
+    server_mod = sys.modules.get('server')
+    if server_mod is None:
+        raise ValueError('服务运行态不可用，无法获取连接对象')
+
+    runtime_connections = getattr(server_mod, '_connections', None)
+    if runtime_connections is None:
+        raise ValueError('连接运行态不可用')
+
+    candidates = [connection_id]
+    if connection_row:
+        base_id = f"{connection_row.get('cluster_name')}/{connection_row.get('namespace')}/{connection_row.get('pod_name')}"
+        if base_id not in candidates:
+            candidates.append(base_id)
+        user_id = connection_row.get('user_id') or getattr(current_user, 'id', None)
+        if user_id:
+            user_scoped = f"{base_id}@u{user_id}"
+            if user_scoped not in candidates:
+                candidates.insert(0, user_scoped)
+
+    for cid in candidates:
+        entry = runtime_connections.get(cid)
+        if not entry:
+            continue
+        if not getattr(current_user, 'is_admin', False) and entry.get('user_id') != current_user.id:
+            continue
+        conn = entry.get('conn')
+        if conn and getattr(conn, 'http_client', None):
+            return conn
+
+    raise ValueError('Arthas 连接不可用或已断开，请重新建立连接')
+
 
 _ALLOWED_RUNTIMES = {'python', 'shell'}
 _ALLOWED_EXECUTION_MODES = {'node', 'pod'}
@@ -1395,6 +1607,23 @@ def list_runs():
 @task_bp.route('/runs/<run_id>/logs', methods=['GET'])
 @login_required
 def get_run_logs(run_id: str):
+    """查询执行记录详情。优先查 task_logs（诊断记录），再查 task_runs（脚本任务）。"""
+    # 1. 优先查 task_logs（诊断能力执行记录）
+    row = db.fetch_one('''
+        SELECT t.*, c.name AS capability_name, c.category AS capability_category
+        FROM task_logs t
+        LEFT JOIN diagnosis_capabilities c ON c.id = t.capability_id
+        WHERE t.id = ? AND t.user_id = ?
+    ''', (run_id, current_user.id))
+    if row:
+        item = dict(row)
+        item['task_name'] = item.get('capability_name') or '即时诊断'
+        item['target'] = _json_loads(item.pop('target_json', None), {})
+        item['params'] = _json_loads(item.pop('params_json', None), {})
+        item['result'] = _json_loads(item.pop('result_json', None), None)
+        return jsonify({'run': item})
+    
+    # 2. 回退查 task_runs（脚本任务记录）
     row = db.fetch_one('''
         SELECT r.*, d.name AS task_name
         FROM task_runs r
@@ -1404,6 +1633,82 @@ def get_run_logs(run_id: str):
     if not row:
         return _error('执行记录不存在或无权限', 404)
     return jsonify({'run': _row_to_run(row, include_logs=True)})
+
+
+@task_bp.route('/runs/<run_id>/cancel', methods=['POST'])
+@login_required
+def cancel_task_run(run_id: str):
+    """取消诊断/任务执行记录。
+
+    P0 阶段先做状态取消：running/pending -> cancelled。
+    后续可接入 DiagnosisExecutorPool 的主动中断能力。
+    """
+    row = db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
+    if not row:
+        return _error('执行记录不存在', 404)
+    if row.get('user_id') != current_user.id and not getattr(current_user, 'is_admin', False):
+        return _error('无权取消该执行记录', 403)
+    if row.get('status') not in ('pending', 'running'):
+        return _error('当前状态不可取消', 400)
+
+    db.update(
+        'task_logs',
+        {'status': 'cancelled', 'finished_at': _now_text(), 'error_message': '用户取消执行'},
+        'id = ?',
+        (run_id,),
+    )
+    return jsonify({'ok': True, 'run_id': run_id, 'status': 'cancelled'})
+
+
+@task_bp.route('/diagnosis/history', methods=['GET'])
+@login_required
+def diagnosis_history():
+    """查询诊断执行历史（能力执行记录）。"""
+    limit = min(int(request.args.get('limit', 50)), 200)
+    offset = int(request.args.get('offset', 0))
+
+    where_sql = 't.capability_id IS NOT NULL'
+    params = []
+    if not getattr(current_user, 'is_admin', False):
+        where_sql += ' AND t.user_id = ?'
+        params.append(current_user.id)
+
+    rows = db.fetch_all(f'''
+        SELECT
+            t.id,
+            t.capability_id,
+            t.user_id,
+            t.execution_mode,
+            t.execution_type,
+            t.target_json,
+            t.params_json,
+            t.status,
+            t.result_json,
+            t.error_message,
+            t.duration_ms,
+            t.started_at,
+            t.finished_at,
+            t.created_at,
+            c.name AS capability_name,
+            c.category AS capability_category,
+            c.level AS capability_level,
+            c.risk_level AS risk_level
+        FROM task_logs t
+        LEFT JOIN diagnosis_capabilities c ON c.id = t.capability_id
+        WHERE {where_sql}
+        ORDER BY COALESCE(t.started_at, t.created_at) DESC
+        LIMIT ? OFFSET ?
+    ''', tuple(params + [limit, offset]))
+
+    history = []
+    for row in rows:
+        item = dict(row)
+        item['target'] = _json_loads(item.pop('target_json', None), {})
+        item['params'] = _json_loads(item.pop('params_json', None), {})
+        item['result'] = _json_loads(item.pop('result_json', None), None)
+        history.append(item)
+
+    return jsonify({'ok': True, 'history': history, 'count': len(history)})
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1589,130 +1894,296 @@ def start_task_scheduler():
 # 即时诊断执行 API
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _build_connection_snapshot(connection_row: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        'id': connection_row.get('id'),
+        'cluster_name': connection_row.get('cluster_name'),
+        'namespace': connection_row.get('namespace'),
+        'pod_name': connection_row.get('pod_name'),
+        'container_name': connection_row.get('container_name'),
+        'level': connection_row.get('level'),
+        'status': connection_row.get('status'),
+        'local_port': connection_row.get('local_port'),
+        'java_pid': connection_row.get('java_pid'),
+        'arthas_version': connection_row.get('arthas_version'),
+        'user_id': connection_row.get('user_id') or connection_row.get('owner_user_id'),
+        'captured_at': _now_text(),
+    }
+
+
+def _build_capability_snapshot(capability: Dict[str, Any], extension: Dict[str, Any]) -> Dict[str, Any]:
+    snapshot = dict(capability)
+    snapshot['extension'] = extension or {}
+    return snapshot
+
+
+def _resolve_rendered_command(capability: Dict[str, Any], extension: Dict[str, Any], params: Dict[str, Any], step_outputs: Optional[Dict[str, Any]] = None) -> str:
+    category = capability.get('category')
+    if category in ('quick', 'tool'):
+        template = (extension or {}).get('template', {})
+        command_template = template.get('arthas_command') or capability.get('arthas_command', '')
+        return build_command(command_template, params, step_outputs or {})
+    if category == 'scenario':
+        commands = []
+        for step in (extension or {}).get('steps', []):
+            commands.append({
+                'step_order': step.get('step_order'),
+                'command': build_command(step.get('command', ''), params, step_outputs or {}),
+            })
+        return _json_dumps(commands)
+    return ''
+
+
+def _create_task_log_for_diagnosis(
+    run_id: str,
+    capability: Dict[str, Any],
+    extension: Dict[str, Any],
+    connection: Dict[str, Any],
+    params: Dict[str, Any],
+    user_id: int,
+    rendered_command: str,
+) -> None:
+    db.insert('task_logs', {
+        'id': run_id,
+        'task_id': None,
+        'capability_id': capability.get('id'),
+        'user_id': user_id,
+        'execution_mode': 'immediate',
+        'execution_type': 'diagnosis',
+        'run_type': 'diagnosis',
+        'capability_name': capability.get('name'),
+        'capability_version': capability.get('version') or 1,
+        'rendered_command': rendered_command,
+        'status': 'running',
+        'target_json': _json_dumps({
+            'connection_id': connection.get('id'),
+            'cluster_name': connection.get('cluster_name'),
+            'namespace': connection.get('namespace'),
+            'pod_name': connection.get('pod_name'),
+            'container_name': connection.get('container_name'),
+        }),
+        'params_json': _json_dumps(params),
+        'connection_snapshot_json': _json_dumps(_build_connection_snapshot(connection)),
+        'capability_snapshot_json': _json_dumps(_build_capability_snapshot(capability, extension)),
+        'started_at': _now_text(),
+    })
+
+
+def _update_task_log_success(run_id: str, result: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    current = db.fetch_one('SELECT status FROM task_logs WHERE id = ?', (run_id,))
+    if current and current.get('status') == 'cancelled':
+        return db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
+    status = result.get('status') or 'success'
+    if status == 'completed':
+        status = 'success'
+    db.update('task_logs', {
+        'status': status,
+        'result_json': _json_dumps(result),
+        'duration_ms': result.get('duration_ms', result.get('total_duration_ms', 0)),
+        'finished_at': _now_text(),
+        'error_message': result.get('error_message') or result.get('error') or '',
+    }, 'id = ?', (run_id,))
+    return db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
+
+
+def _update_task_log_failed(run_id: str, error: Any) -> Optional[Dict[str, Any]]:
+    current = db.fetch_one('SELECT status FROM task_logs WHERE id = ?', (run_id,))
+    if current and current.get('status') == 'cancelled':
+        return db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
+    db.update('task_logs', {
+        'status': 'failed',
+        'error_message': str(error),
+        'finished_at': _now_text(),
+    }, 'id = ?', (run_id,))
+    return db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
+
+
+def _is_task_log_cancelled(run_id: str) -> bool:
+    row = db.fetch_one('SELECT status FROM task_logs WHERE id = ?', (run_id,))
+    return bool(row and row.get('status') == 'cancelled')
+
+
+def _row_to_diagnosis_run(row: Dict[str, Any]) -> Dict[str, Any]:
+    item = dict(row)
+    item['target'] = _json_loads(item.pop('target_json', None), {})
+    item['params'] = _json_loads(item.pop('params_json', None), {})
+    item['result'] = _json_loads(item.pop('result_json', None), None)
+    item['connection_snapshot'] = _json_loads(item.pop('connection_snapshot_json', None), {})
+    item['capability_snapshot'] = _json_loads(item.pop('capability_snapshot_json', None), {})
+    item['run_id'] = item.get('id')
+    item['execution_id'] = item.get('id')
+    return item
+
+
+def _ensure_arthas_connection_ready(connection: Dict[str, Any]) -> None:
+    if connection.get('level') != 'arthas':
+        raise ValueError('当前能力需要 Arthas Ready 连接')
+    status = (connection.get('status') or '').lower()
+    if status and status not in ('ready', 'active', 'connected'):
+        raise ValueError('Arthas 连接状态不可用，请重新建立连接')
+
+
+def _run_diagnosis_execution(
+    run_id: str,
+    connection_id: str,
+    capability: Dict[str, Any],
+    extension: Dict[str, Any],
+    params: Dict[str, Any],
+    active_conn: Any,
+    connection: Dict[str, Any],
+    user_id: int,
+    cleanup,
+) -> Dict[str, Any]:
+    from backend.core.connection_aware_executor import get_connection_aware_executor
+
+    connection_executor = get_connection_aware_executor()
+
+    def _execute_diagnosis():
+        if capability['category'] in ('quick', 'tool'):
+            return _execute_arthas_command(capability, extension, params, active_conn)
+        if capability['category'] == 'scenario':
+            return _execute_scenario(capability, extension, params, active_conn, run_id=run_id)
+        if capability['category'] == 'ai':
+            return _execute_ai_diagnosis(capability, extension, params, connection)
+        raise ValueError(f'不支持的能力类型: {capability["category"]}')
+
+    try:
+        result = connection_executor.execute_with_connection_guard(
+            connection_id=connection_id,
+            capability_id=capability['id'],
+            params=params,
+            user_id=user_id,
+            execution_func=_execute_diagnosis,
+            execution_id=run_id,
+        )
+        cleanup(status='completed')
+        _update_task_log_success(run_id, result)
+        return result
+    except Exception as exc:
+        cleanup(status='failed', error=str(exc))
+        _update_task_log_failed(run_id, exc)
+        log.error('诊断执行失败: %s', exc, exc_info=True)
+        raise
+
+
 @task_bp.route('/diagnosis/execute', methods=['POST'])
 @login_required
 def execute_diagnosis():
-    """即时诊断执行"""
+    """即时诊断执行。quick/tool 同步返回结果；scenario/ai 后台执行并通过 run_id 轮询。"""
     data = request.json or {}
     capability_id = data.get('capability_id')
-    params = data.get('params', {})
+    params = data.get('params') or {}
     connection_id = data.get('connection_id')
-    
+
     if not capability_id:
         return _error('capability_id 不能为空')
     if not connection_id:
         return _error('connection_id 不能为空')
-    
-    # 1. 获取能力定义
-    capability = db.fetch_one(
-        'SELECT * FROM diagnosis_capabilities WHERE id = ?',
-        (capability_id,)
-    )
+
+    capability = db.fetch_one('SELECT * FROM diagnosis_capabilities WHERE id = ?', (capability_id,))
     if not capability:
-        return _error('诊断能力不存在'), 404
-    
-    # 2. 加载扩展数据
+        return _error('诊断能力不存在', 404)
+
+    user_role = current_user.role if hasattr(current_user, 'role') else 'user'
+    if user_role != 'admin':
+        visible = capability.get('visibility') == 'public' or capability.get('created_by') == current_user.id
+        if not visible:
+            return _error('无权执行该诊断能力', 403)
+
     extension = load_extension(capability['category'], capability_id)
-    
-    # 3. 参数校验
     error = ParameterValidator.validate(capability.get('parameters_schema', '{}'), params)
     if error:
         return _error(error)
-    
-    # 4. 获取连接
-    from backend.core.connection import ArthasConnection
+
     connection = db.fetch_one('SELECT * FROM connections WHERE id = ?', (connection_id,))
     if not connection:
-        return _error('连接不存在'), 404
-    
-    # ✅ Phase 5: 并发控制 - 使用 DiagnosisExecutorPool
+        return _error('连接不存在', 404)
+    if connection.get('user_id') not in (None, current_user.id) and not getattr(current_user, 'is_admin', False):
+        return _error('无权使用该连接', 403)
+
+    try:
+        _ensure_arthas_connection_ready(connection)
+        active_conn = _get_active_arthas_connection(connection_id, connection)
+    except ValueError as exc:
+        return _error(str(exc), 409)
+
     from backend.core.diagnosis_executor_pool import get_diagnosis_executor_pool, ConcurrencyError
-    from backend.core.connection_aware_executor import get_connection_aware_executor
-    
+
+    run_id = uuid.uuid4().hex
+    rendered_command = _resolve_rendered_command(capability, extension, params)
     pool = get_diagnosis_executor_pool()
-    connection_executor = get_connection_aware_executor()
-    
-    execution_id = f"exec-{uuid.uuid4().hex[:8]}-{capability_id}"
-    
-    # 1. 获取并发控制锁
     try:
         submit_result = pool.submit_diagnosis(
             connection_id=connection_id,
             capability_id=capability_id,
             params=params,
             user_id=current_user.id,
-            execution_id=execution_id
+            execution_id=run_id,
         )
-    except ConcurrencyError as e:
-        return _error(str(e)), 429  # Too Many Requests
-    
-    if not submit_result['ok']:
+    except ConcurrencyError as exc:
+        return _error(str(exc), 429)
+
+    if not submit_result.get('ok'):
         return _error(submit_result.get('error', '提交失败'))
-    
+
+    _create_task_log_for_diagnosis(
+        run_id=run_id,
+        capability=capability,
+        extension=extension,
+        connection=connection,
+        params=params,
+        user_id=current_user.id,
+        rendered_command=rendered_command,
+    )
+
     cleanup = submit_result['cleanup']
-    
-    # 2. 执行诊断（带连接保护）
-    def _execute_diagnosis():
-        """实际执行逻辑"""
-        if capability['category'] in ('quick', 'tool'):
-            return _execute_arthas_command(capability, extension, params, connection)
-        elif capability['category'] == 'scenario':
-            return _execute_scenario(capability, extension, params, connection)
-        elif capability['category'] == 'ai':
-            return _execute_ai_diagnosis(capability, extension, params, connection)
-        else:
-            raise ValueError(f'不支持的能力类型: {capability["category"]}')
-    
-    try:
-        result = connection_executor.execute_with_connection_guard(
-            connection_id=connection_id,
-            capability_id=capability_id,
-            params=params,
-            user_id=current_user.id,
-            execution_func=_execute_diagnosis,
-            execution_id=execution_id
+    if capability['category'] in ('scenario', 'ai'):
+        thread = threading.Thread(
+            target=lambda: _run_diagnosis_execution(
+                run_id, connection_id, capability, extension, params,
+                active_conn, connection, current_user.id, cleanup,
+            ),
+            name=f'diagnosis-{run_id[:8]}',
+            daemon=True,
         )
-        
-        # 执行成功
-        cleanup(status='completed')
-        
-    except Exception as e:
-        # 执行失败
-        cleanup(status='failed', error=str(e))
-        log.error("诊断执行失败: %s", e, exc_info=True)
-        return _error(f'诊断执行失败: {str(e)}', 500)
-    
-    # 3. 记录执行日志（task_logs）
-    log_id = str(uuid.uuid4().hex)
-    now = _now_text()
-    db.insert('task_logs', {
-        'id': log_id,
-        'task_id': None,  # 即时诊断为空
-        'capability_id': capability_id,
-        'user_id': current_user.id,
-        'execution_mode': 'immediate',
-        'execution_type': 'diagnosis',
-        'status': result.get('status', 'success'),
-        'target_json': _json_dumps({'connection_id': connection_id}),
-        'params_json': _json_dumps(params),
-        'result_json': _json_dumps(result),
-        'duration_ms': result.get('duration_ms', 0),
-        'started_at': now,
-        'finished_at': now,
-    })
-    
-    return jsonify({'ok': True, 'log_id': log_id, 'result': result})
+        thread.start()
+        return jsonify({'ok': True, 'run_id': run_id, 'execution_id': run_id, 'status': 'running'})
+
+    try:
+        result = _run_diagnosis_execution(
+            run_id, connection_id, capability, extension, params,
+            active_conn, connection, current_user.id, cleanup,
+        )
+    except Exception as exc:
+        return _error(f'诊断执行失败: {str(exc)}', 500)
+
+    return jsonify({'ok': True, 'run_id': run_id, 'execution_id': run_id, 'log_id': run_id, 'result': result})
+
+
+@task_bp.route('/diagnosis/executions/<run_id>/status', methods=['GET'])
+@task_bp.route('/diagnosis/runs/<run_id>', methods=['GET'])
+@login_required
+def get_diagnosis_run_status(run_id: str):
+    row = db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
+    if not row:
+        return _error('执行记录不存在', 404)
+    if row.get('user_id') != current_user.id and not getattr(current_user, 'is_admin', False):
+        return _error('无权查看该执行记录', 403)
+    return jsonify({'ok': True, 'run': _row_to_diagnosis_run(row)})
+
+
+@task_bp.route('/diagnosis/runs/<run_id>/cancel', methods=['POST'])
+@login_required
+def cancel_diagnosis_run(run_id: str):
+    return cancel_task_run(run_id)
 
 
 def _execute_arthas_command(capability, extension, params, connection):
     """执行单条 Arthas 命令"""
     from backend.core.arthas_executor import ArthasCommandExecutor
-    from backend.core.pod_connection import get_pod_connection
-    
-    # 获取 Pod 连接
-    pod_conn = get_pod_connection(connection['id'])
-    if not pod_conn:
-        raise ValueError('连接不可用')
+
+    if not connection or not getattr(connection, 'http_client', None):
+        raise ValueError('Arthas 连接不可用，请重新建立连接')
     
     # 获取命令模板
     template = extension.get('template', {})
@@ -1723,7 +2194,7 @@ def _execute_arthas_command(capability, extension, params, connection):
     
     # 执行命令
     result = ArthasCommandExecutor.execute(
-        pod_conn,
+        connection,
         command,
         skip_audit=False,
         skip_history=False,
@@ -1736,15 +2207,12 @@ def _execute_arthas_command(capability, extension, params, connection):
     }
 
 
-async def _execute_scenario(capability, extension, params, connection):
+def _execute_scenario(capability, extension, params, connection):
     """执行场景方案（多步骤）"""
     from backend.core.arthas_executor import ArthasCommandExecutor
-    from backend.core.pod_connection import get_pod_connection
-    
-    # 获取 Pod 连接
-    pod_conn = get_pod_connection(connection['id'])
-    if not pod_conn:
-        raise ValueError('连接不可用')
+
+    if not connection or not getattr(connection, 'http_client', None):
+        raise ValueError('Arthas 连接不可用，请重新建立连接')
     
     # 解析步骤
     steps = extension.get('steps', [])
@@ -1763,7 +2231,7 @@ async def _execute_scenario(capability, extension, params, connection):
         # 执行命令
         try:
             result = ArthasCommandExecutor.execute(
-                pod_conn,
+                connection,
                 command,
                 timeout_ms=step.get('timeout_ms'),
                 skip_audit=True,

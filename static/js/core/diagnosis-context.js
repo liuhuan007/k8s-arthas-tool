@@ -18,6 +18,18 @@ const DiagnosisContext = {
   // 事件监听器集合
   listeners: new Set(),
   
+  /** 将本地临时 ID 替换为后端真实 run_id，返回更新后的执行记录。 */
+  replaceLocalExecutionId(localId, runId) {
+    if (!localId || !runId || localId === runId) return null;
+    const execution = this.activeExecutions.get(localId);
+    if (!execution) return null;
+    this.activeExecutions.delete(localId);
+    execution.executionId = runId;
+    execution.runId = runId;
+    this.activeExecutions.set(runId, execution);
+    return execution;
+  },
+
   /**
    * 连接变化处理
    */
@@ -52,6 +64,7 @@ const DiagnosisContext = {
   registerExecution(executionId, capabilityId, capabilityName) {
     this.activeExecutions.set(executionId, {
       executionId,
+      runId: executionId,
       capabilityId,
       capabilityName,
       status: 'running',
@@ -90,7 +103,33 @@ const DiagnosisContext = {
   },
   
   /**
-   * 取消执行任务
+   * 轮询执行状态
+   */
+  async pollExecution(runId, interval = 2000) {
+    const API = window.API || '/api';
+    let attempts = 0;
+    const maxAttempts = 150;
+    while (attempts < maxAttempts) {
+      try {
+        const resp = await fetch(`${API}/tasks/diagnosis/runs/${runId}`, {
+          credentials: 'include',
+        });
+        if (!resp.ok) return null;
+        const data = await resp.json();
+        if (!data.ok) return null;
+        const run = data.run;
+        if (run && run.status !== 'running' && run.status !== 'pending') {
+          return run;
+        }
+      } catch (_) { /* ignore */ }
+      await new Promise(r => setTimeout(r, interval));
+      attempts++;
+    }
+    return null;
+  },
+  
+  /**
+   * 取消执行任务（使用后端真实 run_id）
    */
   cancelExecution(executionId) {
     const execution = this.activeExecutions.get(executionId);
@@ -99,13 +138,32 @@ const DiagnosisContext = {
       execution.status = 'cancelled';
       execution.endTime = Date.now();
       
+      // 使用后端真实 run_id（优先级：runId > executionId）
+      const backendRunId = execution.runId || execution.executionId;
+      
       this._notifyListeners('executionCancelled', {
-        executionId,
+        executionId: backendRunId,
         capabilityId: execution.capabilityId,
       });
       
-      // TODO: 调用后端取消 API
-      console.log(`[DiagnosisContext] 取消执行 ${executionId}`);
+      // 调用后端取消 API（非阻塞）
+      try {
+        const API = window.API || '/api';
+        fetch(`${API}/tasks/diagnosis/runs/${backendRunId}/cancel`, {
+          method: 'POST',
+          credentials: 'include',
+        }).then(r => r.json()).then(d => {
+          if (d.ok) {
+            console.log(`[DiagnosisContext] 后端取消成功: ${backendRunId}`);
+          } else {
+            console.warn(`[DiagnosisContext] 后端取消失败: ${d.error || 'unknown'}`);
+          }
+        }).catch(e => {
+          console.warn(`[DiagnosisContext] 后端取消请求异常: ${e.message}`);
+        });
+      } catch (e) {
+        console.warn(`[DiagnosisContext] 取消 API 调用异常: ${e.message}`);
+      }
     }
   },
   
@@ -133,13 +191,14 @@ const DiagnosisContext = {
   },
   
   /**
-   * 注册事件监听器
+   * 注册事件监听器（返回取消订阅函数，引用同一对象以便正确删除）
    */
   addEventListener(eventType, callback) {
-    this.listeners.add({ eventType, callback });
+    const entry = { eventType, callback };
+    this.listeners.add(entry);
     
     return () => {
-      this.listeners.delete({ eventType, callback });
+      this.listeners.delete(entry);
     };
   },
   

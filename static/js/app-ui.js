@@ -74,6 +74,8 @@ const PAGE_SCENE_META = {
   'toolchain-center': { required: 'none', showConnBar: false },
   'user-management': { required: 'none', showConnBar: false },
   'audit-logs': { required: 'none', showConnBar: false },
+  'hotfix': { required: 'arthas', showConnBar: true },
+  'diagnosis-cap': { required: 'none', showConnBar: true },
 };
 
 function updateConnectionBarVisibility(tab) {
@@ -2127,25 +2129,34 @@ async function _restoreActiveConnection(conn, savedLevel) {
     const podD = await podR.json();
     if (podD.ok) {
       podOk = true;
-      // 更新 two-step-connection 状态
-      if (typeof _connState !== 'undefined') {
-        // 直接调用 podConnect 不行（会重复请求），手动更新状态
-        // 通过 two-step-connection 暴露的变量同步
-        window._connState = 'pod_connected';
-        window._runtimeInfo = podD.runtime;
+      // 同步连接状态到局部变量和 ConnectionStore
+      _connState = 'pod_connected';
+      window._connState = _connState;
+      window._runtimeInfo = podD.runtime;
+      _runtimeInfo = podD.runtime;
+      _podConnId = conn.id;  // ✅ 关键：设置 Pod 连接 ID，upgradeToArthas 依赖它
+      window._podConnId = conn.id;
+      // 同步到 ConnectionStore，触发 two-step-connection 的订阅回调
+      if (typeof ConnectionStore !== 'undefined') {
+        ConnectionStore.setState({
+          connState: 'pod_connected',
+          runtimeInfo: podD.runtime,
+          podPhase: podD.pod_phase || 'Running',
+          podConnId: conn.id,
+        });
       }
       // 同步到全局状态
       _currentConnId = conn.id;
+      window._currentConnId = conn.id;
       _connected = false; // Pod 连接不算 _connected（这是 Arthas 标志）
       _ap = syncPodTargetFromConnection(conn) || t;
       _connHealth[conn.id] = { alive: true, pod_exists: true, pod_phase: podD.pod_phase || 'Running' };
       conn.status = 'connected';
-      conn.level = 'pod';  // ✅ 明确设置层级
+      conn.level = 'pod';
       _syncState();
-      saveConnections();  // ✅ 保存到 localStorage
+      saveConnections();
       renderConnList();
-
-      // 更新 two-step-connection 内部状态
+      // 显式更新 two-step-connection 按钮状态（不依赖订阅回调）
       if (typeof updateConnectionButton === 'function') updateConnectionButton();
       if (typeof updateRuntimeDisplay === 'function') updateRuntimeDisplay();
       if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
@@ -2153,8 +2164,10 @@ async function _restoreActiveConnection(conn, savedLevel) {
       setConnStatus('ok', `✓ Pod 连接已恢复 (${podD.runtime?.runtime_type || 'unknown'})`);
       toast(`Pod 连接已恢复 (${podD.runtime?.runtime_type || 'unknown'})`, 'success');
 
-      // Step 2: ✅ 修复：根据保存的层级判断是否需要升级 Arthas
-      const shouldUpgradeToArthas = savedLevel === 'arthas' && podD.runtime?.runtime_type === 'java';
+      // Step 2: 根据保存的层级判断是否需要升级 Arthas
+      // 信任 localStorage 中保存的层级：如果之前是 Arthas 连接，直接尝试升级
+      // 运行时检测可能因 kubectl 超时返回 unknown，不能依赖它来决定是否升级
+      const shouldUpgradeToArthas = savedLevel === 'arthas';
       
       if (shouldUpgradeToArthas) {
         console.log('[恢复] 检测到之前是 Arthas 连接, 开始自动升级');
@@ -2166,24 +2179,43 @@ async function _restoreActiveConnection(conn, savedLevel) {
             credentials: 'include',
             body: JSON.stringify({
               connection_id: conn.id,
-              java_pid: conn.java_pid || null
+              java_pid: conn.java_pid || null,
+              force: true
             })
           });
           const arthasD = await arthasR.json();
           if (arthasD.ok) {
-            // Arthas 升级成功
-            window._connState = 'arthas_ready';
+            // Arthas 升级成功 — 同步状态到局部变量和 ConnectionStore
+            _connState = 'arthas_ready';
+            window._connState = _connState;
             _connected = true;
             _currentConnId = conn.id;
+            window._currentConnId = conn.id;
             conn.local_port = arthasD.local_port;
             conn.java_pid = arthasD.java_pid;
             conn.arthas_version = arthasD.arthas_version;
             conn.arthas_address = arthasD.arthas_address;
             conn.http_url = arthasD.http_url;
-            conn.level = 'arthas';  // ✅ 更新层级
+            conn.level = 'arthas';
+            if (typeof ConnectionStore !== 'undefined') {
+              ConnectionStore.setState({
+                connState: 'arthas_ready',
+                currentConnId: conn.id,
+              });
+              ConnectionStore.setCurrentConnection(conn.id);
+              ConnectionStore.updateConnection(conn.id, {
+                level: 'arthas',
+                local_port: arthasD.local_port,
+                java_pid: arthasD.java_pid,
+                arthas_version: arthasD.arthas_version,
+                arthas_address: arthasD.arthas_address,
+                status: 'connected',
+              });
+            }
             _syncState();
-            saveConnections();  // ✅ 保存到 localStorage
+            saveConnections();
             renderConnList();
+            // 显式更新 two-step-connection 按钮状态
             if (typeof updateConnectionButton === 'function') updateConnectionButton();
             if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
 
@@ -2219,21 +2251,39 @@ async function _restoreActiveConnection(conn, savedLevel) {
   }
 
   // 连接成功，更新状态（复用 switchConnection 中的成功逻辑，但不走 switchConnection 本身）
+  _connState = 'arthas_ready';
+  window._connState = _connState;
   _currentConnId = conn.id;
+  window._currentConnId = conn.id;
   _connected = true;
   _ap = syncPodTargetFromConnection(conn) || t;
   _connHealth[conn.id] = { alive: true, pod_exists: true, pod_phase: 'Running' };
   conn.status = 'connected';
-  conn.level = 'arthas';  // ✅ 设置层级
+  conn.level = 'arthas';
   conn.local_port = d.local_port;
   if (d.java_pid) conn.java_pid = d.java_pid;
   if (d.arthas_version) conn.arthas_version = d.arthas_version;
   if (d.arthas_address) conn.arthas_address = d.arthas_address;
   if (d.http_url) conn.http_url = d.http_url;
-
+  if (typeof ConnectionStore !== 'undefined') {
+    ConnectionStore.setState({
+      connState: 'arthas_ready',
+      currentConnId: conn.id,
+    });
+    ConnectionStore.setCurrentConnection(conn.id);
+    ConnectionStore.updateConnection(conn.id, {
+      level: 'arthas',
+      local_port: d.local_port,
+      java_pid: d.java_pid,
+      status: 'connected',
+    });
+  }
   _syncState();
-  saveConnections();  // ✅ 保存到 localStorage
+  saveConnections();
   renderConnList();
+  // ✅ 显式更新 two-step-connection 按钮状态（ConnectionStore 订阅可能不触发 updateConnectionButton）
+  if (typeof updateConnectionButton === 'function') updateConnectionButton();
+  if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
 
   // 更新 UI
   const _addr = conn.arthas_address || conn.http_url || `http://127.0.0.1:${conn.local_port}`;
@@ -2665,6 +2715,7 @@ async function arthasConnect() {
         if(d.ok) {
           // 使用后端返回的 connection_id
           const connId = d.connection_id || d.conn_id;
+          const nowIso = new Date().toISOString();
           const newConn = {
             id: connId,
             cluster_name: t.cluster_name,
@@ -2672,12 +2723,17 @@ async function arthasConnect() {
             pod_name: t.pod_name,
             container: t.container,
             arthas_jar: t.arthas_jar,
+            level: 'arthas',
             local_port: d.local_port,
+            java_pid: d.java_pid || null,
             arthas_version: d.arthas_version || '',
             arthas_address: d.arthas_address || d.http_url || '',
+            http_url: d.http_url || '',
             status: 'connected',
             message: d.message,
-            created_at: new Date().toISOString()
+            last_ping_at: nowIso,
+            last_active_at: nowIso,
+            created_at: nowIso
           };
 
           // 检查是否已存在相同的 Pod 连接
@@ -6187,14 +6243,31 @@ function closeThreadStack() {
   document.getElementById("threadStackContent").style.display = "none";
 }
 
-function cdPodConnect() { /* 复用现有 podConnect() 逻辑 */ toast('Pod 连接功能见连接中心', 'i'); }
-function cdUpgradeToArthas() { /* 复用现有 upgradeToArthas() 逻辑 */ toast('Arthas 升级功能见连接中心', 'i'); }
+function cdPodConnect() {
+  // 跳转到连接中心，让用户选择集群/命名空间/Pod 建立连接
+  switchTab('connections');
+  toast('请在连接中心选择 Pod 并建立连接', 'i');
+}
+function cdUpgradeToArthas() {
+  // 跳转到连接中心，用户在连接中心完成 Arthas 升级
+  switchTab('connections');
+  toast('请在连接中心升级到 Arthas 连接', 'i');
+}
 function cdHealthCheck() { checkConnectionsHealth(); }
-function cdDisconnect() { cleanupStaleConnections(); }
+function cdDisconnect() {
+  // 获取当前连接详情面板中的连接 ID
+  const detailTitle = document.getElementById('connectionDetailTitle')?.textContent || '';
+  const connId = _currentConnId || (_connections.find(c =>
+    detailTitle.includes(c.pod_name || c.pod)
+  )?.id);
+  if (!connId) { toast('没有可断开的连接', 'e'); return; }
+  if (!confirm('确定断开此连接吗？')) return;
+  deleteConnection(connId);
+  closeConnectionDetail();
+}
 function cdOpenPanel(panelId) {
-  document.querySelectorAll('.panel').forEach(p => p.classList.remove('on'));
-  const panel = document.getElementById(panelId);
-  if (panel) panel.classList.add('on');
+  // 使用 switchTab 统一导航，保持侧边栏状态同步
+  switchTab(panelId);
 }
 
 // 暴露给全局

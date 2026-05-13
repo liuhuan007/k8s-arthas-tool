@@ -1,5 +1,12 @@
 # K8s Arthas Tool - .gitignore
 
+# 隐藏文件/目录（以 . 开头），保留 .gitignore 本身
+.*
+!.gitignore
+.agent/
+.agents/
+.workbuddy/
+
 # Python
 __pycache__/
 *.py[cod]
@@ -15,6 +22,7 @@ ENV/
 
 # 配置文件 (集群配置可能包含敏感信息)
 config/data/clusters.json
+config/data/db/*.db
 
 # 日志
 *.log

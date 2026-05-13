@@ -249,11 +249,15 @@ class ArthasConnection:
             return False, _rbac_error(msg)
         return False, _generic_error(msg)
     
-    def connect_arthas(self, timeout: int = 30) -> Tuple[bool, str]:
+    def connect_arthas(self, timeout: int = 30, _reinstall_retries: int = 0) -> Tuple[bool, str]:
         """
         第二步：启动 Arthas 诊断环境
 
         前提：Pod 连接已成功建立
+
+        Args:
+            timeout: 总超时时间（秒）
+            _reinstall_retries: 内部 zombie port 重试计数器（外部勿传）
 
         返回:
             (success, message)  — 失败时 message 为结构化 dict
@@ -290,16 +294,31 @@ class ArthasConnection:
         self._notify_state_change(ConnectionState.START_AGENT, "Starting Arthas agent in Pod")
         ok, agent_msg = self.agent_mgr.ensure_agent_running()
         if not ok:
-            # ✅ 关键修复: REINSTALL_NEEDED 特殊标记,清理端口转发并重试
             if agent_msg == "REINSTALL_NEEDED":
-                log.warning("[Arthas] Zombie port detected, cleaning up and retrying")
-                # 清理端口转发
+                if _reinstall_attempts >= 2:
+                    log.error("[Arthas] Zombie port cleanup failed after %d attempts, giving up", _reinstall_attempts)
+                    self._notify_state_change(ConnectionState.FAILED, "Zombie Arthas port cannot be cleaned")
+                    return False, _generic_error(
+                        "Pod 内 8563 端口被僵尸 Arthas 进程占用，自动清理失败。"
+                        "请手动进入 Pod 执行 `kill -9 $(lsof -t -i:8563)` 后重试。"
+                    )
+                log.warning("[Arthas] Zombie port detected (attempt %d), killing port holder and retrying",
+                           _reinstall_attempts + 1)
+                # 先停本地 port-forward
                 if self._pf_proc:
                     self._stop_port_forward()
                 self._arthas_ready = False
                 self.client = None
-                # 重试: 重新建立连接
-                return self.connect_arthas(timeout=timeout)
+                # 真正清理 Pod 内占用 8563 端口的进程
+                port = self.target.arthas_http_port
+                kill_cmd = (
+                    f"pid=$(lsof -t -i:{port} 2>/dev/null || ss -tlnp 'sport = :{port}' 2>/dev/null "
+                    f"| grep -oP 'pid=\\K[0-9]+' || true); "
+                    f"if [ -n \"$pid\" ]; then kill -9 $pid 2>/dev/null; sleep 1; fi; true"
+                )
+                self.agent_mgr._exec(kill_cmd, timeout=10)
+                # 重试（带计数器）
+                return self.connect_arthas(timeout=timeout, _reinstall_attempts=_reinstall_attempts + 1)
             if "JAR" in agent_msg or "jar" in agent_msg:
                 self._notify_state_change(ConnectionState.NEED_JAR, agent_msg)
                 err = _jar_missing_error(agent_msg, getattr(self.target, 'arthas_jar', ''))

@@ -276,22 +276,6 @@
     const cap = _capabilities.find(c => c.id === capId);
     if (!cap) return;
 
-    // ✅ 新增: 场景方案显示进度
-    const isScenario = cap.type === 'diagnosis_scenario' || cap.category === 'scenario';
-    if (isScenario && cap.steps && cap.steps.length > 0) {
-      return await executeScenarioWithProgress(cap, connId, params);
-    }
-
-    // ✅ 第13章: 使用 DiagnosisContext 管理执行状态
-    const executionId = `exec-${Date.now()}-${capId}`;
-    
-    if (window.DiagnosisContext) {
-      DiagnosisContext.registerExecution(executionId, capId, cap.name);
-    } else if (typeof registerDiagnosisExecution === 'function') {
-      // 兼容旧版
-      registerDiagnosisExecution(executionId, cap.name);
-    }
-
     // 显示加载状态
     showLoading(`正在执行: ${cap.name}...`);
 
@@ -300,49 +284,46 @@
         capability_id: capId,
         connection_id: connId,
         params: params
-      }, 120000); // 2 分钟超时
+      }, 120000);
 
       hideLoading();
 
       if (result.ok) {
-        // ✅ 第13章: 完成执行并渲染结果
+        const runId = result.run_id || result.execution_id || result.log_id;
+        const isAsync = result.status === 'running';
+
+        if (isAsync && runId) {
+          // 异步执行（场景方案/AI 诊断）：注册后轮询
+          if (window.DiagnosisContext) {
+            const localId = `exec-${Date.now()}-${capId}`;
+            DiagnosisContext.registerExecution(localId, capId, cap.name);
+            DiagnosisContext.replaceLocalExecutionId(localId, runId);
+          }
+          showLoading(`正在执行: ${cap.name}（后台执行中）...`);
+          return await pollAndShowResult(runId, cap);
+        }
+
+        // 同步完成
         if (window.DiagnosisContext) {
-          DiagnosisContext.completeExecution(executionId, 'completed', result.result);
-        } else if (typeof completeDiagnosisExecution === 'function') {
-          completeDiagnosisExecution(executionId, 'success');
+          const execId = runId || `exec-${Date.now()}-${capId}`;
+          DiagnosisContext.completeExecution(execId, 'completed', result.result);
         }
-        
-        // 展示结果
-        if (typeof renderDiagnosisResult === 'function') {
-          window.diagRenderResult(renderDiagnosisResult(result.result, cap), cap);
-        } else if (window.diagRenderResult) {
-          window.diagRenderResult(result.result, cap);
-        } else {
-          showSuccess('诊断完成');
-          console.log('诊断结果:', result.result);
-        }
+
+        showDiagnosisResult(result.result, cap);
         return true;
       } else {
-        // ✅ 第13章: 标记执行失败
         if (window.DiagnosisContext) {
-          DiagnosisContext.completeExecution(executionId, 'failed');
-        } else if (typeof completeDiagnosisExecution === 'function') {
-          completeDiagnosisExecution(executionId, 'failed');
+          const execId = result.run_id || `exec-${Date.now()}-${capId}`;
+          DiagnosisContext.completeExecution(execId, 'failed');
         }
         showError(result.error || '诊断失败');
         return false;
       }
     } catch (e) {
       hideLoading();
-      
-      // ✅ 第13章: 标记执行失败
       if (window.DiagnosisContext) {
-        DiagnosisContext.completeExecution(executionId, 'failed');
-      } else if (typeof completeDiagnosisExecution === 'function') {
-        completeDiagnosisExecution(executionId, 'failed');
+        DiagnosisContext.completeExecution(`exec-${Date.now()}-${capId}`, 'failed');
       }
-      
-      // ✅ 第13章: 连接断开处理
       if (e.message.includes('连接') || e.message.includes('connection')) {
         showError('Arthas 连接已断开，请重新建立连接后重试');
       } else {
@@ -351,92 +332,64 @@
       return false;
     }
   }
-  
+
   /**
-   * ✅ 新增: 执行场景方案并展示进度
+   * 轮询异步执行状态并展示结果
    */
-  async function executeScenarioWithProgress(capability, connId, params) {
-    const steps = capability.steps || [];
-    
-    // 显示进度模态框
-    if (window.diagShowProgress) {
-      window.diagShowProgress(capability.name, steps);
+  async function pollAndShowResult(runId, cap) {
+    try {
+      if (window.DiagnosisContext && DiagnosisContext.pollExecution) {
+        const run = await DiagnosisContext.pollExecution(runId, 2000);
+        hideLoading();
+        if (run) {
+          if (run.status === 'cancelled') {
+            showError('诊断已取消');
+          } else if (run.status === 'failed') {
+            showError(run.error_message || '诊断执行失败');
+          } else {
+            const result = run.result || {};
+            showDiagnosisResult(result, cap);
+          }
+          if (window.DiagnosisContext) {
+            DiagnosisContext.completeExecution(runId, run.status === 'success' || run.status === 'partial' ? 'completed' : 'failed', run.result);
+          }
+          return run.status !== 'failed' && run.status !== 'cancelled';
+        }
+        // fallback: 尝试直接查询
+        const fallback = await safeGet(`/tasks/diagnosis/runs/${runId}`);
+        if (fallback && fallback.ok && fallback.run) {
+          const run = fallback.run;
+          if (run.status === 'cancelled') {
+            showError('诊断已取消');
+          } else if (run.status === 'failed') {
+            showError(run.error_message || '诊断执行失败');
+          } else {
+            showDiagnosisResult(run.result || {}, cap);
+          }
+          if (window.DiagnosisContext) {
+            DiagnosisContext.completeExecution(runId, run.status === 'success' ? 'completed' : 'failed', run.result);
+          }
+          return true;
+        }
+        showError('轮询超时，请在诊断历史中查看结果');
+        return false;
+      }
+    } catch (e) {
+      hideLoading();
+      showError('轮询状态失败: ' + e.message);
+      return false;
     }
-    
-    const stepOutputs = {};
-    let allSuccess = true;
-    
-    for (let i = 0; i < steps.length; i++) {
-      const step = steps[i];
-      
-      // 更新步骤状态为执行中
-      if (window.diagUpdateStepStatus) {
-        window.diagUpdateStepStatus(step.step_order, 'running', null);
-      }
-      
-      try {
-        // 构建命令（支持跨步数据传递）
-        const command = buildCommandWithStepOutputs(step.command, params, stepOutputs);
-        
-        // 执行单步
-        const result = await safePost('/tasks/diagnosis/execute', {
-          capability_id: capability.id,
-          connection_id: connId,
-          params: { ...params, _command: command },
-          step_order: step.step_order
-        }, step.timeout_ms || 60000);
-        
-        if (result.ok) {
-          // 保存步骤输出
-          stepOutputs[`step${step.step_order}`] = result.result;
-          
-          // 更新步骤状态为成功
-          if (window.diagUpdateStepStatus) {
-            const output = result.result?.message || JSON.stringify(result.result);
-            window.diagUpdateStepStatus(step.step_order, 'success', output);
-          }
-        } else {
-          allSuccess = false;
-          
-          // 更新步骤状态为失败
-          if (window.diagUpdateStepStatus) {
-            window.diagUpdateStepStatus(step.step_order, 'failed', result.error);
-          }
-          
-          // fail_fast 检查
-          if (step.fail_fast !== 0) {
-            break;
-          }
-        }
-      } catch (e) {
-        allSuccess = false;
-        
-        // 更新步骤状态为失败
-        if (window.diagUpdateStepStatus) {
-          window.diagUpdateStepStatus(step.step_order, 'failed', e.message);
-        }
-        
-        if (step.fail_fast !== 0) {
-          break;
-        }
-      }
-    }
-    
-    // 关闭进度模态框
-    setTimeout(() => {
-      if (window.diagCloseProgress) {
-        window.diagCloseProgress();
-      }
-    }, 1500);
-    
-    // 展示最终结果
-    if (allSuccess) {
-      showSuccess(`场景方案完成: ${capability.name}`);
+  }
+
+  function showDiagnosisResult(result, cap) {
+    if (typeof renderDiagnosisResult === 'function') {
+      window.diagRenderResult(renderDiagnosisResult(result, cap), cap);
+    } else if (window.diagRenderResult) {
+      window.diagRenderResult(result, cap);
     } else {
-      showError(`场景方案部分失败: ${capability.name}`);
+      showSuccess('诊断完成');
+      console.log('诊断结果:', result);
     }
-    
-    return allSuccess;
   }
   
   /**

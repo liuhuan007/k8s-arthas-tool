@@ -464,6 +464,7 @@ def arthas_connect():
     pod = d.get('pod_name', '')
     container = d.get('container', '')
     java_pid = d.get('java_pid')  # 新增：用户指定的 Java PID（可选）
+    ttl_hours = d.get('ttl_hours', 0)  # 连接有效期（小时），0 = 不自动过期
     
     runner, err = _make_runner(cluster_name)
     if err:
@@ -509,6 +510,8 @@ def arthas_connect():
                 'arthas_version': conn.arthas_version,
                 'status': 'ready',
                 'last_ping_at': now_ts,
+                'last_active_at': now_ts,
+                'ttl_hours': ttl_hours,
                 'user_id': current_user.id,
                 'updated_at': now_ts,
             }, 'id = ?', (conn_id,))
@@ -525,6 +528,8 @@ def arthas_connect():
                 'arthas_version': conn.arthas_version,
                 'status': 'ready',
                 'last_ping_at': now_ts,
+                'last_active_at': now_ts,
+                'ttl_hours': ttl_hours,
                 'user_id': current_user.id,
                 'updated_at': now_ts,
             })
@@ -646,29 +651,14 @@ def _ensure_connection(conn_id: str, d: dict):
     conn._runtime_info = conn.pod_conn._runtime_info
     conn._pod_phase = conn.pod_conn._pod_phase
     
-    # ✅ 关键修复: 再建立 Arthas 连接
+    # ✅ 关键修复: 再建立 Arthas 连接（connect_arthas 内部已处理 REINSTALL_NEEDED 重试）
     log.info("[_ensure_connection] 开始建立 Arthas 连接...")
     ok2, msg2 = conn.connect_arthas(timeout=30)
-    log.info("[_ensure_connection] 第一次 Arthas 连接结果: ok=%s, msg=%s, msg_type=%s", ok2, msg2, type(msg2).__name__)
+    log.info("[_ensure_connection] Arthas 连接结果: ok=%s, msg=%s, msg_type=%s", ok2, msg2, type(msg2).__name__)
+    
     if not ok2:
-        # ✅ 如果是 REINSTALL_NEEDED,关闭端口转发,清理残留进程,重试
-        is_reinstall = (msg2 == "REINSTALL_NEEDED") or (isinstance(msg2, dict) and msg2.get('message') == 'REINSTALL_NEEDED')
-        log.info("[_ensure_connection] is_reinstall=%s, msg2=%s", is_reinstall, msg2)
-        if is_reinstall:
-            log.warning("[_ensure_connection] 检测到 REINSTALL_NEEDED,清理后重试")
-            conn._stop_port_forward()
-            conn._arthas_ready = False
-            conn.client = None
-            conn._pf_proc = None
-            conn.local_port = 0
-            # 重试一次
-            log.info("[_ensure_connection] 开始第二次 Arthas 连接...")
-            ok2, msg2 = conn.connect_arthas(timeout=30)
-            log.info("[_ensure_connection] 第二次 Arthas 连接结果: ok=%s, msg=%s", ok2, msg2)
-        
-        if not ok2:
-            err_str = msg2.get("message", str(msg2)) if isinstance(msg2, dict) else msg2
-            return None, f"连接已丢失，自动重连失败: {err_str}"
+        err_str = msg2.get("message", str(msg2)) if isinstance(msg2, dict) else msg2
+        return None, f"连接已丢失，自动重连失败: {err_str}"
 
     # ✅ Arthas 连接成功,更新数据库中的元数据
     with _connections_lock:
@@ -681,6 +671,7 @@ def _ensure_connection(conn_id: str, d: dict):
                 'arthas_version': conn.arthas_version,
                 'status': 'ready',
                 'last_ping_at': now_ts,
+                'last_active_at': now_ts,
                 'user_id': current_user.id,
                 'updated_at': now_ts,
             }, 'id = ?', (conn_id,))
@@ -697,6 +688,7 @@ def _ensure_connection(conn_id: str, d: dict):
                 'arthas_version': conn.arthas_version,
                 'status': 'ready',
                 'last_ping_at': now_ts,
+                'last_active_at': now_ts,
                 'user_id': current_user.id,
                 'updated_at': now_ts,
             })
@@ -731,6 +723,13 @@ def arthas_exec():
         
         # 保存命令历史
         _save_arthas_command(conn_id, command, json.dumps(result, ensure_ascii=False) if isinstance(result, dict) else str(result), '')
+        
+        # 更新 last_active_at（用于 TTL 过期判断）
+        now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        try:
+            db.update('connections', {'last_active_at': now_ts}, 'id = ?', (conn_id,))
+        except Exception:
+            pass  # 非关键路径，不阻塞命令执行
         
         # 直接透传 Arthas HTTP API 原始响应，前端 renderRes 依赖 state/body 结构
         return jsonify(result)

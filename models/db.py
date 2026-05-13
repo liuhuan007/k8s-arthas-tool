@@ -342,6 +342,16 @@ class Database:
                 ('is_archived', 'ALTER TABLE task_logs ADD COLUMN is_archived INTEGER DEFAULT 0'),
                 ('params_json', "ALTER TABLE task_logs ADD COLUMN params_json TEXT DEFAULT '{}'"),
                 ('result_json', 'ALTER TABLE task_logs ADD COLUMN result_json TEXT'),
+                ('execution_mode', "ALTER TABLE task_logs ADD COLUMN execution_mode TEXT DEFAULT 'immediate'"),
+                ('capability_name', 'ALTER TABLE task_logs ADD COLUMN capability_name TEXT'),
+                ('rendered_command', 'ALTER TABLE task_logs ADD COLUMN rendered_command TEXT'),
+                ('run_type', "ALTER TABLE task_logs ADD COLUMN run_type TEXT DEFAULT 'script'"),
+                ('anomaly_event_id', 'ALTER TABLE task_logs ADD COLUMN anomaly_event_id INTEGER'),
+                ('connection_snapshot_json', 'ALTER TABLE task_logs ADD COLUMN connection_snapshot_json TEXT'),
+                ('capability_snapshot_json', 'ALTER TABLE task_logs ADD COLUMN capability_snapshot_json TEXT'),
+                ('ai_analysis_result', 'ALTER TABLE task_logs ADD COLUMN ai_analysis_result TEXT'),
+                ('capability_version', 'ALTER TABLE task_logs ADD COLUMN capability_version INTEGER'),
+                ('log_path', 'ALTER TABLE task_logs ADD COLUMN log_path TEXT'),
             ]:
                 try:
                     cursor.execute(f'SELECT {col} FROM task_logs LIMIT 1')
@@ -405,6 +415,7 @@ class Database:
                 ('last_ping_at', 'ALTER TABLE connections ADD COLUMN last_ping_at TIMESTAMP'),
                 ('status', "ALTER TABLE connections ADD COLUMN status TEXT DEFAULT 'disconnected'"),
                 ('last_active_at', 'ALTER TABLE connections ADD COLUMN last_active_at TIMESTAMP'),
+                ('ttl_hours', 'ALTER TABLE connections ADD COLUMN ttl_hours INTEGER DEFAULT 0'),
             ]:
                 try:
                     cursor.execute(f'SELECT {col} FROM connections LIMIT 1')
@@ -428,6 +439,10 @@ class Database:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_user_created ON task_logs(user_id, created_at DESC)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_capability ON task_logs(capability_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_execution_mode ON task_logs(execution_mode)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_execution_type ON task_logs(execution_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_run_type ON task_logs(run_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_status_started ON task_logs(status, started_at DESC)")
             
             # 创建默认 admin 账户
             cursor.execute('SELECT COUNT(*) FROM users')

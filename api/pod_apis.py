@@ -303,6 +303,7 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         d = request.json or {}
         pod_conn_id = d.get('connection_id', '')
         java_pid = d.get('java_pid')
+        force = d.get('force', False)  # 前端恢复连接时可强制升级（跳过 is_java 检查）
         
         if not pod_conn_id:
             return jsonify({"error": "connection_id 必填"}), 400
@@ -329,11 +330,15 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         if auth_err:
             return jsonify(auth_err), auth_code
         
-        if not pod_conn.is_java:
+        if not pod_conn.is_java and not force:
             return jsonify({
                 "error": "非 Java 应用，无法启动 Arthas",
                 "runtime": pod_conn.runtime_info.runtime_type if pod_conn.runtime_info else "unknown"
             }), 400
+        
+        if force and not pod_conn.is_java:
+            log.warning("[Upgrade Arthas] force=True, 跳过 is_java 检查 (runtime=%s)",
+                       pod_conn.runtime_info.runtime_type if pod_conn.runtime_info else "unknown")
         
         arthas_conn = ArthasConnection(pod_conn.executor, pod_conn.target)
         
@@ -345,37 +350,16 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             arthas_conn.agent_mgr._pid = int(java_pid)
         
         try:
-            log.info("[Upgrade Arthas] 第一次连接尝试...")
+            log.info("[Upgrade Arthas] 开始连接...")
+            # connect_arthas 内部已处理 REINSTALL_NEEDED 重试（最多 1 次），无需外层重复
             ok, msg = arthas_conn.connect_arthas(timeout=30)
-            log.info("[Upgrade Arthas] 第一次连接结果: ok=%s, msg=%s", ok, msg)
+            log.info("[Upgrade Arthas] 连接结果: ok=%s, msg=%s", ok, msg)
             
             if not ok:
-                # ✅ 关键修复: 如果是 REINSTALL_NEEDED,关闭旧端口转发,重新连接
-                is_reinstall = (msg == "REINSTALL_NEEDED") or (isinstance(msg, dict) and msg.get('message') == 'REINSTALL_NEEDED')
-                if is_reinstall:
-                    log.warning("[Upgrade Arthas] 检测到旧 Arthas 进程不存在,关闭端口转发并重新安装")
-                    arthas_conn._stop_port_forward()
-                    
-                    # ✅ 关键修复: 完全重置 Arthas 状态,模拟新连接
-                    arthas_conn._arthas_ready = False
-                    arthas_conn.client = None
-                    arthas_conn._pf_proc = None  # 确保端口转发被清除
-                    arthas_conn.local_port = 0   # 重置端口
-                    
-                    # 重新建立端口转发并启动 Arthas
-                    log.info("[Upgrade Arthas] 开始重新连接...")
-                    ok2, msg2 = arthas_conn.connect_arthas(timeout=30)
-                    log.info("[Upgrade Arthas] 重新连接结果: ok=%s, msg=%s", ok2, msg2)
-                    if not ok2:
-                        if isinstance(msg2, dict):
-                            return jsonify({"ok": False, **msg2}), 400
-                        return jsonify({"ok": False, "error": msg2}), 400
-                    ok, msg = ok2, msg2
-                else:
-                    log.error("[Upgrade Arthas] 连接失败: %s", msg)
-                    if isinstance(msg, dict):
-                        return jsonify({"ok": False, **msg}), 400
-                    return jsonify({"ok": False, "error": msg}), 400
+                log.error("[Upgrade Arthas] 连接失败: %s", msg)
+                if isinstance(msg, dict):
+                    return jsonify({"ok": False, **msg}), 400
+                return jsonify({"ok": False, "error": msg}), 400
             
             is_reused = '复用' in msg or '已在运行' in msg
             mcp_available = arthas_conn.agent_mgr._check_mcp_available(arthas_conn.target.arthas_http_port)

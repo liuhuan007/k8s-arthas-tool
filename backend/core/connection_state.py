@@ -278,26 +278,63 @@ class ConnectionStateManager:
                 log.error("TTL cleanup error: %s", e, exc_info=True)
 
     def _run_ttl_cleanup(self):
-        """Mark expired connections as disconnected."""
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat()
+        """Mark expired connections as disconnected.
 
-        # Find expired connections in DB (status != ready, last_ping_at older than 24h)
+        Each connection can have a custom `ttl_hours` field:
+        - ttl_hours = 0: never expires (default, no auto-cleanup)
+        - ttl_hours > 0: auto-disconnect after this many hours since last_active_at
+        """
+        now = datetime.now(timezone.utc)
+
+        # Find connections that should be cleaned up:
+        # - status is 'ready' or other active states (not already 'disconnected'/'failed')
+        # - ttl_hours > 0 (has a custom expiration)
+        # - last_active_at is older than ttl_hours
         rows = self.db.fetch_all(
-            "SELECT id, status, last_ping_at FROM connections "
-            "WHERE status != ? AND (last_ping_at < ? OR last_ping_at IS NULL)",
-            ("ready", cutoff),
+            "SELECT id, status, last_ping_at, last_active_at, ttl_hours FROM connections "
+            "WHERE status NOT IN (?, ?) AND ttl_hours > 0 "
+            "AND (last_active_at IS NOT NULL AND last_active_at < ?)",
+            (
+                ConnectionState.DISCONNECTED.value,
+                ConnectionState.FAILED.value,
+                (now - timedelta(hours=1)).isoformat(),  # quick pre-filter: skip if active in last hour
+            ),
         )
 
         for row in rows:
             conn_id = row["id"]
+            ttl_hours = row.get("ttl_hours", 0)
+            last_active = row.get("last_active_at") or row.get("last_ping_at")
+
+            if ttl_hours <= 0 or not last_active:
+                continue
+
+            # Parse last_active_at
+            try:
+                if isinstance(last_active, str):
+                    last_active_dt = datetime.fromisoformat(last_active.replace("Z", "+00:00"))
+                else:
+                    last_active_dt = last_active
+                if last_active_dt.tzinfo is None:
+                    last_active_dt = last_active_dt.replace(tzinfo=timezone.utc)
+            except (ValueError, TypeError):
+                log.warning("TTL cleanup: invalid last_active_at for %s: %s", conn_id, last_active)
+                continue
+
+            expired_at = last_active_dt + timedelta(hours=ttl_hours)
+            if now < expired_at:
+                continue  # Not expired yet
+
             log.info(
-                "TTL cleanup: marking %s as disconnected (last_ping_at=%s)",
-                conn_id,
-                row.get("last_ping_at"),
+                "TTL cleanup: marking %s as disconnected (ttl_hours=%d, last_active=%s)",
+                conn_id, ttl_hours, last_active,
             )
             self.db.update(
                 "connections",
-                {"status": ConnectionState.DISCONNECTED.value, "updated_at": datetime.now(timezone.utc).isoformat()},
+                {
+                    "status": ConnectionState.DISCONNECTED.value,
+                    "updated_at": now.isoformat(),
+                },
                 "id = ?",
                 (conn_id,),
             )
@@ -309,5 +346,5 @@ class ConnectionStateManager:
                 action="connection_ttl_disconnected",
                 resource_type="connection",
                 resource_id=conn_id,
-                details=f"Connection {conn_id} marked disconnected by TTL cleanup",
+                details=f"Connection {conn_id} auto-disconnected after {ttl_hours}h TTL",
             )

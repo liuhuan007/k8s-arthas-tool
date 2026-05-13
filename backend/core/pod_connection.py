@@ -477,3 +477,33 @@ class PodConnection:
         return (f"PodConnection({self.target.cluster_name}/"
                 f"{self.target.namespace}/{self.target.pod_name}, "
                 f"status={status}, runtime={runtime})")
+
+
+def get_active_connection(cluster_name, namespace, pod_name, user_id=None):
+    """获取已建立的连接（ArthasConnection），支持非 admin 的 user_id 后缀。
+
+    从 server.py 的 _connections 字典中查找，返回连接对象。
+    如果找不到则返回 None。
+    """
+    import sys
+    server_mod = sys.modules.get('server')
+    if server_mod is None:
+        log.warning("get_active_connection: server module not loaded")
+        return None
+
+    _connections = getattr(server_mod, '_connections', None)
+    if _connections is None:
+        log.warning("get_active_connection: server._connections not found")
+        return None
+
+    # 尝试多种 conn_id 格式
+    candidates = [f"{cluster_name}/{namespace}/{pod_name}"]
+    if user_id is not None:
+        candidates.insert(0, f"{cluster_name}/{namespace}/{pod_name}@u{user_id}")
+
+    for conn_id in candidates:
+        entry = _connections.get(conn_id)
+        if entry:
+            return entry.get('conn')
+
+    return None

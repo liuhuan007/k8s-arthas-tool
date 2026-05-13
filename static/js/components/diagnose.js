@@ -1251,5 +1251,12 @@
     toast('已保存为文件', 's');
   }
 
+  // Expose functions to global scope for HTML onclick handlers
+  window.watchTraceForm = watchTraceForm;
+  window.jadForm = jadForm;
+  window.executeJad = executeJad;
+  window.copyJadSource = copyJadSource;
+  window.saveJadSource = saveJadSource;
+
 })();
 
