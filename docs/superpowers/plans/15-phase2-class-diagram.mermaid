@@ -1,0 +1,141 @@
+classDiagram
+    class DiagnosisEngine {
+        <<Service Layer>>
+        -execution_tracker: ExecutionStateTracker
+        -connection_selector: ConnectionSelector
+        -executor_pool: DiagnosisExecutorPool
+        +execute_capability(capability_id, connection_id, params, user_id) ExecutionResult
+        +execute_batch(capability_id, connection_id, steps, user_id) ExecutionResult
+        +execute_ai_capability(capability_id, connection_id, params, user_id) ExecutionResult
+        -_validate_and_prepare(capability_id, params) PreparedCapability
+        -_resolve_connection(connection_id) ArthasConnection
+        -_execute_single_command(connection, command, params) CommandResult
+        -_execute_scenario_steps(connection, steps, params) StepResults
+    }
+
+    class ExecutionStateTracker {
+        <<Service Layer>>
+        -_active_executions: Dict~str, ExecutionState~
+        -_lock: threading.Lock
+        +start_execution(execution_id, metadata) void
+        +update_step(execution_id, step_num, status, output) void
+        +finish_execution(execution_id, status, result) void
+        +get_execution_state(execution_id) ExecutionState
+        +cancel_execution(execution_id) bool
+        +poll_status(execution_id) ExecutionStatusResponse
+        +cleanup_expired(max_age_seconds) int
+    }
+
+    class ConnectionSelector {
+        <<Core Layer>>
+        +select_connection(connection_id, required_level) SelectedConnection
+        +validate_connection(connection) bool
+        +get_connection_info(connection_id) ConnectionInfo
+        -_find_arthas_connection(connection_id) ArthasConnection
+        -_fallback_to_pod(connection_id) PodConnection
+    }
+
+    class ArthasCommandExecutor {
+        <<Core Layer>>
+        +execute(connection, command, timeout_ms, options) ExecutionResponse
+        +execute_async(connection, command, options) str
+        +execute_batch(connection, commands, options) List~ExecutionResponse~
+        +get_status(execution_id) ExecutionStatus
+        +cancel(execution_id) bool
+        -_parse_command_name(command) str
+        -_get_timeout(cmd_name) int
+        -_mask_output(result) str
+        -_save_history(connection, command, output) void
+        -_log_audit(connection, command, result) void
+    }
+
+    class CommandBuilder {
+        <<Core Layer>>
+        +build_command(template, params, step_outputs) str
+        +validate_command(command) ValidationResult
+        +substitute_params(template, params) str
+        +extract_nested_value(data, field_path) str
+        -_check_ognl_injection(command) bool
+        -_whitelist_check(command) bool
+    }
+
+    class ParameterValidator {
+        <<Core Layer>>
+        +validate(schema_str, params) Optional~str~
+        +validate_arthas_params(command, params) ValidationResult
+        +sanitize_param(value) str
+        -_check_type(field_name, label, value, field_type) Optional~str~
+        -_check_length(field_name, label, value, field) Optional~str~
+        -_check_pattern(field_name, label, value, field) Optional~str~
+        -_check_enum(field_name, label, value, field) Optional~str~
+    }
+
+    class DiagnosisExecutorPool {
+        <<Core Layer>>
+        -global_pool: ThreadPoolExecutor
+        -pod_locks: Dict~str, Lock~
+        -active_executions: Dict~str, Dict~
+        +submit_diagnosis(connection_id, capability_id, params, user_id, execution_id) dict
+        +get_active_count() int
+        +cancel_execution(execution_id) bool
+        +shutdown(wait) void
+    }
+
+    class WorkflowEngine {
+        <<Service Layer>>
+        +execute_skill(capability_id, params, connection_id, user_id) str
+        +get_run_status(run_id) dict
+        +cancel_run(run_id) bool
+        -_execute_dsl(run_id, dsl, params, connection_id) void
+        -_execute_command(run_id, command, params, connection_id) void
+        -_substitute_params(template, params) str
+    }
+
+    class ArthasConnection {
+        <<Core Layer>>
+        -pod_conn: PodConnection
+        -agent_mgr: ArthasAgentManager
+        -client: ArthasHttpClient
+        -local_port: int
+        -_arthas_ready: bool
+        +connect_pod(timeout) Tuple~bool, str~
+        +connect_arthas(timeout) Tuple~bool, str~
+        +connect(timeout, on_state_change) Tuple~bool, str~
+        +is_alive() bool
+        +disconnect() void
+    }
+
+    class ExecutionState {
+        <<Data Model>>
+        +execution_id: str
+        +status: str
+        +capability_id: int
+        +connection_id: str
+        +current_step: int
+        +total_steps: int
+        +started_at: datetime
+        +finished_at: datetime
+        +results: List~StepResult~
+        +error: str
+    }
+
+    class SafetyService {
+        <<Utility>>
+        +mask_sensitive_output(output) str
+        +classify_arthas_command(command) dict
+        +resolve_under_root(root, requested) str
+        +file_sha256(path) str
+    }
+
+    DiagnosisEngine --> ConnectionSelector : selects connections
+    DiagnosisEngine --> ExecutionStateTracker : tracks state
+    DiagnosisEngine --> ArthasCommandExecutor : executes commands
+    DiagnosisEngine --> ParameterValidator : validates params
+    DiagnosisEngine --> DiagnosisExecutorPool : submits tasks
+    ArthasCommandExecutor --> ArthasConnection : uses connection
+    ArthasCommandExecutor --> CommandBuilder : builds & validates commands
+    ArthasCommandExecutor --> SafetyService : masks output
+    WorkflowEngine --> ArthasCommandExecutor : delegates execution
+    WorkflowEngine --> CommandBuilder : builds commands
+    ConnectionSelector --> ArthasConnection : resolves connections
+    ExecutionStateTracker --> ExecutionState : manages state
