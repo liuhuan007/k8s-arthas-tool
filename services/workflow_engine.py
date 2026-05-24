@@ -4,7 +4,8 @@ import json
 import logging
 import uuid
 import importlib
-from typing import Optional, Dict, Any, List
+import re
+from typing import Optional, Dict, Any, List, Tuple
 from datetime import datetime
 
 log = logging.getLogger(__name__)
@@ -12,6 +13,14 @@ log = logging.getLogger(__name__)
 
 class WorkflowEngine:
     """工作流引擎 - DSL步骤执行"""
+
+    # 默认重试策略
+    DEFAULT_RETRY_POLICY = {
+        "mode": "resume",  # resume: 从失败步骤继续 | restart: 重新开始
+        "max_retries": 3,
+        "retryable_step_types": ["arthas_command", "llm_analysis", "get_pod_status", "get_pod_metrics"],
+        "non_retryable_step_types": ["redefine", "mc"]
+    }
 
     def __init__(self):
         from models.db import get_db
@@ -86,29 +95,63 @@ class WorkflowEngine:
         except json.JSONDecodeError:
             raise ValueError("Invalid DSL format")
 
+        # 获取重试策略
+        retry_policy = dsl_data.get('retry_policy', self.DEFAULT_RETRY_POLICY)
+
         for i, step in enumerate(steps):
             step_number = i + 1
             step_id = self._create_step(run_id, step_number, step)
 
-            try:
-                # 参数替换
-                command = self._substitute_params(step.get('command', ''), params)
+            # 检查条件
+            if step.get('condition'):
+                if not self._evaluate_condition(step['condition'], params):
+                    self._update_step_status(step_id, "skipped", output="Condition not met")
+                    continue
 
-                # 执行命令
-                output = self._execute_arthas_command(command, connection_id)
+            # 执行步骤（支持重试）
+            max_retries = retry_policy.get('max_retries', 3)
+            retry_count = 0
 
-                # 记录步骤完成
-                self._update_step_status(step_id, "success", output=output)
+            while retry_count <= max_retries:
+                try:
+                    # 参数替换
+                    command = self._substitute_params(step.get('command', ''), params)
 
-                # 传递步骤结果
-                params[f"step{step_number}"] = {"output": output}
+                    # 执行命令
+                    output = self._execute_step_by_type(step, command, connection_id, params)
 
-            except Exception as e:
-                self._update_step_status(step_id, "failed", error=str(e))
+                    # 记录步骤完成
+                    self._update_step_status(step_id, "success", output=output)
 
-                # 检查失败策略
-                if step.get('fail_fast', True):
-                    raise
+                    # 传递步骤结果
+                    params[f"step{step_number}"] = {"output": output}
+
+                    # 成功，跳出重试循环
+                    break
+
+                except Exception as e:
+                    retry_count += 1
+                    error_msg = f"Attempt {retry_count}/{max_retries + 1} failed: {str(e)}"
+
+                    # 检查是否可重试
+                    step_type = step.get('type', 'arthas_command')
+                    if not self._is_retryable(step_type, retry_policy):
+                        self._update_step_status(step_id, "failed", error=error_msg)
+                        raise
+
+                    # 检查是否超过最大重试次数
+                    if retry_count > max_retries:
+                        self._update_step_status(step_id, "failed", error=error_msg)
+                        raise
+
+                    # 记录重试
+                    log.warning(f"Step {step_number} retry {retry_count}: {error_msg}")
+
+            # 检查失败策略
+            if step.get('on_failure') == 'abort':
+                break
+            elif step.get('on_failure') == 'skip':
+                continue
 
     def _execute_command(self, run_id: str, command: str, params: Dict[str, Any],
                         connection_id: str):
@@ -150,12 +193,114 @@ class WorkflowEngine:
             self._update_step_status(step_id, "failed", error=str(e))
             raise
 
+    def _execute_step_by_type(self, step: Dict[str, Any], command: str,
+                             connection_id: str, params: Dict[str, Any]) -> str:
+        """根据步骤类型执行"""
+        step_type = step.get('type', 'arthas_command')
+
+        if step_type == 'arthas_command':
+            return self._execute_arthas_command(command, connection_id)
+        elif step_type == 'llm_analysis':
+            return self._execute_llm_analysis(step, params)
+        elif step_type == 'get_pod_status':
+            return self._get_pod_status(connection_id)
+        elif step_type == 'get_pod_metrics':
+            return self._get_pod_metrics(connection_id)
+        else:
+            # 默认作为 Arthas 命令执行
+            return self._execute_arthas_command(command, connection_id)
+
     def _execute_arthas_command(self, command: str, connection_id: str) -> str:
         """执行 Arthas 命令"""
         # TODO: 集成实际的 Arthas 执行器
         # 这里先返回模拟输出
         log.info(f"Executing Arthas command: {command} on connection: {connection_id}")
         return f"[Simulated output for: {command}]"
+
+    def _execute_llm_analysis(self, step: Dict[str, Any], params: Dict[str, Any]) -> str:
+        """执行大模型分析"""
+        # TODO: 集成实际的 LLM 调用
+        prompt = step.get('prompt', '分析以上诊断结果')
+        log.info(f"Executing LLM analysis with prompt: {prompt}")
+        return f"[Simulated LLM analysis for: {prompt}]"
+
+    def _get_pod_status(self, connection_id: str) -> str:
+        """获取 Pod 状态"""
+        # TODO: 集成实际的 kubectl 执行器
+        log.info(f"Getting pod status for connection: {connection_id}")
+        return f"[Simulated pod status for: {connection_id}]"
+
+    def _get_pod_metrics(self, connection_id: str) -> str:
+        """获取 Pod 指标"""
+        # TODO: 集成实际的指标采集
+        log.info(f"Getting pod metrics for connection: {connection_id}")
+        return f"[Simulated pod metrics for: {connection_id}]"
+
+    def _evaluate_condition(self, condition: str, params: Dict[str, Any]) -> bool:
+        """评估条件表达式
+
+        支持的条件格式：
+        - "step2.output contains 'RUNNABLE'"
+        - "step1.output contains 'ERROR'"
+        - "step3.status == 'success'"
+        """
+        try:
+            # 简单的条件解析
+            if 'contains' in condition:
+                parts = condition.split(' contains ')
+                if len(parts) == 2:
+                    var_name = parts[0].strip()
+                    expected_value = parts[1].strip().strip("'\"")
+
+                    # 获取变量值
+                    actual_value = self._get_condition_variable(var_name, params)
+                    return expected_value in str(actual_value)
+
+            elif '==' in condition:
+                parts = condition.split('==')
+                if len(parts) == 2:
+                    var_name = parts[0].strip()
+                    expected_value = parts[1].strip().strip("'\"")
+
+                    actual_value = self._get_condition_variable(var_name, params)
+                    return str(actual_value) == expected_value
+
+            # 如果无法解析，返回 True（执行步骤）
+            log.warning(f"Cannot parse condition: {condition}")
+            return True
+
+        except Exception as e:
+            log.error(f"Error evaluating condition: {condition}, error: {e}")
+            return True
+
+    def _get_condition_variable(self, var_name: str, params: Dict[str, Any]) -> Any:
+        """获取条件变量的值"""
+        # 支持 stepN.output 格式
+        if var_name.startswith('step') and '.output' in var_name:
+            step_num = var_name.replace('step', '').replace('.output', '')
+            step_data = params.get(f"step{step_num}", {})
+            return step_data.get('output', '')
+
+        # 支持 stepN.status 格式
+        if var_name.startswith('step') and '.status' in var_name:
+            step_num = var_name.replace('step', '').replace('.status', '')
+            step_data = params.get(f"step{step_num}", {})
+            return step_data.get('status', '')
+
+        # 直接返回参数值
+        return params.get(var_name, '')
+
+    def _is_retryable(self, step_type: str, retry_policy: Dict[str, Any]) -> bool:
+        """检查步骤类型是否可重试"""
+        retryable_types = retry_policy.get('retryable_step_types', [])
+        non_retryable_types = retry_policy.get('non_retryable_step_types', [])
+
+        if step_type in non_retryable_types:
+            return False
+        if step_type in retryable_types:
+            return True
+        # 默认可重试
+        return True
 
     def _substitute_params(self, template: str, params: Dict[str, Any]) -> str:
         """参数替换"""
