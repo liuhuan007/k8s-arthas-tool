@@ -333,6 +333,40 @@ class Database:
                     log.info("Schema migrated: task_runs renamed to task_logs")
                 except Exception as e:
                     log.warning("Rename task_runs to task_logs failed: %s", e)
+                    cursor.execute('''
+                        CREATE TABLE IF NOT EXISTS task_logs (
+                            id TEXT PRIMARY KEY,
+                            task_id INTEGER,
+                            capability_id INTEGER,
+                            user_id INTEGER,
+                            status TEXT NOT NULL DEFAULT 'pending',
+                            execution_mode TEXT NOT NULL DEFAULT 'manual',
+                            execution_type TEXT DEFAULT 'script',
+                            run_type TEXT DEFAULT 'script',
+                            target_json TEXT DEFAULT '{}',
+                            params_json TEXT DEFAULT '{}',
+                            result_json TEXT,
+                            stdout TEXT,
+                            stderr TEXT,
+                            exit_code INTEGER,
+                            duration_ms INTEGER,
+                            started_at TIMESTAMP,
+                            finished_at TIMESTAMP,
+                            error_message TEXT,
+                            work_dir TEXT,
+                            capability_name TEXT,
+                            capability_version INTEGER,
+                            rendered_command TEXT,
+                            connection_snapshot_json TEXT,
+                            capability_snapshot_json TEXT,
+                            ai_analysis_result TEXT,
+                            log_path TEXT,
+                            retention_days INTEGER DEFAULT 30,
+                            is_archived INTEGER DEFAULT 0,
+                            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+                        )
+                    ''')
             
             # 扩展 task_logs 表字段
             for col, ddl in [
@@ -343,6 +377,10 @@ class Database:
                 ('params_json', "ALTER TABLE task_logs ADD COLUMN params_json TEXT DEFAULT '{}'"),
                 ('result_json', 'ALTER TABLE task_logs ADD COLUMN result_json TEXT'),
                 ('execution_mode', "ALTER TABLE task_logs ADD COLUMN execution_mode TEXT DEFAULT 'immediate'"),
+                ('stdout', 'ALTER TABLE task_logs ADD COLUMN stdout TEXT'),
+                ('stderr', 'ALTER TABLE task_logs ADD COLUMN stderr TEXT'),
+                ('exit_code', 'ALTER TABLE task_logs ADD COLUMN exit_code INTEGER'),
+                ('work_dir', 'ALTER TABLE task_logs ADD COLUMN work_dir TEXT'),
                 ('capability_name', 'ALTER TABLE task_logs ADD COLUMN capability_name TEXT'),
                 ('rendered_command', 'ALTER TABLE task_logs ADD COLUMN rendered_command TEXT'),
                 ('run_type', "ALTER TABLE task_logs ADD COLUMN run_type TEXT DEFAULT 'script'"),
@@ -443,6 +481,86 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_execution_type ON task_logs(execution_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_run_type ON task_logs(run_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_task_logs_status_started ON task_logs(status, started_at DESC)")
+
+            # ── Phase 0: 新增表 ────────────────────────────────────────────────
+            # skill_registry 表（Skill管理态）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS skill_registry (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    version TEXT NOT NULL,
+                    description TEXT,
+                    category TEXT,
+                    level INTEGER,
+                    risk_level TEXT,
+                    estimated_duration INTEGER,
+                    source TEXT DEFAULT 'custom',
+                    status TEXT DEFAULT 'draft',
+                    dsl TEXT,
+                    parameters_schema TEXT,
+                    llm_prompt TEXT,
+                    arthas_command TEXT,
+                    handler TEXT,
+                    created_by INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(name, version)
+                )
+            ''')
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_status ON skill_registry(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_category ON skill_registry(category)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_source ON skill_registry(source)")
+            log.info("Schema initialized: skill_registry table created")
+
+            # step_logs 表（步骤级日志）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS step_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id TEXT NOT NULL,
+                    step_number INTEGER NOT NULL,
+                    step_name TEXT,
+                    step_type TEXT,
+                    command TEXT,
+                    output TEXT,
+                    status TEXT DEFAULT 'pending',
+                    duration_ms INTEGER,
+                    error_message TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (run_id) REFERENCES task_logs(id)
+                )
+            ''')
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_step_logs_run_id ON step_logs(run_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_step_logs_status ON step_logs(status)")
+            log.info("Schema initialized: step_logs table created")
+
+            # tool_packages 表（工具包管理）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS tool_packages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL UNIQUE,
+                    description TEXT,
+                    source_type TEXT DEFAULT 'local',
+                    source_url TEXT,
+                    version TEXT,
+                    checksum TEXT,
+                    tool_type TEXT DEFAULT 'generic',
+                    file_path TEXT,
+                    file_name TEXT,
+                    file_size INTEGER DEFAULT 0,
+                    sha256 TEXT,
+                    install_path TEXT,
+                    is_builtin INTEGER DEFAULT 0,
+                    last_verified_at TIMESTAMP,
+                    status TEXT DEFAULT 'active',
+                    created_by INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (created_by) REFERENCES users(id)
+                )
+            ''')
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_packages_type ON tool_packages(tool_type)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_packages_status ON tool_packages(status)")
+            log.info("Schema initialized: tool_packages table created")
             
             # 创建默认 admin 账户
             cursor.execute('SELECT COUNT(*) FROM users')

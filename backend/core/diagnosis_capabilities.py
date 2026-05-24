@@ -286,21 +286,6 @@ def init_capabilities_table(conn):
         )
     ''')
     
-    # ✅ Phase 7: 能力版本管理 - 版本历史表
-    conn.execute('''
-        CREATE TABLE IF NOT EXISTS capability_versions (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            capability_id INTEGER NOT NULL,
-            version INTEGER NOT NULL,
-            parameters_schema TEXT,
-            extension_snapshot TEXT,  -- 扩展表数据快照
-            changed_by INTEGER,
-            changed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE CASCADE,
-            UNIQUE(capability_id, version)
-        )
-    ''')
-    
     # 初始化数据
     _seed_capabilities(conn)
 
@@ -312,27 +297,27 @@ def init_capabilities_table(conn):
 def check_capability_permission(capability_id, user_id, user_role='user'):
     """检查用户是否有权限执行诊断能力"""
     from models.db import db
-    
+
     # 1. 管理员无限制
     if user_role == 'admin':
         return True
-    
+
     capability = db.fetch_one(
         'SELECT id, visibility, created_by FROM diagnosis_capabilities WHERE id = ?',
         (capability_id,)
     )
-    
+
     if not capability:
         return False
-    
+
     # 2. 公开能力
     if capability['visibility'] == 'public':
         return True
-    
+
     # 3. 私有能力
     if capability['visibility'] == 'private':
         return capability['created_by'] == user_id
-    
+
     # 4. 用户组能力
     if capability['visibility'] == 'group':
         user_groups = db.fetch_all(
@@ -340,84 +325,271 @@ def check_capability_permission(capability_id, user_id, user_role='user'):
             (user_id,)
         )
         group_ids = [g['group_id'] for g in user_groups]
-        
+
         allowed_groups = db.fetch_all(
             'SELECT group_id FROM capability_user_groups WHERE capability_id = ?',
             (capability_id,)
         )
         allowed_group_ids = [g['group_id'] for g in allowed_groups]
-        
+
         return any(gid in allowed_group_ids for gid in group_ids)
-    
+
     return False
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ✅ Phase 7: 能力版本管理
+# Phase 0: Skill Registry 预制数据
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def create_capability_version(capability_id, changed_by=None):
-    """创建能力版本快照"""
-    from models.db import db
-    
-    capability = db.fetch_one(
-        'SELECT * FROM diagnosis_capabilities WHERE id = ?',
-        (capability_id,)
-    )
-    
-    if not capability:
-        return None
-    
-    current_version = capability['version']
-    
-    # 捕获扩展表快照
-    extension_snapshot = load_extension(capability['category'], capability_id)
-    
-    # 创建版本记录
-    version_id = db.insert('capability_versions', {
-        'capability_id': capability_id,
-        'version': current_version,
-        'parameters_schema': capability['parameters_schema'],
-        'extension_snapshot': json.dumps(extension_snapshot) if extension_snapshot else None,
-        'changed_by': changed_by,
-    })
-    
-    return version_id
+BUILTIN_SKILLS = [
+    # 快捷工具（Level 1）
+    {
+        "name": "jvm-dashboard",
+        "version": "1.0.0",
+        "description": "查看 JVM 运行概况:线程、内存、GC、运行时信息",
+        "category": "quick",
+        "level": 1,
+        "risk_level": "low",
+        "estimated_duration": 5,
+        "source": "builtin",
+        "arthas_command": "dashboard -n 1",
+    },
+    {
+        "name": "thread-list",
+        "version": "1.0.0",
+        "description": "查看 CPU 占用 Top N 线程",
+        "category": "quick",
+        "level": 1,
+        "risk_level": "low",
+        "estimated_duration": 5,
+        "source": "builtin",
+        "arthas_command": "thread -n 15",
+    },
+    {
+        "name": "deadlock-detect",
+        "version": "1.0.0",
+        "description": "检测线程死锁",
+        "category": "quick",
+        "level": 1,
+        "risk_level": "low",
+        "estimated_duration": 5,
+        "source": "builtin",
+        "arthas_command": "thread -b",
+    },
+    {
+        "name": "vmoption",
+        "version": "1.0.0",
+        "description": "查看 JVM 启动参数和 VM options",
+        "category": "quick",
+        "level": 1,
+        "risk_level": "low",
+        "estimated_duration": 5,
+        "source": "builtin",
+        "arthas_command": "vmoption",
+    },
+    {
+        "name": "class-info",
+        "version": "1.0.0",
+        "description": "查看类的详细信息(ClassLoader、代码来源等)",
+        "category": "quick",
+        "level": 1,
+        "risk_level": "low",
+        "estimated_duration": 5,
+        "source": "builtin",
+        "arthas_command": "sc -d ${class}",
+        "parameters_schema": json.dumps([
+            {"name": "class", "label": "类名", "required": True, "pattern": "^[A-Za-z_$][\\w.$*]*$"}
+        ]),
+    },
+    # 诊断模板（Level 2）
+    {
+        "name": "trace-analysis",
+        "version": "1.0.0",
+        "description": "追踪方法调用链路,定位慢方法",
+        "category": "tool",
+        "level": 2,
+        "risk_level": "medium",
+        "estimated_duration": 30,
+        "source": "builtin",
+        "arthas_command": "trace ${class} ${method} -n 10 '#cost > .5'",
+        "parameters_schema": json.dumps([
+            {"name": "class", "label": "类名", "required": True, "pattern": "^[A-Za-z_$][\\w.$*]*$"},
+            {"name": "method", "label": "方法名", "default": "*", "pattern": "^[\\w.*]*$"}
+        ]),
+    },
+    {
+        "name": "watch-method",
+        "version": "1.0.0",
+        "description": "观测方法入参、返回值、异常信息",
+        "category": "tool",
+        "level": 2,
+        "risk_level": "medium",
+        "estimated_duration": 20,
+        "source": "builtin",
+        "arthas_command": "watch ${class} ${method} '{params,returnObj,throwExp}' -x 3 -n 5",
+        "parameters_schema": json.dumps([
+            {"name": "class", "label": "类名", "required": True, "pattern": "^[A-Za-z_$][\\w.$*]*$"},
+            {"name": "method", "label": "方法名", "default": "*", "pattern": "^[\\w.*]*$"}
+        ]),
+    },
+    {
+        "name": "stack-trace",
+        "version": "1.0.0",
+        "description": "查看方法调用栈,定位调用来源",
+        "category": "tool",
+        "level": 2,
+        "risk_level": "low",
+        "estimated_duration": 15,
+        "source": "builtin",
+        "arthas_command": "stack ${class} ${method} -n 5",
+        "parameters_schema": json.dumps([
+            {"name": "class", "label": "类名", "required": True, "pattern": "^[A-Za-z_$][\\w.$*]*$"},
+            {"name": "method", "label": "方法名", "default": "*", "pattern": "^[\\w.*]*$"}
+        ]),
+    },
+    {
+        "name": "jad-decompile",
+        "version": "1.0.0",
+        "description": "反编译查看运行时源码,确认线上代码版本",
+        "category": "tool",
+        "level": 2,
+        "risk_level": "low",
+        "estimated_duration": 10,
+        "source": "builtin",
+        "arthas_command": "jad --source-only ${class}",
+        "parameters_schema": json.dumps([
+            {"name": "class", "label": "类名", "required": True, "pattern": "^[A-Za-z_$][\\w.$*]*$"}
+        ]),
+    },
+    {
+        "name": "monitor-method",
+        "version": "1.0.0",
+        "description": "统计方法调用成功率、耗时",
+        "category": "tool",
+        "level": 2,
+        "risk_level": "low",
+        "estimated_duration": 30,
+        "source": "builtin",
+        "arthas_command": "monitor ${class} ${method} -c 5",
+        "parameters_schema": json.dumps([
+            {"name": "class", "label": "类名", "required": True, "pattern": "^[A-Za-z_$][\\w.$*]*$"},
+            {"name": "method", "label": "方法名", "default": "*", "pattern": "^[\\w.*]*$"}
+        ]),
+    },
+    # 场景方案（Level 3）
+    {
+        "name": "slow-api-diagnosis",
+        "version": "1.0.0",
+        "description": "通过 trace → watch → profiler 组合定位接口慢的根因",
+        "category": "scenario",
+        "level": 3,
+        "risk_level": "medium",
+        "estimated_duration": 120,
+        "source": "builtin",
+        "dsl": json.dumps({
+            "steps": [
+                {"step": 1, "command": "trace ${controller} ${method} -n 10 '#cost > .5'", "desc": "定位慢方法"},
+                {"step": 2, "command": "watch ${slow_class} ${slow_method} '{params,returnObj}' -n 3", "desc": "观察入参返回值"},
+                {"step": 3, "command": "profiler start --event cpu --duration 30", "desc": "CPU 采样分析"}
+            ]
+        }),
+        "parameters_schema": json.dumps([
+            {"name": "controller", "label": "Controller 类名", "required": True, "pattern": "^[A-Za-z_$][\\w.$*]*$"},
+            {"name": "method", "label": "方法名", "default": "*", "pattern": "^[\\w.*]*$"}
+        ]),
+    },
+    {
+        "name": "cpu-high-diagnosis",
+        "version": "1.0.0",
+        "description": "通过 thread -n → profiler → 线程堆栈定位 CPU 飙升根因",
+        "category": "scenario",
+        "level": 3,
+        "risk_level": "low",
+        "estimated_duration": 90,
+        "source": "builtin",
+        "dsl": json.dumps({
+            "steps": [
+                {"step": 1, "command": "thread -n 5", "desc": "查看热线程"},
+                {"step": 2, "command": "profiler start --event cpu --duration 60", "desc": "生成火焰图"},
+                {"step": 3, "command": "thread ${tid}", "desc": "查看热点线程堆栈"}
+            ]
+        }),
+    },
+    {
+        "name": "oom-diagnosis",
+        "version": "1.0.0",
+        "description": "通过 dashboard → heapdump → GC 日志观察定位内存泄漏",
+        "category": "scenario",
+        "level": 3,
+        "risk_level": "high",
+        "estimated_duration": 180,
+        "source": "builtin",
+        "dsl": json.dumps({
+            "steps": [
+                {"step": 1, "command": "dashboard -n 1", "desc": "查看内存分布"},
+                {"step": 2, "command": "heapdump /tmp/heapdump.hprof", "desc": "生成堆快照"},
+                {"step": 3, "command": "vmoption PrintGC true", "desc": "开启 GC 日志观察"}
+            ]
+        }),
+    },
+    # AI 诊断（Level 4）
+    {
+        "name": "auto-diagnosis",
+        "version": "1.0.0",
+        "description": "自动采集 dashboard + thread + trace,通过规则引擎和 LLM 生成诊断报告",
+        "category": "ai",
+        "level": 4,
+        "risk_level": "low",
+        "estimated_duration": 60,
+        "source": "builtin",
+        "handler": "performance_diagnose.run_diagnosis",
+    },
+]
 
 
-def update_capability_with_version(capability_id, new_data, changed_by=None):
-    """更新能力（自动创建版本快照）"""
-    from models.db import db
-    
-    # 1. 创建版本快照
-    create_capability_version(capability_id, changed_by)
-    
-    # 2. 更新能力（版本号 +1）
-    current = db.fetch_one('SELECT version FROM diagnosis_capabilities WHERE id = ?', (capability_id,))
-    new_version = (current['version'] if current else 1) + 1
-    
-    db.update('diagnosis_capabilities', {
-        **new_data,
-        'version': new_version,
-    }, {'id': capability_id})
-    
-    return new_version
+def _seed_skill_registry(conn):
+    """初始化 skill_registry 表数据"""
+    cursor = conn.cursor()
+
+    # 检查是否已初始化
+    cursor.execute("SELECT COUNT(*) FROM skill_registry")
+    if cursor.fetchone()[0] > 0:
+        log.info("skill_registry 已存在,跳过初始化")
+        return
+
+    log.info("开始初始化 skill_registry...")
+
+    for skill in BUILTIN_SKILLS:
+        cursor.execute(
+            '''
+            INSERT INTO skill_registry (
+                name, version, description, category, level, risk_level,
+                estimated_duration, source, status, dsl, parameters_schema,
+                llm_prompt, arthas_command, handler, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''',
+            (
+                skill['name'],
+                skill['version'],
+                skill.get('description', ''),
+                skill['category'],
+                skill.get('level', 1),
+                skill.get('risk_level', 'low'),
+                skill.get('estimated_duration', 10),
+                skill.get('source', 'builtin'),
+                'published',  # 内置Skill直接发布
+                skill.get('dsl'),
+                skill.get('parameters_schema', '{}'),
+                skill.get('llm_prompt'),
+                skill.get('arthas_command'),
+                skill.get('handler'),
+                None,  # created_by (系统创建)
+            )
+        )
+
+    log.info(f"skill_registry 初始化完成,共插入 {len(BUILTIN_SKILLS)} 个Skill")
 
 
-def get_capability_versions(capability_id, limit=20):
-    """获取能力版本历史"""
-    from models.db import db
-    
-    versions = db.fetch_all(
-        '''
-        SELECT v.*, u.username as changed_by_name
-        FROM capability_versions v
-        LEFT JOIN users u ON u.id = v.changed_by
-        WHERE v.capability_id = ?
-        ORDER BY v.version DESC
-        LIMIT ?
-        ''',
-        (capability_id, limit)
-    )
-    
-    return [dict(v) for v in versions]
+def init_skill_registry(conn):
+    """初始化 skill_registry 表"""
+    _seed_skill_registry(conn)
