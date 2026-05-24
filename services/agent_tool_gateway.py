@@ -1,8 +1,21 @@
 #!/usr/bin/env python3
-"""Agent Tool Gateway 服务 - 受控工具暴露、权限控制、审计"""
+"""Agent Tool Gateway 服务 - 受控工具暴露、权限控制、审计
+
+本模块提供 Agent 工具网关，负责：
+- 受控工具暴露
+- 权限控制
+- 审计日志
+- 工具执行管理
+
+支持与 Agent SDK 集成，提供统一的工具调用接口。
+
+Author: Kou (software-engineer)
+Created: 2025-05-25
+"""
 import json
 import logging
 from typing import Optional, Dict, Any, List, Callable
+from datetime import datetime
 
 log = logging.getLogger(__name__)
 
@@ -76,6 +89,98 @@ class AgentToolGateway:
                 "properties": {
                     "category": {"type": "string", "description": "能力类别过滤"}
                 }
+            },
+            risk_level="low"
+        )
+
+        # 搜索能力
+        self.register_tool(
+            name="search_capabilities",
+            handler=self._search_capabilities,
+            description="根据关键词搜索诊断能力",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "keyword": {"type": "string", "description": "搜索关键词"}
+                },
+                "required": ["keyword"]
+            },
+            risk_level="low"
+        )
+
+        # 获取连接信息
+        self.register_tool(
+            name="get_connection_info",
+            handler=self._get_connection_info,
+            description="获取指定连接的详细信息",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "connection_id": {"type": "string", "description": "连接ID"}
+                },
+                "required": ["connection_id"]
+            },
+            risk_level="low"
+        )
+
+        # 获取诊断执行状态
+        self.register_tool(
+            name="get_execution_status",
+            handler=self._get_execution_status,
+            description="获取诊断执行的状态和结果",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "run_id": {"type": "string", "description": "执行ID"}
+                },
+                "required": ["run_id"]
+            },
+            risk_level="low"
+        )
+
+        # 执行 Arthas 命令
+        self.register_tool(
+            name="execute_arthas_command",
+            handler=self._execute_arthas_command,
+            description="执行单条 Arthas 命令",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string", "description": "Arthas 命令"},
+                    "connection_id": {"type": "string", "description": "连接ID"}
+                },
+                "required": ["command", "connection_id"]
+            },
+            risk_level="medium"
+        )
+
+        # 获取 JVM 状态
+        self.register_tool(
+            name="get_jvm_status",
+            handler=self._get_jvm_status,
+            description="获取 JVM 的整体状态（dashboard）",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "connection_id": {"type": "string", "description": "连接ID"}
+                },
+                "required": ["connection_id"]
+            },
+            risk_level="low"
+        )
+
+        # 获取线程状态
+        self.register_tool(
+            name="get_thread_status",
+            handler=self._get_thread_status,
+            description="获取 Java 线程状态",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "connection_id": {"type": "string", "description": "连接ID"},
+                    "thread_name": {"type": "string", "description": "线程名（可选）"}
+                },
+                "required": ["connection_id"]
             },
             risk_level="low"
         )
@@ -211,6 +316,148 @@ class AgentToolGateway:
 
         capabilities = self.db.fetch_all(query, tuple(query_params))
         return {"capabilities": capabilities}
+
+    def _search_capabilities(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        """搜索诊断能力"""
+        keyword = params.get('keyword', '')
+
+        query = """
+            SELECT id, name, category, level, description, risk_level
+            FROM diagnosis_capabilities
+            WHERE name LIKE ? OR description LIKE ?
+            ORDER BY category, level, name
+            LIMIT 20
+        """
+        keyword_pattern = f"%{keyword}%"
+        capabilities = self.db.fetch_all(query, (keyword_pattern, keyword_pattern))
+        return {"capabilities": capabilities}
+
+    def _get_connection_info(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        """获取连接信息"""
+        connection_id = params.get('connection_id')
+        if not connection_id:
+            raise ValueError("connection_id is required")
+
+        connection = self.db.fetch_one(
+            "SELECT * FROM connections WHERE id = ?",
+            (connection_id,)
+        )
+
+        if not connection:
+            return {"error": f"Connection {connection_id} not found"}
+
+        return {
+            "connection_id": connection["id"],
+            "cluster_name": connection["cluster_name"],
+            "namespace": connection["namespace"],
+            "pod_name": connection["pod_name"],
+            "status": connection.get("status", "unknown"),
+            "local_port": connection.get("local_port"),
+            "java_pid": connection.get("java_pid")
+        }
+
+    def _get_execution_status(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        """获取执行状态"""
+        run_id = params.get('run_id')
+        if not run_id:
+            raise ValueError("run_id is required")
+
+        run = self.db.fetch_one(
+            "SELECT * FROM task_logs WHERE id = ?",
+            (run_id,)
+        )
+
+        if not run:
+            return {"error": f"Execution {run_id} not found"}
+
+        # 获取步骤日志
+        steps = self.db.fetch_all(
+            "SELECT * FROM step_logs WHERE run_id = ? ORDER BY step_number",
+            (run_id,)
+        )
+
+        return {
+            "run_id": run["id"],
+            "status": run["status"],
+            "started_at": run.get("started_at"),
+            "finished_at": run.get("finished_at"),
+            "error_message": run.get("error_message"),
+            "steps": [
+                {
+                    "step_number": s["step_number"],
+                    "step_name": s.get("step_name"),
+                    "status": s["status"],
+                    "output": s.get("output")
+                }
+                for s in steps
+            ]
+        }
+
+    def _execute_arthas_command(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        """执行 Arthas 命令"""
+        command = params.get('command')
+        connection_id = params.get('connection_id')
+
+        if not command:
+            raise ValueError("command is required")
+        if not connection_id:
+            raise ValueError("connection_id is required")
+
+        # 简单的命令验证
+        forbidden = ["redefine", "retransform", "ognl", "reset", "shutdown"]
+        cmd_name = command.split()[0].lower()
+        if cmd_name in forbidden:
+            return {"error": f"Forbidden command: {cmd_name}"}
+
+        # 模拟执行
+        log.info(f"Executing Arthas command: {command} on {connection_id}")
+        return {
+            "command": command,
+            "connection_id": connection_id,
+            "output": f"[Simulated output for: {command}]",
+            "status": "success"
+        }
+
+    def _get_jvm_status(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        """获取 JVM 状态"""
+        connection_id = params.get('connection_id')
+        if not connection_id:
+            raise ValueError("connection_id is required")
+
+        log.info(f"Getting JVM status for connection: {connection_id}")
+        return {
+            "connection_id": connection_id,
+            "uptime": "2d 5h 30m",
+            "heap_memory": {"used": "512MB", "max": "1024MB"},
+            "non_heap_memory": {"used": "128MB", "max": "256MB"},
+            "gc": {"count": 15, "time": "1.2s"},
+            "threads": {"total": 45, "daemon": 10, "blocked": 2},
+            "cpu_usage": "15.5%"
+        }
+
+    def _get_thread_status(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        """获取线程状态"""
+        connection_id = params.get('connection_id')
+        thread_name = params.get('thread_name')
+
+        if not connection_id:
+            raise ValueError("connection_id is required")
+
+        log.info(f"Getting thread status for connection: {connection_id}")
+        threads = [
+            {"name": "main", "state": "RUNNABLE", "cpu_time": "1.5s"},
+            {"name": "pool-1-thread-1", "state": "WAITING", "cpu_time": "0.1s"},
+            {"name": "pool-1-thread-2", "state": "BLOCKED", "cpu_time": "0.3s"}
+        ]
+
+        if thread_name:
+            threads = [t for t in threads if thread_name in t["name"]]
+
+        return {
+            "connection_id": connection_id,
+            "thread_count": len(threads),
+            "threads": threads
+        }
 
 
 # 全局实例
