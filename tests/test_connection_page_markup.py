@@ -29,3 +29,23 @@ def test_index_page_has_connection_list_structure(authenticated_client):
         html = response.data.decode()
         assert 'connection-list-container' in html
         assert 'connection-table' in html
+
+
+def test_page_shell_component_exists(authenticated_client):
+    """Test that page-shell.js is loaded"""
+    with patch('server.current_user') as mock_user:
+        mock_user.is_authenticated = True
+        response = authenticated_client.get('/')
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert 'page-shell.js' in html
+
+
+def test_connection_page_context_component_exists(authenticated_client):
+    """Test that connection-page-context.js is loaded"""
+    with patch('server.current_user') as mock_user:
+        mock_user.is_authenticated = True
+        response = authenticated_client.get('/connection-detail')
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert 'connection-page-context.js' in html

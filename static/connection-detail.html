@@ -1,5 +1,26 @@
 <!DOCTYPE html>
-<html>
-<head><title>Connection Detail</title></head>
-<body><h1>Connection Detail</h1></body>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>连接详情 - K8s Arthas Tool</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <div id="connection-detail-container">
+        <div class="connection-detail-header">
+            <h2>连接详情</h2>
+            <button id="back-btn" class="btn btn-secondary">返回</button>
+        </div>
+        <div id="connection-info" class="connection-info">
+            <!-- 连接信息 -->
+        </div>
+        <div id="two-step-connection-container">
+            <!-- 两步连接 UI -->
+        </div>
+    </div>
+    <script src="/static/js/components/page-shell.js"></script>
+    <script src="/static/js/components/connection-page-context.js"></script>
+    <script src="/static/js/components/two-step-connection.js"></script>
+    <script src="/static/js/page-connection-detail.js"></script>
+</body>
 </html>
