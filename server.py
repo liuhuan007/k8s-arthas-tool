@@ -30,7 +30,7 @@ from typing import Optional, List, Dict
 
 log = logging.getLogger(__name__)
 
-from flask import Flask, request, jsonify, send_file, redirect
+from flask import Flask, request, jsonify, send_file, send_from_directory, redirect, Response
 from flask_cors import CORS
 from flask_login import LoginManager, login_required, current_user
 
@@ -59,6 +59,18 @@ app = Flask(__name__,
     static_url_path=Config.STATIC_URL_PATH,
 )
 app.secret_key = Config.SECRET_KEY
+app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+
+@app.after_request
+def add_no_cache_headers(response):
+    """Avoid stale UI assets while the diagnosis/task-center frontend is evolving quickly."""
+    path = request.path or ''
+    if path.endswith(('.html', '.js', '.css')) or path in ('/', '/index'):
+        response.headers['Cache-Control'] = 'no-store, no-cache, must-revalidate, max-age=0'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
 
 # ✅ 新增: 初始化 WebSocket
 from backend.websocket_server import init_websocket
@@ -81,6 +93,55 @@ def serve_external_links():
         return {'links': [], 'categories': {}}, 200, {'Content-Type': 'application/json'}
     except Exception as e:
         return {'error': str(e)}, 500, {'Content-Type': 'application/json'}
+
+
+@app.route('/external_proxy/<link_id>/')
+@login_required
+def external_proxy(link_id):
+    """Proxy whitelisted external links so pages blocked by X-Frame-Options can still render in the work area."""
+    try:
+        import urllib.request
+        import urllib.parse
+        with open(Config.EXTERNAL_LINKS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        link = next((item for item in data.get('links', []) if item.get('id') == link_id and item.get('enabled')), None)
+        if not link:
+            return Response('External link not found or disabled', status=404, mimetype='text/plain')
+
+        target_url = link.get('url') or ''
+        parsed = urllib.parse.urlparse(target_url)
+        if parsed.scheme not in ('http', 'https') or not parsed.netloc:
+            return Response('Invalid external URL', status=400, mimetype='text/plain')
+
+        req = urllib.request.Request(
+            target_url,
+            headers={
+                'User-Agent': 'Mozilla/5.0 (compatible; ArthasK8sTool/1.0)',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            body = resp.read()
+            content_type = resp.headers.get('Content-Type', 'text/html; charset=utf-8')
+
+        if 'text/html' in content_type.lower():
+            text = body.decode('utf-8', errors='replace')
+            base_href = target_url if target_url.endswith('/') else target_url.rsplit('/', 1)[0] + '/'
+            base_tag = f'<base href="{base_href}">'
+            if '<head' in text.lower():
+                text = re.sub(r'(<head[^>]*>)', r'\1' + base_tag, text, count=1, flags=re.IGNORECASE)
+            else:
+                text = base_tag + text
+            body = text.encode('utf-8')
+            content_type = 'text/html; charset=utf-8'
+
+        return Response(body, status=200, headers={
+            'Content-Type': content_type,
+            'Cache-Control': 'no-store',
+        })
+    except Exception as e:
+        log.warning('External proxy failed for %s: %s', link_id, e)
+        return Response(f'External proxy failed: {e}', status=502, mimetype='text/plain')
 
 CORS(app, supports_credentials=True, resources={
     r"/api/*": {
@@ -322,6 +383,24 @@ def audit_logs_page():
 def mcp_config_page():
     """MCP 接入配置页面"""
     return app.send_static_file('mcp-config.html')
+
+
+@app.route('/connection-detail')
+@login_required
+def connection_detail_page():
+    return send_from_directory('static', 'connection-detail.html')
+
+
+@app.route('/terminal')
+@login_required
+def terminal_page():
+    return send_from_directory('static', 'terminal.html')
+
+
+@app.route('/monitor')
+@login_required
+def monitor_page():
+    return send_from_directory('static', 'monitor.html')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
