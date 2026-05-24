@@ -65,7 +65,7 @@
 | Phase 0 | 数据库迁移 + 框架搭建 | 1周 | - | ✅ 已完成 |
 | Phase 1 | Skill系统（P0） | 2周 | Phase 0 | ✅ 已完成 |
 | Phase 2 | 诊断能力（后端） | 2周 | Phase 1 | ✅ 已完成 |
-| Phase 3 | Agent SDK集成（P0） | 2周 | Phase 2 | ⏳ 待开始 |
+| Phase 3 | Agent SDK集成（P0） | 2周 | Phase 2 | ✅ 已完成 |
 | Phase 4 | 诊断能力（前端） | 2周 | Phase 3 | ⏳ 待开始 |
 | Phase 5 | 连接中心增强 | 2周 | Phase 4 | ⏳ 待开始 |
 | Phase 6 | 异常检测 + 告警 | 2周 | Phase 5 | ⏳ 待开始 |
