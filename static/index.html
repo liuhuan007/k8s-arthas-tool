@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css?v=20260411i">
-<link rel="stylesheet" href="css/components/diagnosis.css?v=20260504a">
+<link rel="stylesheet" href="css/components/diagnosis.css?v=20260514a">
 
 <!-- 核心模块（按依赖顺序） -->
 <script src="js/core/api.js"></script>
@@ -56,20 +56,23 @@ document.addEventListener('DOMContentLoaded', function() {
 <script>console.log('🔍 script-check: API=' + typeof API + ', safePost=' + typeof safePost + ', diagQuickTool=' + typeof window.diagQuickTool + ', diagSelectScene=' + typeof window.diagSelectScene + ', diagStart=' + typeof window.diagStart);</script>
 
 <!-- 应用入口 -->
-<script src="js/app-ui.js?v=20260504p"></script>
+<script src="js/app-ui.js?v=20260522a"></script>
 <script src="js/app.js"></script>
 
 <!-- ✅ 新增: 统一状态管理 -->
-<script src="js/core/connection-store.js?v=20260504f"></script>
+<script src="js/core/connection-store.js?v=20260522a"></script>
 
 <!-- ✅ 新增: WebSocket 实时推送 -->
 <script src="js/core/websocket-client.js?v=20260505a"></script>
 
 <!-- ✅ 新增: 外部链接菜单 -->
-<script src="js/components/external-links.js?v=20260503"></script>
+<script src="js/components/external-links.js?v=20260514a"></script>
 
 <!-- 两步连接流程组件 -->
-<script src="js/components/two-step-connection.js?v=20260504o"></script>
+<script src="js/components/two-step-connection.js?v=20260522a"></script>
+
+<!-- 连接列表页面 -->
+<script src="js/page-connection-list.js"></script>
 
 <!-- 连接引导守卫 -->
 <script src="js/components/connection-guard.js?v=20260419a"></script>
@@ -81,22 +84,22 @@ document.addEventListener('DOMContentLoaded', function() {
 <script src="js/components/error-notification.js?v=20260417a"></script>
 
 <!-- ✅ 新增: 诊断能力模块 -->
-<script src="js/components/diagnosis.js?v=20260504a"></script>
-<script src="js/components/diagnosis-form.js?v=20260504a"></script>
-<script src="js/components/diagnosis-result.js?v=20260504a"></script>
-<script src="js/components/diagnosis-progress.js?v=20260504a"></script>
-<script src="js/components/diagnosis-history.js?v=20260504a"></script>
+<script src="js/components/diagnosis.js?v=20260514a"></script>
+<script src="js/components/diagnosis-form.js?v=20260514a"></script>
+<script src="js/components/diagnosis-result.js?v=20260514a"></script>
+<script src="js/components/diagnosis-progress.js?v=20260514a"></script>
+<script src="js/components/diagnosis-history.js?v=20260514a"></script>
 
 <!-- ✅ 新增: 工具箱双栏布局 -->
 <script src="js/components/toolbox.js?v=20260504a"></script>
 
 <!-- ✅ 新增: 任务中心重构版 -->
-<script src="js/components/task-center.js?v=20260504a"></script>
+<script src="js/components/task-center.js?v=20260514a"></script>
 
 <!-- ✅ 新增: 第13章 - 全局执行指示器 + 结果渲染器 + 状态管理 -->
-<script src="js/core/diagnosis-context.js?v=20260504a"></script>
-<script src="js/components/diagnosis-execution.js?v=20260504a"></script>
-<script src="js/components/diagnosis-renderer.js?v=20260504a"></script>
+<script src="js/core/diagnosis-context.js?v=20260514a"></script>
+<script src="js/components/diagnosis-execution.js?v=20260514a"></script>
+<script src="js/components/diagnosis-renderer.js?v=20260514a"></script>
 </head>
 <body>
 
@@ -156,7 +159,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <span>诊断</span><span class="side-nav-arrow">▾</span>
       </button>
       <div class="side-nav-items" style="display:block;">
-        <button class="side-nav-item" data-nav-tab="diagnosis-center" onclick="switchTab('diagnosis-center')">
+        <button class="side-nav-item" data-nav-tab="diagnosis-cap" onclick="switchTab('diagnosis-cap')">
           <span>🧠</span><span>诊断中心</span>
         </button>
       </div>
@@ -443,6 +446,26 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class="conn-card-title">连接记录</div>
                 <div class="conn-card-sub">最近连接、Pod-only 与 Arthas-ready 状态统一在这里管理</div>
               </div>
+            </div>
+            <div id="connection-list-container">
+              <div class="connection-list-header">
+                <h2>连接管理</h2>
+                <button id="add-connection-btn" class="btn btn-primary">添加连接</button>
+              </div>
+              <table id="connection-table" class="table">
+                <thead>
+                  <tr>
+                    <th>集群</th>
+                    <th>命名空间</th>
+                    <th>Pod</th>
+                    <th>状态</th>
+                    <th>操作</th>
+                  </tr>
+                </thead>
+                <tbody id="connection-table-body">
+                  <!-- 动态填充 -->
+                </tbody>
+              </table>
             </div>
             <div class="conn-list conn-list-main" id="connList">
               <div class="sb-empty">暂无连接<br>使用左侧连接配置创建连接</div>
@@ -1576,16 +1599,18 @@ document.addEventListener('DOMContentLoaded', function() {
       </div>
     </div>
 
-    <!-- ✅ 新增: 诊断能力目录面板 -->
+    <!-- ✅ 新增: 统一诊断中心面板 -->
     <div class="panel" id="panel-diagnosis-cap" style="display:none">
       <div class="diagnosis-cap-section">
         <div class="ops-hero">
           <div>
-            <div class="ops-kicker">Diagnosis Capabilities</div>
-            <h2>诊断能力目录</h2>
-            <p>按层级展示诊断能力，支持快速工具、诊断工具、场景方案、AI 诊断</p>
+            <div class="ops-kicker">Diagnosis Center</div>
+            <h2>诊断中心</h2>
+            <p>统一选择连接和诊断能力，按真实 run_id 跟踪运行中状态、取消与历史详情</p>
           </div>
           <div class="dashboard-actions">
+            <button class="btn btn-g" onclick="showActiveExecutions()">▶ 运行中</button>
+            <button class="btn btn-g admin-only" onclick="diagOpenCapabilityModal()">➕ 新建能力</button>
             <button class="btn btn-g" onclick="diagCapInit()">🔄 刷新</button>
           </div>
         </div>
