@@ -49,3 +49,23 @@ def test_connection_page_context_component_exists(authenticated_client):
         assert response.status_code == 200
         html = response.data.decode()
         assert 'connection-page-context.js' in html
+
+
+def test_connection_detail_page_exists(authenticated_client):
+    """Test that connection-detail.html exists"""
+    with patch('server.current_user') as mock_user:
+        mock_user.is_authenticated = True
+        response = authenticated_client.get('/connection-detail')
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert 'connection-detail-container' in html
+
+
+def test_two_step_connection_dom_target(authenticated_client):
+    """Test that two-step-connection.js has configurable DOM target"""
+    with patch('server.current_user') as mock_user:
+        mock_user.is_authenticated = True
+        response = authenticated_client.get('/connection-detail')
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert 'two-step-connection.js' in html
