@@ -6,6 +6,7 @@
     <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
+    <button id="ai-drawer-btn" class="btn btn-icon" style="display:none">AI</button>
     <div id="connection-detail-container">
         <div class="connection-detail-header">
             <h2>连接详情</h2>
@@ -22,5 +23,15 @@
     <script src="/static/js/components/connection-page-context.js"></script>
     <script src="/static/js/components/two-step-connection.js"></script>
     <script src="/static/js/page-connection-detail.js"></script>
+    <!-- AI Drawer -->
+    <div id="ai-drawer" class="ai-drawer hidden">
+        <div class="ai-drawer-header">
+            <h3>AI 助手</h3>
+            <button id="close-ai-drawer" class="btn btn-icon">×</button>
+        </div>
+        <div class="ai-drawer-content">
+            <!-- AI 内容 -->
+        </div>
+    </div>
 </body>
 </html>

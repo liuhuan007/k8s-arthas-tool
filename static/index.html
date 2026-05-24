@@ -131,6 +131,7 @@ document.addEventListener('DOMContentLoaded', function() {
         📋 命令手册
       </a>
     </div>
+    <button id="ai-drawer-btn" class="btn btn-icon" onclick="toggleAIDrawer()">AI</button>
     <div class="tb-user tb-dropdown">
       <a class="tb-lnk tb-user-link" href="javascript:void(0)">👤 <span id="loginUser">—</span> ▾</a>
       <div class="tb-dropdown-menu tb-dropdown-menu-right">
@@ -1768,6 +1769,17 @@ document.addEventListener('DOMContentLoaded', function() {
       <button class="btn btn-p" onclick="submitChangePassword()">保存</button>
     </div>
   </div>
+</div>
+
+<!-- AI Drawer -->
+<div id="ai-drawer" class="ai-drawer hidden">
+    <div class="ai-drawer-header">
+        <h3>AI 助手</h3>
+        <button id="close-ai-drawer" class="btn btn-icon" onclick="toggleAIDrawer()">×</button>
+    </div>
+    <div class="ai-drawer-content">
+        <!-- AI 内容 -->
+    </div>
 </div>
 
 </body>

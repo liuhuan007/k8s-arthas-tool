@@ -79,3 +79,27 @@ def test_workspace_pages_exist(authenticated_client):
         for page in pages:
             response = authenticated_client.get(page)
             assert response.status_code == 200
+
+
+def test_ai_drawer_exists(authenticated_client):
+    """Test that AI drawer exists in all pages"""
+    with patch('server.current_user') as mock_user:
+        mock_user.is_authenticated = True
+        pages = ['/', '/connection-detail', '/terminal', '/monitor', '/filebrowser', '/diagnose', '/arthas-console', '/profiler', '/history']
+        for page in pages:
+            response = authenticated_client.get(page)
+            assert response.status_code == 200
+            html = response.data.decode()
+            assert 'ai-drawer' in html
+            assert 'ai-drawer-btn' in html
+
+
+def test_status_bar_is_lightweight(authenticated_client):
+    """Test that status bar is lightweight"""
+    with patch('server.current_user') as mock_user:
+        mock_user.is_authenticated = True
+        response = authenticated_client.get('/')
+        assert response.status_code == 200
+        html = response.data.decode()
+        assert 'conn-status-bar' in html
+        assert '查看详情' in html
