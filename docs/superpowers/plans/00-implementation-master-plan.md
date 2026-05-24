@@ -1,9 +1,12 @@
 # K8s Arthas 智能诊断平台 — 落地实施主计划
 
-> **创建日期**: 2026-05-24
-> **基于文档**: 10-implementation-plan.md + architecture-review-final.md
-> **评审结论**: ⭐⭐⭐⭐ (4.2/5) — 可进入实施阶段
-> **实施周期**: 约20周（~5个月）
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** 实现"可用、可审计、可解释"的手动/半自动诊断闭环，包含Agent SDK集成。
+
+**Architecture:** 基于 Flask + SQLite + kubectl + Arthas 的 K8s 智能诊断平台，采用分层架构：Skill Registry → Workflow Engine → Agent Tool Gateway → 诊断能力前端。
+
+**Tech Stack:** Python, Flask, SQLite, kubectl, Arthas, 原生 JavaScript, HTML, CSS
 
 ---
 
@@ -60,7 +63,7 @@
 | 阶段 | 模块 | 工期 | 依赖 | 状态 |
 |------|------|------|------|------|
 | Phase 0 | 数据库迁移 + 框架搭建 | 1周 | - | ✅ 已完成 |
-| Phase 1 | Skill系统（P0） | 2周 | Phase 0 | ⏳ 待开始 |
+| Phase 1 | Skill系统（P0） | 2周 | Phase 0 | ✅ 已完成 |
 | Phase 2 | 诊断能力（后端） | 2周 | Phase 1 | ⏳ 待开始 |
 | Phase 3 | Agent SDK集成（P0） | 2周 | Phase 2 | ⏳ 待开始 |
 | Phase 4 | 诊断能力（前端） | 2周 | Phase 3 | ⏳ 待开始 |
