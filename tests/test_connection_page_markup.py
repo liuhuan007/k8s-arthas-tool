@@ -69,3 +69,13 @@ def test_two_step_connection_dom_target(authenticated_client):
         assert response.status_code == 200
         html = response.data.decode()
         assert 'two-step-connection.js' in html
+
+
+def test_workspace_pages_exist(authenticated_client):
+    """Test that all workspace pages exist"""
+    with patch('server.current_user') as mock_user:
+        mock_user.is_authenticated = True
+        pages = ['/terminal', '/monitor', '/filebrowser', '/diagnose', '/arthas-console', '/profiler', '/history']
+        for page in pages:
+            response = authenticated_client.get(page)
+            assert response.status_code == 200

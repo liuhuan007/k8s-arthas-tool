@@ -217,9 +217,9 @@ register_blueprints(app)
 # ✅ 关键修复: 首先初始化主数据库表 (users, clusters, connections 等)
 try:
     db.initialize()
-    print("✓ 数据库初始化成功")
+    print("[OK] 数据库初始化成功")
 except Exception as e:
-    print(f"✗ 数据库初始化失败: {e}")
+    print(f"[ERROR] 数据库初始化失败: {e}")
     raise
 
 # 初始化 MCP 数据库表
@@ -401,6 +401,36 @@ def terminal_page():
 @login_required
 def monitor_page():
     return send_from_directory('static', 'monitor.html')
+
+
+@app.route('/filebrowser')
+@login_required
+def filebrowser_page():
+    return send_from_directory('static', 'filebrowser.html')
+
+
+@app.route('/diagnose')
+@login_required
+def diagnose_page():
+    return send_from_directory('static', 'diagnose.html')
+
+
+@app.route('/arthas-console')
+@login_required
+def arthas_console_page():
+    return send_from_directory('static', 'arthas-console.html')
+
+
+@app.route('/profiler')
+@login_required
+def profiler_page():
+    return send_from_directory('static', 'profiler.html')
+
+
+@app.route('/history')
+@login_required
+def history_page():
+    return send_from_directory('static', 'history.html')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
