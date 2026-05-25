@@ -185,6 +185,54 @@ class AgentToolGateway:
             risk_level="low"
         )
 
+        # ── Profiler 工具（Phase 7 新增）─────────────────────────────
+        # 启动性能采样
+        self.register_tool(
+            name="start_profiler",
+            handler=self._start_profiler,
+            description="启动性能采样（CPU/JFR/ThreadDump/HeapDump）",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "connection_id": {"type": "string", "description": "连接ID"},
+                    "type": {"type": "string", "enum": ["cpu", "jfr", "threaddump", "heapdump"], "description": "采样类型"},
+                    "duration": {"type": "integer", "description": "采样时长（秒）", "default": 60}
+                },
+                "required": ["connection_id", "type"]
+            },
+            risk_level="medium"
+        )
+
+        # 停止性能采样
+        self.register_tool(
+            name="stop_profiler",
+            handler=self._stop_profiler,
+            description="停止性能采样",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "任务ID"}
+                },
+                "required": ["task_id"]
+            },
+            risk_level="low"
+        )
+
+        # 查询采样任务状态
+        self.register_tool(
+            name="get_profiler_status",
+            handler=self._get_profiler_status,
+            description="查询性能采样任务状态",
+            parameters={
+                "type": "object",
+                "properties": {
+                    "task_id": {"type": "string", "description": "任务ID"}
+                },
+                "required": ["task_id"]
+            },
+            risk_level="low"
+        )
+
     def register_tool(self, name: str, handler: Callable,
                      description: str, parameters: Dict[str, Any],
                      risk_level: str = "low"):
@@ -458,6 +506,121 @@ class AgentToolGateway:
             "thread_count": len(threads),
             "threads": threads
         }
+
+    # ── Profiler 工具处理（Phase 7 新增）─────────────────────────
+
+    def _start_profiler(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        """启动性能采样"""
+        connection_id = params.get('connection_id')
+        task_type = params.get('type', 'cpu')
+        duration = params.get('duration', 60)
+
+        if not connection_id:
+            raise ValueError("connection_id is required")
+
+        if task_type not in ('cpu', 'jfr', 'threaddump', 'heapdump'):
+            raise ValueError(f"无效的采样类型: {task_type}")
+
+        log.info(f"Starting profiler: connection_id={connection_id}, type={task_type}, duration={duration}")
+
+        try:
+            from services.profiler_service import get_profiler_service
+            service = get_profiler_service()
+            user_id = context.get('user_id')
+
+            # 根据类型设置 event 和 format
+            event_map = {
+                'cpu': 'cpu',
+                'jfr': 'jfr',
+                'threaddump': 'threaddump',
+                'heapdump': 'heapdump'
+            }
+            event = event_map.get(task_type, 'cpu')
+            fmt_map = {
+                'cpu': 'html',
+                'jfr': 'jfr',
+                'threaddump': 'txt',
+                'heapdump': 'bin'
+            }
+            fmt = fmt_map.get(task_type, 'html')
+
+            task_id = service.create_task(
+                connection_id=connection_id,
+                task_type=task_type,
+                event=event,
+                duration=duration,
+                fmt=fmt,
+                user_id=user_id
+            )
+
+            # 启动任务
+            result = service.start_task(task_id)
+
+            return {
+                "task_id": task_id,
+                "status": "running",
+                "message": f"性能采样已启动（类型: {task_type}，时长: {duration}秒）"
+            }
+        except Exception as e:
+            log.error(f"启动性能采样失败: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    def _stop_profiler(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        """停止性能采样"""
+        task_id = params.get('task_id')
+
+        if not task_id:
+            raise ValueError("task_id is required")
+
+        log.info(f"Stopping profiler: task_id={task_id}")
+
+        try:
+            from services.profiler_service import get_profiler_service
+            service = get_profiler_service()
+            result = service.stop_task(task_id)
+
+            if result.get('success'):
+                return {
+                    "task_id": task_id,
+                    "status": "stopped",
+                    "message": "性能采样已停止"
+                }
+            else:
+                return {"error": result.get('message', '停止失败')}
+        except Exception as e:
+            log.error(f"停止性能采样失败: {e}", exc_info=True)
+            return {"error": str(e)}
+
+    def _get_profiler_status(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
+        """查询性能采样任务状态"""
+        task_id = params.get('task_id')
+
+        if not task_id:
+            raise ValueError("task_id is required")
+
+        log.info(f"Getting profiler status: task_id={task_id}")
+
+        try:
+            from services.profiler_service import get_profiler_service
+            service = get_profiler_service()
+            result = service.get_task_status(task_id)
+
+            if result.get('success'):
+                task = result.get('task', {})
+                return {
+                    "task_id": task_id,
+                    "status": task.get('status', 'unknown'),
+                    "progress": task.get('progress', 0),
+                    "message": task.get('message', ''),
+                    "output_path": task.get('output_path', ''),
+                    "created_at": task.get('created_at', ''),
+                    "updated_at": task.get('updated_at', '')
+                }
+            else:
+                return {"error": result.get('message', '查询失败')}
+        except Exception as e:
+            log.error(f"查询性能采样状态失败: {e}", exc_info=True)
+            return {"error": str(e)}
 
 
 # 全局实例
