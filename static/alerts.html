@@ -1,0 +1,973 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>告警中心 - K8s Arthas Tool</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+    <style>
+        /* ── 告警中心页面样式 ─────────────────────────────────────── */
+        .alerts-page {
+            flex: 1;
+            overflow: auto;
+            padding: 18px;
+            background: radial-gradient(circle at 18% 10%, rgba(255, 59, 48, 0.06), transparent 28%),
+                        radial-gradient(circle at 88% 0%, rgba(255, 149, 0, 0.05), transparent 26%);
+        }
+        .alerts-page::-webkit-scrollbar { width: 6px; }
+        .alerts-page::-webkit-scrollbar-thumb { background: var(--ln2); border-radius: 3px; }
+
+        .alerts-hero {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 18px 20px;
+            margin-bottom: 14px;
+            border: 1px solid rgba(255, 59, 48, 0.15);
+            border-radius: 14px;
+            background: linear-gradient(135deg, rgba(16, 22, 31, 0.96), rgba(30, 20, 20, 0.82));
+            box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18);
+        }
+        .alerts-kicker {
+            font-size: 9px;
+            letter-spacing: 1.8px;
+            text-transform: uppercase;
+            color: var(--a5);
+            margin-bottom: 6px;
+        }
+        .alerts-hero h1 {
+            font-family: var(--sans);
+            font-size: 24px;
+            line-height: 1.1;
+            letter-spacing: -0.8px;
+            color: var(--tx);
+            margin-bottom: 8px;
+        }
+        .alerts-hero p {
+            max-width: 760px;
+            font-size: 12px;
+            line-height: 1.7;
+            color: var(--tx2);
+        }
+        .alerts-hero-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            flex-shrink: 0;
+        }
+
+        /* 统计卡片行 */
+        .alerts-stats {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 12px;
+            margin-bottom: 14px;
+        }
+        .alert-stat-card {
+            border: 1px solid var(--ln);
+            border-radius: 10px;
+            padding: 14px 16px;
+            background: rgba(16, 22, 31, 0.88);
+            text-align: center;
+        }
+        .alert-stat-card .stat-num {
+            font-family: var(--sans);
+            font-size: 28px;
+            font-weight: 800;
+            line-height: 1;
+            margin-bottom: 4px;
+        }
+        .alert-stat-card .stat-label {
+            font-size: 10px;
+            color: var(--tx2);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .stat-emergency .stat-num { color: #FF3B30; }
+        .stat-critical .stat-num { color: #FF9500; }
+        .stat-warning .stat-num  { color: #FFD60A; }
+        .stat-info .stat-num     { color: #007AFF; }
+
+        /* 内容区域：左右分栏 */
+        .alerts-content {
+            display: grid;
+            grid-template-columns: 1fr 380px;
+            gap: 14px;
+            min-height: 0;
+        }
+        @media (max-width: 1000px) {
+            .alerts-content {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* 面板卡片 */
+        .alert-panel {
+            border: 1px solid var(--ln);
+            border-radius: 12px;
+            background: rgba(16, 22, 31, 0.88);
+            box-shadow: 0 12px 34px rgba(0, 0, 0, 0.16);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .alert-panel-hd {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 14px;
+            border-bottom: 1px solid var(--ln);
+            background: linear-gradient(180deg, rgba(255, 255, 255, 0.025), transparent);
+        }
+        .alert-panel-title {
+            font-size: 13px;
+            font-weight: 700;
+            color: var(--tx);
+        }
+        .alert-panel-body {
+            flex: 1;
+            overflow-y: auto;
+            padding: 0;
+        }
+        .alert-panel-body::-webkit-scrollbar { width: 4px; }
+        .alert-panel-body::-webkit-scrollbar-thumb { background: var(--ln2); border-radius: 2px; }
+
+        /* 过滤条 */
+        .alerts-filter {
+            display: flex;
+            gap: 8px;
+            padding: 10px 14px;
+            border-bottom: 1px solid var(--ln);
+            flex-wrap: wrap;
+            align-items: center;
+        }
+        .alerts-filter select,
+        .alerts-filter input {
+            background: var(--bg2);
+            border: 1px solid var(--ln2);
+            border-radius: 6px;
+            color: var(--tx);
+            font-family: var(--mono);
+            font-size: 11px;
+            padding: 5px 8px;
+            outline: none;
+        }
+        .alerts-filter select:focus,
+        .alerts-filter input:focus {
+            border-color: var(--a);
+        }
+
+        /* 事件列表项 */
+        .event-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(30, 45, 66, 0.5);
+            cursor: default;
+            transition: background 0.15s;
+        }
+        .event-item:hover {
+            background: rgba(0, 122, 255, 0.04);
+        }
+        .event-severity-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            flex-shrink: 0;
+            margin-top: 5px;
+        }
+        .event-severity-dot.info     { background: #007AFF; box-shadow: 0 0 6px #007AFF; }
+        .event-severity-dot.warning  { background: #FFD60A; box-shadow: 0 0 6px #FFD60A; }
+        .event-severity-dot.critical { background: #FF9500; box-shadow: 0 0 6px #FF9500; }
+        .event-severity-dot.emergency { background: #FF3B30; box-shadow: 0 0 6px #FF3B30; }
+
+        .event-info { flex: 1; min-width: 0; }
+        .event-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--tx);
+            margin-bottom: 2px;
+        }
+        .event-message {
+            font-size: 11px;
+            color: var(--tx2);
+            line-height: 1.5;
+            word-break: break-all;
+        }
+        .event-meta {
+            display: flex;
+            gap: 8px;
+            font-size: 10px;
+            color: var(--tx3);
+            margin-top: 4px;
+        }
+        .event-meta span { white-space: nowrap; }
+        .event-actions {
+            display: flex;
+            gap: 4px;
+            flex-shrink: 0;
+        }
+        .event-actions button {
+            width: 24px;
+            height: 24px;
+            border-radius: 5px;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--tx3);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .event-actions button:hover {
+            border-color: var(--a5);
+            color: var(--a5);
+            background: rgba(255, 59, 48, 0.08);
+        }
+
+        /* 分页 */
+        .events-pagination {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 10px 14px;
+            border-top: 1px solid var(--ln);
+        }
+        .events-pagination button {
+            padding: 4px 12px;
+            border: 1px solid var(--ln2);
+            border-radius: 6px;
+            background: var(--bg2);
+            color: var(--tx2);
+            font-size: 11px;
+            cursor: pointer;
+        }
+        .events-pagination button:hover {
+            border-color: var(--a);
+            color: var(--a);
+        }
+        .events-pagination button:disabled {
+            opacity: 0.4;
+            cursor: default;
+        }
+        .events-pagination .page-info {
+            font-size: 11px;
+            color: var(--tx3);
+        }
+
+        /* 通知项 */
+        .notif-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(30, 45, 66, 0.5);
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .notif-item:hover {
+            background: rgba(0, 122, 255, 0.04);
+        }
+        .notif-item.unread {
+            background: rgba(0, 122, 255, 0.06);
+        }
+        .notif-content {
+            flex: 1;
+            min-width: 0;
+        }
+        .notif-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--tx);
+            margin-bottom: 2px;
+        }
+        .notif-msg {
+            font-size: 11px;
+            color: var(--tx2);
+            line-height: 1.4;
+        }
+        .notif-time {
+            font-size: 10px;
+            color: var(--tx3);
+            margin-top: 3px;
+        }
+        .notif-unread-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--a);
+            flex-shrink: 0;
+            margin-top: 6px;
+        }
+
+        /* 空状态 */
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+            color: var(--tx3);
+        }
+        .empty-state .empty-icon {
+            font-size: 36px;
+            margin-bottom: 10px;
+        }
+        .empty-state .empty-text {
+            font-size: 13px;
+        }
+
+        /* 按钮通用 */
+        .btn-alert {
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            padding: 6px 14px;
+            border-radius: 7px;
+            font-size: 11px;
+            font-family: var(--mono);
+            border: 1px solid var(--ln2);
+            background: var(--bg2);
+            color: var(--tx2);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .btn-alert:hover {
+            border-color: var(--a);
+            color: var(--a);
+        }
+        .btn-alert.primary {
+            background: linear-gradient(135deg, var(--a), #4DA3FF);
+            border-color: rgba(77, 163, 255, 0.55);
+            color: #fff;
+            font-weight: 700;
+        }
+        .btn-alert.primary:hover {
+            filter: brightness(1.08);
+        }
+
+        /* Tab 切换 */
+        .alerts-tabs {
+            display: flex;
+            gap: 0;
+            padding: 0 14px;
+            border-bottom: 1px solid var(--ln);
+        }
+        .alerts-tab {
+            padding: 10px 16px;
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--tx2);
+            border-bottom: 2px solid transparent;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .alerts-tab:hover {
+            color: var(--tx);
+        }
+        .alerts-tab.active {
+            color: var(--a);
+            border-bottom-color: var(--a);
+        }
+
+        /* Badge */
+        .badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 16px;
+            height: 16px;
+            padding: 0 4px;
+            border-radius: 8px;
+            font-size: 10px;
+            font-weight: 700;
+            line-height: 1;
+        }
+        .badge-red { background: #FF3B30; color: #fff; }
+        .badge-orange { background: #FF9500; color: #000; }
+        .badge-yellow { background: #FFD60A; color: #000; }
+        .badge-blue { background: #007AFF; color: #fff; }
+
+        /* 规则卡片 */
+        .rule-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 10px;
+            padding: 10px 14px;
+            border-bottom: 1px solid rgba(30, 45, 66, 0.5);
+        }
+        .rule-info { flex: 1; min-width: 0; }
+        .rule-name {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--tx);
+        }
+        .rule-desc {
+            font-size: 11px;
+            color: var(--tx3);
+            margin-top: 2px;
+        }
+        .rule-metric {
+            font-size: 10px;
+            color: var(--a);
+            background: rgba(0, 122, 255, 0.08);
+            padding: 2px 6px;
+            border-radius: 4px;
+            display: inline-block;
+            margin-top: 3px;
+        }
+        .rule-toggle {
+            position: relative;
+            width: 36px;
+            height: 20px;
+            border-radius: 10px;
+            background: var(--bg3);
+            border: 1px solid var(--ln2);
+            cursor: pointer;
+            transition: all 0.2s;
+            flex-shrink: 0;
+        }
+        .rule-toggle.on {
+            background: var(--a3);
+            border-color: var(--a3);
+        }
+        .rule-toggle::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            background: #fff;
+            transition: transform 0.2s;
+        }
+        .rule-toggle.on::after {
+            transform: translateX(16px);
+        }
+        .rule-actions {
+            display: flex;
+            gap: 4px;
+        }
+
+        /* 模态框 */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal-box {
+            background: var(--bg1);
+            border: 1px solid var(--ln2);
+            border-radius: 12px;
+            padding: 20px;
+            width: 420px;
+            max-width: 90vw;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+        }
+        .modal-title {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--tx);
+            margin-bottom: 16px;
+        }
+        .modal-field {
+            margin-bottom: 12px;
+        }
+        .modal-field label {
+            display: block;
+            font-size: 11px;
+            color: var(--tx2);
+            margin-bottom: 4px;
+        }
+        .modal-field input,
+        .modal-field select,
+        .modal-field textarea {
+            width: 100%;
+            padding: 7px 10px;
+            border: 1px solid var(--ln2);
+            border-radius: 6px;
+            background: var(--bg2);
+            color: var(--tx);
+            font-family: var(--mono);
+            font-size: 12px;
+            outline: none;
+        }
+        .modal-field input:focus,
+        .modal-field select:focus {
+            border-color: var(--a);
+        }
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+            margin-top: 16px;
+        }
+    </style>
+</head>
+<body>
+<div class="alerts-page" id="alerts-page">
+    <!-- 页面内容由 JS 动态渲染 -->
+</div>
+
+<script src="/static/js/core/api.js"></script>
+<script src="/static/js/core/utils.js"></script>
+<script src="/static/js/components/alert-card.js"></script>
+<script src="/static/js/components/alert-rules.js"></script>
+
+<script>
+(function() {
+    'use strict';
+
+    // ── 认证守卫 ──
+    (async function() {
+        try {
+            const resp = await fetch('/api/auth/current', { credentials: 'include' });
+            const data = await resp.json();
+            if (!data || !data.authenticated) {
+                window.location.replace('/login.html');
+                return;
+            }
+        } catch (e) {
+            window.location.replace('/login.html');
+            return;
+        }
+    })();
+
+    const page = document.getElementById('alerts-page');
+    let currentTab = 'events';
+    let eventsPage = 1;
+    let eventsPageSize = 20;
+
+    // ── 渲染页面 ──
+    function render() {
+        page.innerHTML = `
+            <div class="alerts-hero">
+                <div>
+                    <div class="alerts-kicker">PHASE 6 — MONITORING</div>
+                    <h1>告警中心</h1>
+                    <p>实时异常检测与告警管理。系统每 60 秒自动检测 Pod 指标，触发阈值时生成异常事件并推送通知。</p>
+                </div>
+                <div class="alerts-hero-actions">
+                    <button class="btn-alert" onclick="location.reload()">🔄 刷新</button>
+                    <button class="btn-alert" onclick="window.open('/index.html','_self')">← 返回工作台</button>
+                </div>
+            </div>
+            <div class="alerts-stats" id="alertStats"></div>
+            <div class="alerts-content">
+                <div class="alert-panel" id="mainPanel">
+                    <div class="alert-panel-hd">
+                        <div class="alert-panel-title" id="panelTitle">异常事件</div>
+                        <div style="display:flex;gap:6px;">
+                            <button class="btn-alert" id="btnRefresh" onclick="refreshCurrentTab()">🔄</button>
+                        </div>
+                    </div>
+                    <div class="alerts-tabs" id="alertsTabs">
+                        <div class="alerts-tab active" data-tab="events" onclick="switchAlertTab('events')">异常事件</div>
+                        <div class="alerts-tab" data-tab="rules" onclick="switchAlertTab('rules')">告警规则</div>
+                    </div>
+                    <div class="alerts-filter" id="eventsFilter"></div>
+                    <div class="alert-panel-body" id="panelBody"></div>
+                    <div class="events-pagination" id="pagination" style="display:none"></div>
+                </div>
+                <div class="alert-panel" id="notifPanel">
+                    <div class="alert-panel-hd">
+                        <div class="alert-panel-title">通知中心</div>
+                        <button class="btn-alert" onclick="markAllRead()">全部已读</button>
+                    </div>
+                    <div class="alert-panel-body" id="notifBody"></div>
+                </div>
+            </div>
+
+            <!-- 规则编辑模态框 -->
+            <div class="modal-overlay" id="ruleModal">
+                <div class="modal-box">
+                    <div class="modal-title" id="ruleModalTitle">新建告警规则</div>
+                    <input type="hidden" id="ruleEditId" value="">
+                    <div class="modal-field">
+                        <label>规则名称</label>
+                        <input type="text" id="ruleName" placeholder="如：CPU使用率过高">
+                    </div>
+                    <div class="modal-field">
+                        <label>监控指标</label>
+                        <select id="ruleMetric">
+                            <option value="cpu.usagePercent">CPU 使用率 (%)</option>
+                            <option value="memory.usagePercent">内存使用率 (%)</option>
+                            <option value="jvm.gcPauseMs">GC 暂停时间 (ms)</option>
+                            <option value="jvm.threadCount">线程数</option>
+                            <option value="jvm.heapUsagePercent">堆内存使用率 (%)</option>
+                            <option value="disk.usePercent">磁盘使用率 (%)</option>
+                        </select>
+                    </div>
+                    <div class="modal-field" style="display:flex;gap:8px;">
+                        <div style="flex:1">
+                            <label>运算符</label>
+                            <select id="ruleOperator">
+                                <option value=">">&gt;</option>
+                                <option value=">=">&gt;=</option>
+                                <option value="<">&lt;</option>
+                                <option value="<=">&lt;=</option>
+                                <option value="==">==</option>
+                            </select>
+                        </div>
+                        <div style="flex:1">
+                            <label>阈值</label>
+                            <input type="number" id="ruleThreshold" value="80" step="0.1">
+                        </div>
+                        <div style="flex:1">
+                            <label>持续时间(秒)</label>
+                            <input type="number" id="ruleDuration" value="0" min="0" step="60">
+                        </div>
+                    </div>
+                    <div class="modal-field" style="display:flex;gap:8px;">
+                        <div style="flex:1">
+                            <label>严重级别</label>
+                            <select id="ruleSeverity">
+                                <option value="info">Info</option>
+                                <option value="warning" selected>Warning</option>
+                                <option value="critical">Critical</option>
+                                <option value="emergency">Emergency</option>
+                            </select>
+                        </div>
+                        <div style="flex:1">
+                            <label>启用</label>
+                            <select id="ruleEnabled">
+                                <option value="1">是</option>
+                                <option value="0">否</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="modal-field">
+                        <label>描述</label>
+                        <textarea id="ruleDesc" rows="2" placeholder="规则说明"></textarea>
+                    </div>
+                    <div class="modal-actions">
+                        <button class="btn-alert" onclick="closeRuleModal()">取消</button>
+                        <button class="btn-alert primary" onclick="saveRule()">保存</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        loadStats();
+        switchAlertTab('events');
+        loadNotifications();
+    }
+
+    // ── 加载统计 ──
+    async function loadStats() {
+        try {
+            const stats = await safeGet('/api/anomaly/events/stats');
+            const el = document.getElementById('alertStats');
+            if (!el) return;
+            el.innerHTML = `
+                <div class="alert-stat-card stat-emergency">
+                    <div class="stat-num">${stats.by_severity?.emergency || 0}</div>
+                    <div class="stat-label">Emergency</div>
+                </div>
+                <div class="alert-stat-card stat-critical">
+                    <div class="stat-num">${stats.by_severity?.critical || 0}</div>
+                    <div class="stat-label">Critical</div>
+                </div>
+                <div class="alert-stat-card stat-warning">
+                    <div class="stat-num">${stats.by_severity?.warning || 0}</div>
+                    <div class="stat-label">Warning</div>
+                </div>
+                <div class="alert-stat-card stat-info">
+                    <div class="stat-num">${stats.by_severity?.info || 0}</div>
+                    <div class="stat-label">Info</div>
+                </div>
+            `;
+        } catch (e) {
+            console.error('加载统计失败:', e);
+        }
+    }
+
+    // ── Tab 切换 ──
+    window.switchAlertTab = function(tab) {
+        currentTab = tab;
+        // 更新 tabs 样式
+        document.querySelectorAll('.alerts-tab').forEach(t => {
+            t.classList.toggle('active', t.dataset.tab === tab);
+        });
+        const titleEl = document.getElementById('panelTitle');
+        const filterEl = document.getElementById('eventsFilter');
+        const paginationEl = document.getElementById('pagination');
+
+        if (tab === 'events') {
+            if (titleEl) titleEl.textContent = '异常事件';
+            if (paginationEl) paginationEl.style.display = 'flex';
+            renderEventsFilter();
+            loadEvents();
+        } else if (tab === 'rules') {
+            if (titleEl) titleEl.textContent = '告警规则';
+            if (filterEl) filterEl.innerHTML = '';
+            if (paginationEl) paginationEl.style.display = 'none';
+            loadRules();
+        }
+    };
+
+    window.refreshCurrentTab = function() {
+        switchAlertTab(currentTab);
+        loadStats();
+        loadNotifications();
+    };
+
+    // ── 事件过滤 ──
+    function renderEventsFilter() {
+        const el = document.getElementById('eventsFilter');
+        if (!el) return;
+        el.innerHTML = `
+            <select id="filterSeverity" onchange="loadEvents()">
+                <option value="">所有级别</option>
+                <option value="emergency">Emergency</option>
+                <option value="critical">Critical</option>
+                <option value="warning">Warning</option>
+                <option value="info">Info</option>
+            </select>
+            <input type="text" id="filterCluster" placeholder="集群" style="width:100px" onchange="loadEvents()">
+            <input type="text" id="filterNamespace" placeholder="命名空间" style="width:100px" onchange="loadEvents()">
+            <input type="text" id="filterPod" placeholder="Pod" style="width:120px" onchange="loadEvents()">
+        `;
+    }
+
+    // ── 加载事件 ──
+    window.loadEvents = async function() {
+        eventsPage = 1;
+        await fetchEvents();
+    };
+
+    async function fetchEvents() {
+        const body = document.getElementById('panelBody');
+        if (!body) return;
+
+        const severity = document.getElementById('filterSeverity')?.value || '';
+        const cluster = document.getElementById('filterCluster')?.value || '';
+        const namespace = document.getElementById('filterNamespace')?.value || '';
+        const pod = document.getElementById('filterPod')?.value || '';
+
+        const params = {
+            page: eventsPage,
+            page_size: eventsPageSize,
+        };
+        if (severity) params.severity = severity;
+        if (cluster) params.cluster = cluster;
+        if (namespace) params.namespace = namespace;
+        if (pod) params.pod = pod;
+
+        try {
+            const data = await safeGet('/api/anomaly/events', params);
+            const events = data.events || [];
+            const total = data.total || 0;
+
+            if (events.length === 0) {
+                body.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">✅</div>
+                        <div class="empty-text">暂无异常事件</div>
+                    </div>
+                `;
+                document.getElementById('pagination').style.display = 'none';
+                return;
+            }
+
+            body.innerHTML = events.map(evt => window.renderAlertCard(evt)).join('');
+            renderPagination(total);
+        } catch (e) {
+            body.innerHTML = `<div class="empty-state"><div class="empty-text">加载失败: ${esc(e.message)}</div></div>`;
+        }
+    }
+
+    function renderPagination(total) {
+        const el = document.getElementById('pagination');
+        if (!el) return;
+        const totalPages = Math.ceil(total / eventsPageSize);
+        if (totalPages <= 1) {
+            el.style.display = 'none';
+            return;
+        }
+        el.style.display = 'flex';
+        el.innerHTML = `
+            <button onclick="goPage(${eventsPage - 1})" ${eventsPage <= 1 ? 'disabled' : ''}>← 上一页</button>
+            <span class="page-info">${eventsPage} / ${totalPages} (共 ${total} 条)</span>
+            <button onclick="goPage(${eventsPage + 1})" ${eventsPage >= totalPages ? 'disabled' : ''}>下一页 →</button>
+        `;
+    }
+
+    window.goPage = function(p) {
+        eventsPage = p;
+        fetchEvents();
+    };
+
+    window.deleteEvent = async function(id) {
+        if (!confirm('确认删除该异常事件？')) return;
+        try {
+            await safeDelete('/api/anomaly/events/' + id);
+            fetchEvents();
+            loadStats();
+        } catch (e) {
+            alert('删除失败: ' + e.message);
+        }
+    };
+
+    // ── 加载规则 ──
+    async function loadRules() {
+        window.loadAlertRules();
+    }
+
+    window.openCreateRuleModal = function() {
+        document.getElementById('ruleEditId').value = '';
+        document.getElementById('ruleModalTitle').textContent = '新建告警规则';
+        document.getElementById('ruleName').value = '';
+        document.getElementById('ruleMetric').value = 'cpu.usagePercent';
+        document.getElementById('ruleOperator').value = '>';
+        document.getElementById('ruleThreshold').value = '80';
+        document.getElementById('ruleDuration').value = '0';
+        document.getElementById('ruleSeverity').value = 'warning';
+        document.getElementById('ruleEnabled').value = '1';
+        document.getElementById('ruleDesc').value = '';
+        document.getElementById('ruleModal').classList.add('show');
+    };
+
+    window.openEditRuleModal = function(rule) {
+        document.getElementById('ruleEditId').value = rule.id;
+        document.getElementById('ruleModalTitle').textContent = '编辑告警规则';
+        document.getElementById('ruleName').value = rule.name;
+        document.getElementById('ruleMetric').value = rule.metric;
+        document.getElementById('ruleOperator').value = rule.operator;
+        document.getElementById('ruleThreshold').value = rule.threshold;
+        document.getElementById('ruleDuration').value = rule.duration;
+        document.getElementById('ruleSeverity').value = rule.severity;
+        document.getElementById('ruleEnabled').value = rule.enabled ? '1' : '0';
+        document.getElementById('ruleDesc').value = rule.description || '';
+        document.getElementById('ruleModal').classList.add('show');
+    };
+
+    window.closeRuleModal = function() {
+        document.getElementById('ruleModal').classList.remove('show');
+    };
+
+    window.saveRule = async function() {
+        const data = {
+            name: document.getElementById('ruleName').value.trim(),
+            metric: document.getElementById('ruleMetric').value,
+            operator: document.getElementById('ruleOperator').value,
+            threshold: parseFloat(document.getElementById('ruleThreshold').value),
+            duration: parseInt(document.getElementById('ruleDuration').value) || 0,
+            severity: document.getElementById('ruleSeverity').value,
+            enabled: document.getElementById('ruleEnabled').value === '1',
+            description: document.getElementById('ruleDesc').value.trim(),
+        };
+
+        if (!data.name) { alert('请输入规则名称'); return; }
+
+        const editId = document.getElementById('ruleEditId').value;
+        try {
+            if (editId) {
+                await safePut('/api/anomaly/rules/' + editId, data);
+            } else {
+                await safePost('/api/anomaly/rules', data);
+            }
+            closeRuleModal();
+            loadRules();
+            loadStats();
+        } catch (e) {
+            alert('保存失败: ' + e.message);
+        }
+    };
+
+    window.toggleRule = async function(id, enabled) {
+        try {
+            await safePut('/api/anomaly/rules/' + id, { enabled: !enabled });
+            loadRules();
+        } catch (e) {
+            alert('操作失败: ' + e.message);
+        }
+    };
+
+    window.deleteRule = async function(id) {
+        if (!confirm('确认删除该告警规则？')) return;
+        try {
+            await safeDelete('/api/anomaly/rules/' + id);
+            loadRules();
+        } catch (e) {
+            alert('删除失败: ' + e.message);
+        }
+    };
+
+    // ── 通知 ──
+    async function loadNotifications() {
+        try {
+            const data = await safeGet('/api/anomaly/notifications');
+            const body = document.getElementById('notifBody');
+            if (!body) return;
+
+            const notifications = data.notifications || [];
+            // 更新导航栏未读数
+            document.dispatchEvent(new CustomEvent('notif-count-updated', {
+                detail: { count: data.unread_count || 0 }
+            }));
+
+            if (notifications.length === 0) {
+                body.innerHTML = `
+                    <div class="empty-state">
+                        <div class="empty-icon">🔔</div>
+                        <div class="empty-text">暂无通知</div>
+                    </div>
+                `;
+                return;
+            }
+
+            body.innerHTML = notifications.map(n => `
+                <div class="notif-item ${n.is_read ? '' : 'unread'}" onclick="markNotifRead(${n.id})">
+                    ${n.is_read ? '' : '<div class="notif-unread-dot"></div>'}
+                    <div class="notif-content">
+                        <div class="notif-title">${esc(n.title)}</div>
+                        <div class="notif-msg">${esc(n.message)}</div>
+                        <div class="notif-time">${fmtTs(n.created_at)}</div>
+                    </div>
+                </div>
+            `).join('');
+        } catch (e) {
+            console.error('加载通知失败:', e);
+        }
+    }
+
+    window.markNotifRead = async function(id) {
+        try {
+            await safePost('/api/anomaly/notifications/' + id + '/read');
+            loadNotifications();
+        } catch (e) {
+            console.error('标记已读失败:', e);
+        }
+    };
+
+    window.markAllRead = async function() {
+        try {
+            await safePost('/api/anomaly/notifications/read-all');
+            loadNotifications();
+        } catch (e) {
+            console.error('全部已读失败:', e);
+        }
+    };
+
+    // ── 轮询刷新 ──
+    setInterval(() => {
+        loadStats();
+        loadNotifications();
+    }, 30000);
+
+    // 初始化
+    render();
+})();
+</script>
+</body>
+</html>

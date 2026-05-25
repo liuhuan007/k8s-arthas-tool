@@ -202,20 +202,11 @@ document.addEventListener('DOMContentLoaded', function() {
         <button class="side-nav-item" data-nav-tab="monitor" onclick="switchTab('monitor')">
           <span>📊</span><span>Pod 监控</span>
         </button>
+        <button class="side-nav-item" data-nav-tab="alerts" onclick="location.href='/alerts'">
+          <span>🔔</span><span>告警中心</span>
+        </button>
         <button class="side-nav-item" data-nav-tab="filebrowser" onclick="switchTab('filebrowser')">
           <span>📂</span><span>文件下载</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- AI -->
-    <div class="side-nav-group collapsed" data-side-group="ai">
-      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
-        <span>AI</span><span class="side-nav-arrow"></span>
-      </button>
-      <div class="side-nav-items">
-        <button class="side-nav-item" data-nav-tab="ai" onclick="switchTab('ai')">
-          <span>🤖</span><span>AI 助手</span>
         </button>
       </div>
     </div>
@@ -278,7 +269,6 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="tb-tab"    id="tab-monitor"  onclick="switchTab('monitor')">📊 Pod 监控</div>
     <div class="tb-tab"    id="tab-filebrowser" onclick="switchTab('filebrowser')">📂 文件下载</div>
     <div class="tb-tab-sep"></div>
-    <div class="tb-tab"    id="tab-ai" onclick="switchTab('ai')">🤖 AI 助手</div>
     <div class="tb-tab" id="tab-model-config" onclick="switchTab('model-config')">⚙️ 模型配置</div>
     <div class="tb-tab" id="tab-mcp-center" onclick="switchTab('mcp-center')">🔌 MCP 接入</div>
     <div class="tb-tab" id="tab-task-center" onclick="switchTab('task-center')">⏱️ 任务中心</div>
@@ -1771,16 +1761,6 @@ document.addEventListener('DOMContentLoaded', function() {
   </div>
 </div>
 
-<!-- AI Drawer -->
-<div id="ai-drawer" class="ai-drawer hidden">
-    <div class="ai-drawer-header">
-        <h3>AI 助手</h3>
-        <button id="close-ai-drawer" class="btn btn-icon" onclick="toggleAIDrawer()">×</button>
-    </div>
-    <div class="ai-drawer-content">
-        <!-- AI 内容 -->
-    </div>
-</div>
 
 </body>
 </html>

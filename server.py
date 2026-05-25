@@ -290,6 +290,20 @@ def _start_cleanup_scheduler():
 
 _start_cleanup_scheduler()
 
+# ── 启动异常检测引擎 ─────────────────────────────────────────────────────────
+def _start_anomaly_detector():
+    """初始化异常检测表并启动后台检测线程"""
+    try:
+        from services.anomaly_detector import get_anomaly_detector
+        detector = get_anomaly_detector(db=db)
+        detector.init_tables()
+        detector.start(interval_seconds=60)
+        log.info("异常检测引擎已启动")
+    except Exception as e:
+        log.error("启动异常检测引擎失败: %s", e, exc_info=True)
+
+_start_anomaly_detector()
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 辅助函数
 
@@ -431,6 +445,14 @@ def profiler_page():
 @login_required
 def history_page():
     return send_from_directory('static', 'history.html')
+
+
+@app.route('/alerts')
+@app.route('/alerts.html')
+@login_required
+def alerts_page():
+    """告警中心页面"""
+    return send_from_directory('static', 'alerts.html')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -2525,6 +2547,161 @@ def download_local_file(filename: str):
     AuditService.log_file_downloaded(current_user.id, filename)
     
     return send_file(str(p), as_attachment=True, download_name=filename)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 6: 异常检测 + 告警 API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _get_detector():
+    """获取异常检测器单例"""
+    from services.anomaly_detector import get_anomaly_detector
+    return get_anomaly_detector(db=db)
+
+
+# ── 异常事件 ──────────────────────────────────────────────────────────────────
+
+@app.route('/api/anomaly/events', methods=['GET'])
+@login_required
+def list_anomaly_events():
+    """查询异常事件（支持过滤和分页）"""
+    detector = _get_detector()
+    result = detector.get_events(
+        cluster=request.args.get('cluster', ''),
+        namespace=request.args.get('namespace', ''),
+        pod=request.args.get('pod', ''),
+        severity=request.args.get('severity', ''),
+        page=int(request.args.get('page', 1)),
+        page_size=int(request.args.get('page_size', 50)),
+    )
+    return jsonify(result)
+
+
+@app.route('/api/anomaly/events/stats', methods=['GET'])
+@login_required
+def anomaly_events_stats():
+    """异常事件统计"""
+    detector = _get_detector()
+    stats = detector.get_events_stats()
+    return jsonify(stats)
+
+
+@app.route('/api/anomaly/events/<int:event_id>', methods=['DELETE'])
+@login_required
+def delete_anomaly_event(event_id):
+    """删除异常事件"""
+    detector = _get_detector()
+    ok = detector.delete_event(event_id)
+    if not ok:
+        return jsonify({"error": "事件不存在"}), 404
+    return jsonify({"ok": True})
+
+
+# ── 告警规则 CRUD ─────────────────────────────────────────────────────────────
+
+@app.route('/api/anomaly/rules', methods=['GET'])
+@login_required
+def list_anomaly_rules():
+    """获取所有告警规则"""
+    detector = _get_detector()
+    rules = detector.get_all_rules()
+    return jsonify({"rules": rules})
+
+
+@app.route('/api/anomaly/rules', methods=['POST'])
+@login_required
+def create_anomaly_rule():
+    """创建告警规则"""
+    d = request.json or {}
+    if not d.get('name'):
+        return jsonify({"error": "规则名称不能为空"}), 400
+    if not d.get('metric'):
+        return jsonify({"error": "监控指标不能为空"}), 400
+
+    detector = _get_detector()
+    rule_id = detector.create_rule({
+        "name": d.get("name", ""),
+        "metric": d.get("metric", ""),
+        "operator": d.get("operator", ">"),
+        "threshold": d.get("threshold", 0),
+        "duration": d.get("duration", 0),
+        "severity": d.get("severity", "warning"),
+        "enabled": d.get("enabled", True),
+        "description": d.get("description", ""),
+        "created_by": current_user.username if current_user.is_authenticated else "",
+    })
+    rule = detector.get_rule_by_id(rule_id)
+    return jsonify({"ok": True, "rule": rule}), 201
+
+
+@app.route('/api/anomaly/rules/<int:rule_id>', methods=['PUT'])
+@login_required
+def update_anomaly_rule(rule_id):
+    """更新告警规则"""
+    d = request.json or {}
+    detector = _get_detector()
+    ok = detector.update_rule(rule_id, d)
+    if not ok:
+        return jsonify({"error": "规则不存在"}), 404
+    rule = detector.get_rule_by_id(rule_id)
+    return jsonify({"ok": True, "rule": rule})
+
+
+@app.route('/api/anomaly/rules/<int:rule_id>', methods=['DELETE'])
+@login_required
+def delete_anomaly_rule(rule_id):
+    """删除告警规则"""
+    detector = _get_detector()
+    ok = detector.delete_rule(rule_id)
+    if not ok:
+        return jsonify({"error": "规则不存在"}), 404
+    return jsonify({"ok": True})
+
+
+# ── 通知 ──────────────────────────────────────────────────────────────────────
+
+@app.route('/api/anomaly/notifications', methods=['GET'])
+@login_required
+def list_anomaly_notifications():
+    """获取通知列表"""
+    detector = _get_detector()
+    unread_only = request.args.get('unread_only', 'false').lower() == 'true'
+    notifications = detector.get_notifications(
+        user_id=current_user.id if current_user.is_authenticated else 0,
+        unread_only=unread_only,
+    )
+    unread_count = detector.get_unread_count(
+        user_id=current_user.id if current_user.is_authenticated else 0,
+    )
+    return jsonify({
+        "notifications": notifications,
+        "unread_count": unread_count,
+    })
+
+
+@app.route('/api/anomaly/notifications/<int:notif_id>/read', methods=['POST'])
+@login_required
+def mark_notification_read(notif_id):
+    """标记通知为已读"""
+    detector = _get_detector()
+    ok = detector.mark_notification_read(notif_id)
+    if not ok:
+        return jsonify({"error": "通知不存在"}), 404
+    return jsonify({"ok": True})
+
+
+@app.route('/api/anomaly/notifications/read-all', methods=['POST'])
+@login_required
+def mark_all_notifications_read():
+    """标记所有通知为已读"""
+    db_obj = _get_detector()._get_db()
+    db_obj.update(
+        "alert_notifications",
+        {"is_read": 1},
+        "user_id = ? AND is_read = 0",
+        (current_user.id,),
+    )
+    return jsonify({"ok": True})
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
