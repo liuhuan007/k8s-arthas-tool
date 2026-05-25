@@ -15,6 +15,7 @@
   let _messages = [];           // 对话历史 [{role, content}]
   let _isStreaming = false;
   let _abortController = null;
+  let _sessionId = null;  // Agent SDK 会话 ID（Phase 7 新增）
   const _STORAGE_KEY = 'dc_agent_chat_history';
   const _MAX_MESSAGES = 50;
 
@@ -62,12 +63,14 @@
     try {
       _abortController = new AbortController();
 
-      var r = await fetch('/api/ai/chat', {
+      // Phase 7：调用 Agent SDK 接口
+      var r = await fetch('/api/agent/send_message', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
         body: JSON.stringify({
-          messages: _messages,
+          message: message,
+          session_id: _sessionId,
           connection_id: connId,
           stream: true,
         }),
@@ -104,6 +107,8 @@
             if (data.type === 'content') {
               fullContent += data.content;
               _updateMessage(assistantEl, fullContent, true);
+            } else if (data.type === 'anomaly_events') {
+              _renderAnomalyCards(assistantEl, data.events || []);
             } else if (data.type === 'tool_start') {
               fullContent += '\n\n🔧 执行工具: **' + (data.name || '') + '**\n';
               if (data.args && data.args.command) {
@@ -192,6 +197,69 @@
   };
 
   // ════════════════════════════════════════════════════════════════════════
+  // 异常事件卡片渲染
+  // ════════════════════════════════════════════════════════════════════════
+
+  var _SEVERITY_COLORS = {
+    critical: '#ef4444',
+    high: '#f97316',
+    medium: '#eab308',
+    low: '#3b82f6',
+    info: '#6b7280',
+  };
+
+  function _renderAnomalyCards (assistantEl, events) {
+    if (!assistantEl || !events || events.length === 0) return;
+
+    var wrapper = document.createElement('div');
+    wrapper.className = 'dc-anomaly-cards';
+    wrapper.style.cssText = 'margin-bottom:8px;display:flex;flex-wrap:wrap;gap:6px;';
+
+    events.forEach(function (evt) {
+      var color = _SEVERITY_COLORS[(evt.severity || '').toLowerCase()] || '#6b7280';
+      var card = document.createElement('div');
+      card.className = 'dc-anomaly-card';
+      card.style.cssText = 'display:inline-flex;align-items:center;gap:6px;padding:4px 10px;'
+        + 'border-radius:6px;font-size:12px;cursor:pointer;border:1px solid ' + color + '30;'
+        + 'background:' + color + '15;color:' + color + ';transition:background 0.15s;';
+      card.title = (evt.message || evt.rule_name || '') + '\n点击查看详情';
+
+      card.innerHTML = '<span style="font-weight:600;">' + _esc((evt.severity || 'INFO').toUpperCase()) + '</span>'
+        + '<span>' + _esc(evt.rule_name || '未知规则') + '</span>'
+        + (evt.created_at ? '<span style="opacity:0.7;">' + _esc(evt.created_at.replace(/T/, ' ').substring(0, 19)) + '</span>' : '');
+
+      card.addEventListener('mouseenter', function () { card.style.background = color + '30'; });
+      card.addEventListener('mouseleave', function () { card.style.background = color + '15'; });
+      card.addEventListener('click', function () {
+        // 打开异常事件页面，按当前连接过滤
+        var connId = '';
+        if (window.ConnectionStore && typeof ConnectionStore.getCurrentConnectionId === 'function') {
+          connId = ConnectionStore.getCurrentConnectionId() || '';
+        }
+        if (window.showAnomalyEvents) {
+          window.showAnomalyEvents(connId);
+        } else {
+          // 回退：导航到异常事件页面
+          window.open('/static/anomaly-events.html' + (connId ? '?connection_id=' + encodeURIComponent(connId) : ''), '_blank');
+        }
+      });
+
+      wrapper.appendChild(card);
+    });
+
+    // 插入到 assistant 消息气泡中，内容区域之前
+    var bubble = assistantEl.querySelector('.dc-chat-bubble');
+    if (bubble) {
+      var contentDiv = bubble.querySelector('.dc-chat-content');
+      if (contentDiv) {
+        bubble.insertBefore(wrapper, contentDiv);
+      } else {
+        bubble.insertBefore(wrapper, bubble.firstChild);
+      }
+    }
+  }
+
+  // ════════════════════════════════════════════════════════════════════════
   // 消息渲染
   // ════════════════════════════════════════════════════════════════════════
 
@@ -207,7 +275,7 @@
         + '<div class="dc-chat-bubble">' + _esc(content) + '</div>';
     } else if (role === 'assistant') {
       div.innerHTML = '<div class="dc-chat-avatar">🤖</div>'
-        + '<div class="dc-chat-bubble">' + _renderMd(content)
+        + '<div class="dc-chat-bubble"><div class="dc-chat-content">' + _renderMd(content) + '</div>'
         + (streaming ? '<span class="dc-chat-typing"><span></span><span></span><span></span></span>' : '')
         + '</div>';
     } else {
@@ -223,8 +291,14 @@
     if (!el) return;
     var bubble = el.querySelector('.dc-chat-bubble');
     if (bubble) {
-      bubble.innerHTML = _renderMd(content)
+      var contentHtml = _renderMd(content)
         + (streaming ? '<span class="dc-chat-typing"><span></span><span></span><span></span></span>' : '');
+      var contentDiv = bubble.querySelector('.dc-chat-content');
+      if (contentDiv) {
+        contentDiv.innerHTML = contentHtml;
+      } else {
+        bubble.innerHTML = contentHtml;
+      }
     }
     var container = document.getElementById('dcChatMessages');
     if (container) container.scrollTop = container.scrollHeight;

@@ -390,6 +390,24 @@ ARTHAS_TOOLS = [
             }
         }
     },
+    # ── Phase 7 T07: AI 分析报告使用异常检测结果 ─────────────
+    {
+        "type": "function",
+        "function": {
+            "name": "get_anomaly_events",
+            "description": "获取指定 Pod 的异常检测事件（供 AI 分析使用）。返回最近 50 条异常事件，包含严重级别、规则名称、指标值等。在分析 Pod 性能问题时，先调用此工具了解历史异常。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "connection_id": {
+                        "type": "string",
+                        "description": "连接 ID（格式: cluster/namespace/pod），留空则使用当前连接"
+                    }
+                },
+                "required": []
+            }
+        }
+    },
 ]
 
 # 默认系统提示词
@@ -540,6 +558,8 @@ def _execute_tool(name: str, arguments: dict, connection_id: str) -> str:
             return _arthas_analyze_threads(arguments.get('top_n', 10), arguments.get('check_deadlock', True), connection_id)
         elif name == 'arthas_diagnose_performance':
             return _arthas_diagnose_performance(arguments.get('target', 'general'), arguments.get('class_pattern', ''), arguments.get('method_pattern', ''), connection_id)
+        elif name == 'get_anomaly_events':
+            return _get_anomaly_events(arguments.get('connection_id', connection_id))
         else:
             return json.dumps({"error": f"未知工具: {name}"})
     except Exception as e:
@@ -612,6 +632,37 @@ def _get_pod_status(detail: str, connection_id: str) -> str:
                 timeout=10
             )
             return json.dumps({"status": out[:3000] if rc == 0 else err}, ensure_ascii=False)
+    except Exception as e:
+        return json.dumps({"error": str(e)})
+
+
+def _get_anomaly_events(connection_id: str) -> str:
+    """获取指定连接的异常检测事件（供 AI 分析使用）"""
+    try:
+        from services.anomaly_detector import get_anomaly_detector
+        detector = get_anomaly_detector()
+
+        # 解析 connection_id
+        parts = (connection_id or '').split('/')
+        cluster = parts[0] if len(parts) > 0 else ''
+        namespace = parts[1] if len(parts) > 1 else ''
+        pod = parts[2] if len(parts) > 2 else ''
+
+        result = detector.get_events(
+            cluster=cluster,
+            namespace=namespace,
+            pod=pod,
+            page=1,
+            page_size=50
+        )
+
+        events = result.get('events', [])
+
+        return json.dumps({
+            "connection_id": connection_id,
+            "count": len(events),
+            "events": events
+        }, ensure_ascii=False)
     except Exception as e:
         return json.dumps({"error": str(e)})
 

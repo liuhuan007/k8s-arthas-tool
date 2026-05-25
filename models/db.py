@@ -454,6 +454,8 @@ class Database:
                 ('status', "ALTER TABLE connections ADD COLUMN status TEXT DEFAULT 'disconnected'"),
                 ('last_active_at', 'ALTER TABLE connections ADD COLUMN last_active_at TIMESTAMP'),
                 ('ttl_hours', 'ALTER TABLE connections ADD COLUMN ttl_hours INTEGER DEFAULT 0'),
+                ('last_health_check', 'ALTER TABLE connections ADD COLUMN last_health_check TIMESTAMP'),
+                ('health_status', "ALTER TABLE connections ADD COLUMN health_status TEXT DEFAULT 'unknown'"),
             ]:
                 try:
                     cursor.execute(f'SELECT {col} FROM connections LIMIT 1')
@@ -463,6 +465,21 @@ class Database:
                         log.info("Schema migrated: connections.%s added", col)
                     except Exception as e:
                         log.warning("Add column connections.%s failed: %s", col, e)
+
+            # ── Phase 5: 健康检查日志表 ─────────────────────────────────────────
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS health_check_logs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    connection_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    latency_ms REAL,
+                    error_message TEXT,
+                    checked_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (connection_id) REFERENCES connections(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_health_check_logs_conn ON health_check_logs(connection_id, checked_at DESC)")
+            log.info("Schema initialized: health_check_logs table created")
 
             # ── P0 索引 ──────────────────────────────────────────────────────────
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_connections_user ON connections(owner_user_id)")
