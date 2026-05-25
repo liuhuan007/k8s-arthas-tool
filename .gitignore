@@ -6,6 +6,8 @@
 .agent/
 .agents/
 .workbuddy/
+.specify/
+.venv/
 
 # Python
 __pycache__/
@@ -47,3 +49,8 @@ Thumbs.db
 # 临时文件
 *.tmp
 *.bak
+# Added by code-review-graph
+.code-review-graph/
+
+
+

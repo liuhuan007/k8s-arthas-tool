@@ -3,6 +3,14 @@
     "cc-workflow-studio": {
       "type": "http",
       "url": "http://127.0.0.1:6282/mcp"
+    },
+    "code-review-graph": {
+      "command": "uvx",
+      "args": [
+        "code-review-graph",
+        "serve"
+      ],
+      "cwd": "E:\\tmp\\k8s-arthas-tool"
     }
   }
 }
