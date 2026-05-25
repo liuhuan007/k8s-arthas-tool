@@ -1,0 +1,10 @@
+{
+    "sdk_type": "codebuddy",
+    "model": "deepseek-v3.1",
+    "permission_mode": "bypassPermissions",
+    "api_key": "",
+    "base_url": "",
+    "internet_environment": "internal",
+    "max_turns": 50,
+    "setting_sources": ["project"]
+}

@@ -1,11 +1,14 @@
 # 工具箱实施计划
 
-| 项目 | 内容 |
-|---|---|
-| 文档状态 | 基于 2026-04-30 Arthas K8s 工作台实施计划整理 |
-| 创建日期 | 2026-05-22 |
-| 版本 | v1.0 |
-| 状态 | 实施计划 |
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** 工具箱中心负责登记工具包（toolbox packages）：工具类型、版本、来源地址、本地缓存、安装路径、校验信息和启停状态。不包含"工具自动升级/Arthas 版本升级/Tunnel 升级"等升级能力。
+
+**Architecture:** 工具箱中心作为独立模块，负责工具包的生命周期管理，包括工具包登记、版本管理、兼容性检查、健康检查和分发记录。与任务中心、诊断中心明确边界。
+
+**Tech Stack:** Python, Flask, SQLite, pytest
+
+---
 
 ## 1. 目标
 

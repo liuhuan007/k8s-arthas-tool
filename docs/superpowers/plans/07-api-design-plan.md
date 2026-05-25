@@ -1,11 +1,14 @@
 # API 设计实施计划
 
-| 项目 | 内容 |
-|---|---|
-| 文档状态 | 基于 07-api-design.md 设计文档整理 |
-| 创建日期 | 2026-05-24 |
-| 版本 | v1.0 |
-| 状态 | 实施计划 |
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** 实现 API 设计，包括诊断中心 API、异常检测 API、知识库 API、连接中心 API、工具箱 API、外部链接 API 等。
+
+**Architecture:** API 层作为前端与后端的桥梁，提供 RESTful 接口，支持 JSON 格式数据交换。采用 Flask Blueprint 组织路由，支持版本控制和中间件。
+
+**Tech Stack:** Python, Flask, RESTful API, JSON
+
+---
 
 ## 1. 目标
 

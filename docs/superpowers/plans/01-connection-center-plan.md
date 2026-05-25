@@ -1,11 +1,14 @@
 # 连接中心实施计划
 
-| 项目 | 内容 |
-|---|---|
-| 文档状态 | 基于 2026-04-18 连接管理重构实施计划整理 |
-| 创建日期 | 2026-05-22 |
-| 版本 | v1.0 |
-| 状态 | 实施计划 |
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** 将侧栏中心化连接工作流替换为专用连接管理流程（列表 → 详情 → 工作页），保持跨页面可复用的连接状态，保留轻量级当前连接条，并将 AI 移至全局入口。
+
+**Architecture:** 保持现有的 Flask + 静态 HTML + 原生 JS 技术栈。复用 `static/js/components/connections.js` 作为规范连接存储，重构 `static/js/components/two-step-connection.js` 使其能驱动新详情页和现有共享操作，并通过查询字符串连接上下文（`?conn=<id>`）进行页面间导航。
+
+**Tech Stack:** Flask, 静态 HTML, 原生 JavaScript, 现有 `static/js/components/*`, `static/css/app.css`, pytest 用于路由/标记冒烟测试。
+
+---
 
 ## 1. 目标
 
@@ -64,99 +67,604 @@ Flask, 静态 HTML, 原生 JavaScript, 现有 `static/js/components/*`, `static/
 
 ### 任务 1：注册新页面路由
 
-**文件：**
-- 创建：`tests/test_connection_page_routes.py`
-- 修改：`server.py:196-231`
-- 测试：`tests/test_connection_page_routes.py`
+**Files:**
+- Create: `tests/test_connection_page_routes.py`
+- Modify: `server.py:196-231`
+- Test: `tests/test_connection_page_routes.py`
 
-**步骤：**
-1. 编写失败的路由冒烟测试
-2. 运行测试确认路由缺失
-3. 为新页面添加显式 Flask 路由
-4. 再次运行路由测试
-5. 提交路由基线
+**Step 1: Write the failing test**
+
+```python
+# tests/test_connection_page_routes.py
+
+import pytest
+from server import app
+
+@pytest.fixture
+def client():
+    app.config['TESTING'] = True
+    with app.test_client() as client:
+        yield client
+
+def test_connection_detail_route_exists(client):
+    """Test that /connection-detail route exists"""
+    response = client.get('/connection-detail')
+    assert response.status_code == 200
+
+def test_terminal_route_exists(client):
+    """Test that /terminal route exists"""
+    response = client.get('/terminal')
+    assert response.status_code == 200
+
+def test_monitor_route_exists(client):
+    """Test that /monitor route exists"""
+    response = client.get('/monitor')
+    assert response.status_code == 200
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_connection_page_routes.py -v`
+Expected: FAIL with "404 NOT FOUND"
+
+**Step 3: Write minimal implementation**
+
+```python
+# server.py:196-231
+
+@app.route('/connection-detail')
+@login_required
+def connection_detail_page():
+    return send_from_directory('static', 'connection-detail.html')
+
+@app.route('/terminal')
+@login_required
+def terminal_page():
+    return send_from_directory('static', 'terminal.html')
+
+@app.route('/monitor')
+@login_required
+def monitor_page():
+    return send_from_directory('static', 'monitor.html')
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `pytest tests/test_connection_page_routes.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add tests/test_connection_page_routes.py server.py
+git commit -m "feat: add new page routes for connection management"
+```
 
 ### 任务 2：将 `index.html` 重新用作连接管理列表页面
 
-**文件：**
-- 创建：`tests/test_connection_page_markup.py`
-- 创建：`static/js/page-connection-list.js`
-- 修改：`static/index.html:104-220`
-- 修改：`static/css/app.css`
-- 测试：`tests/test_connection_page_markup.py`
+**Files:**
+- Create: `tests/test_connection_page_markup.py`
+- Create: `static/js/page-connection-list.js`
+- Modify: `static/index.html:104-220`
+- Modify: `static/css/app.css`
+- Test: `tests/test_connection_page_markup.py`
 
-**步骤：**
-1. 编写失败的列表页面标记测试
-2. 运行标记测试确认旧外壳仍然存在
-3. 用列表页面外壳替换旧侧栏 + 顶部标签
-4. 再次运行标记测试
-5. 提交连接列表页面
+**Step 1: Write the failing test**
+
+```python
+# tests/test_connection_page_markup.py
+
+import pytest
+from server import app
+
+@pytest.fixture
+def client():
+    app.config['TESTING'] = True
+    with app.test_client() as client:
+        yield client
+
+def test_index_page_has_connection_list_structure(client):
+    """Test that index.html has connection list structure"""
+    response = client.get('/')
+    assert response.status_code == 200
+    html = response.data.decode()
+    assert 'connection-list-container' in html
+    assert 'connection-table' in html
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_connection_page_markup.py -v`
+Expected: FAIL with "connection-list-container not found"
+
+**Step 3: Write minimal implementation**
+
+```html
+<!-- static/index.html:104-220 -->
+<div id="connection-list-container">
+    <div class="connection-list-header">
+        <h2>连接管理</h2>
+        <button id="add-connection-btn" class="btn btn-primary">添加连接</button>
+    </div>
+    <table id="connection-table" class="table">
+        <thead>
+            <tr>
+                <th>集群</th>
+                <th>命名空间</th>
+                <th>Pod</th>
+                <th>状态</th>
+                <th>操作</th>
+            </tr>
+        </thead>
+        <tbody id="connection-table-body">
+            <!-- 动态填充 -->
+        </tbody>
+    </table>
+</div>
+```
+
+```javascript
+// static/js/page-connection-list.js
+
+class ConnectionListPage {
+    constructor() {
+        this.init();
+    }
+    
+    init() {
+        this.loadConnections();
+        this.bindEvents();
+    }
+    
+    loadConnections() {
+        // 加载连接列表
+    }
+    
+    bindEvents() {
+        // 绑定事件
+    }
+}
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `pytest tests/test_connection_page_markup.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add tests/test_connection_page_markup.py static/index.html static/js/page-connection-list.js
+git commit -m "feat: convert index.html to connection list page"
+```
 
 ### 任务 3：添加共享页面外壳和规范连接页面上下文辅助函数
 
-**文件：**
-- 修改：`tests/test_connection_page_markup.py`
-- 创建：`static/js/components/page-shell.js`
-- 创建：`static/js/components/connection-page-context.js`
-- 修改：`static/js/app.js`
-- 修改：`static/js/components/connections.js`
-- 修改：`static/js/app-ui.js:141-158,1106-1209`
-- 测试：`tests/test_connection_page_markup.py`
+**Files:**
+- Modify: `tests/test_connection_page_markup.py`
+- Create: `static/js/components/page-shell.js`
+- Create: `static/js/components/connection-page-context.js`
+- Modify: `static/js/app.js`
+- Modify: `static/js/components/connections.js`
+- Modify: `static/js/app-ui.js:141-158,1106-1209`
+- Test: `tests/test_connection_page_markup.py`
 
-**步骤：**
-1. 扩展共享外壳资产的标记冒烟测试
-2. 运行标记测试确认共享辅助函数尚未连接
-3. 引入可重用的外壳/上下文辅助函数，并从 `app-ui.js` 中移除重复的连接辅助函数
-4. 重新运行标记测试并进行手动导航冒烟检查
-5. 提交共享外壳/上下文辅助函数
+**Step 1: Write the failing test**
+
+```python
+# tests/test_connection_page_markup.py (extend)
+
+def test_page_shell_component_exists(client):
+    """Test that page-shell.js is loaded"""
+    response = client.get('/')
+    html = response.data.decode()
+    assert 'page-shell.js' in html
+
+def test_connection_page_context_component_exists(client):
+    """Test that connection-page-context.js is loaded"""
+    response = client.get('/connection-detail')
+    html = response.data.decode()
+    assert 'connection-page-context.js' in html
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_connection_page_markup.py -v`
+Expected: FAIL with "page-shell.js not found"
+
+**Step 3: Write minimal implementation**
+
+```javascript
+// static/js/components/page-shell.js
+
+class PageShell {
+    constructor() {
+        this.init();
+    }
+    
+    init() {
+        this.renderHeader();
+        this.renderAIButton();
+    }
+    
+    renderHeader() {
+        const header = document.createElement('header');
+        header.className = 'page-header';
+        header.innerHTML = `
+            <div class="header-left">
+                <h1 class="page-title">K8s Arthas Tool</h1>
+            </div>
+            <div class="header-right">
+                <button id="ai-drawer-btn" class="btn btn-icon">AI</button>
+            </div>
+        `;
+        document.body.prepend(header);
+    }
+    
+    renderAIButton() {
+        // AI 按钮逻辑
+    }
+}
+```
+
+```javascript
+// static/js/components/connection-page-context.js
+
+class ConnectionPageContext {
+    constructor() {
+        this.connectionId = null;
+        this.init();
+    }
+    
+    init() {
+        this.parseQueryString();
+        this.loadConnection();
+    }
+    
+    parseQueryString() {
+        const params = new URLSearchParams(window.location.search);
+        this.connectionId = params.get('conn');
+    }
+    
+    loadConnection() {
+        if (this.connectionId) {
+            // 加载连接信息
+        }
+    }
+}
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `pytest tests/test_connection_page_markup.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add static/js/components/page-shell.js static/js/components/connection-page-context.js
+git commit -m "feat: add shared page shell and connection context components"
+```
 
 ### 任务 4：构建连接详情页并重构两步连接 UI 以定位它
 
-**文件：**
-- 修改：`tests/test_connection_page_markup.py`
-- 创建：`static/connection-detail.html`
-- 创建：`static/js/page-connection-detail.js`
-- 修改：`static/js/components/two-step-connection.js`
-- 修改：`static/js/components/connections.js`
-- 测试：`tests/test_connection_page_markup.py`
+**Files:**
+- Modify: `tests/test_connection_page_markup.py`
+- Create: `static/connection-detail.html`
+- Create: `static/js/page-connection-detail.js`
+- Modify: `static/js/components/two-step-connection.js`
+- Modify: `static/js/components/connections.js`
+- Test: `tests/test_connection_page_markup.py`
 
-**步骤：**
-1. 编写失败的详情页面标记测试
-2. 运行标记测试确认页面尚不存在
-3. 创建详情页面并使 `two-step-connection.js` DOM 可定位
-4. 运行标记测试并手动验证详情生命周期
-5. 提交详情页面和两步重构
+**Step 1: Write the failing test**
+
+```python
+# tests/test_connection_page_markup.py (extend)
+
+def test_connection_detail_page_exists(client):
+    """Test that connection-detail.html exists"""
+    response = client.get('/connection-detail')
+    assert response.status_code == 200
+    html = response.data.decode()
+    assert 'connection-detail-container' in html
+
+def test_two_step_connection_dom_target(client):
+    """Test that two-step-connection.js has configurable DOM target"""
+    response = client.get('/connection-detail')
+    html = response.data.decode()
+    assert 'two-step-connection.js' in html
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_connection_page_markup.py -v`
+Expected: FAIL with "connection-detail-container not found"
+
+**Step 3: Write minimal implementation**
+
+```html
+<!-- static/connection-detail.html -->
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>连接详情</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <div id="connection-detail-container">
+        <div class="connection-detail-header">
+            <h2>连接详情</h2>
+            <button id="back-btn" class="btn btn-secondary">返回</button>
+        </div>
+        <div id="connection-info" class="connection-info">
+            <!-- 连接信息 -->
+        </div>
+        <div id="two-step-connection-container">
+            <!-- 两步连接 UI -->
+        </div>
+    </div>
+    <script src="/static/js/components/page-shell.js"></script>
+    <script src="/static/js/components/connection-page-context.js"></script>
+    <script src="/static/js/components/two-step-connection.js"></script>
+    <script src="/static/js/page-connection-detail.js"></script>
+</body>
+</html>
+```
+
+```javascript
+// static/js/page-connection-detail.js
+
+class ConnectionDetailPage {
+    constructor() {
+        this.connectionId = null;
+        this.init();
+    }
+    
+    init() {
+        this.parseQueryString();
+        this.loadConnection();
+        this.initTwoStepConnection();
+    }
+    
+    parseQueryString() {
+        const params = new URLSearchParams(window.location.search);
+        this.connectionId = params.get('conn');
+    }
+    
+    loadConnection() {
+        if (this.connectionId) {
+            // 加载连接信息
+        }
+    }
+    
+    initTwoStepConnection() {
+        // 初始化两步连接 UI
+        const container = document.getElementById('two-step-connection-container');
+        if (container) {
+            // 配置 DOM 目标
+        }
+    }
+}
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `pytest tests/test_connection_page_markup.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add static/connection-detail.html static/js/page-connection-detail.js
+git commit -m "feat: add connection detail page with two-step connection UI"
+```
 
 ### 任务 5：将连接范围的工具拆分为独立的工作页面
 
-**文件：**
-- 修改：`tests/test_connection_page_markup.py`
-- 创建：`static/terminal.html`, `static/monitor.html`, `static/filebrowser.html`, `static/diagnose.html`, `static/arthas-console.html`, `static/profiler.html`, `static/history.html`
-- 创建：`static/js/page-workspace.js`, `static/js/page-history.js`
-- 修改：`static/js/app-ui.js:1106-1209`, `static/css/app.css`
-- 测试：`tests/test_connection_page_markup.py`
+**Files:**
+- Modify: `tests/test_connection_page_markup.py`
+- Create: `static/terminal.html`, `static/monitor.html`, `static/filebrowser.html`, `static/diagnose.html`, `static/arthas-console.html`, `static/profiler.html`, `static/history.html`
+- Create: `static/js/page-workspace.js`, `static/js/page-history.js`
+- Modify: `static/js/app-ui.js:1106-1209`, `static/css/app.css`
+- Test: `tests/test_connection_page_markup.py`
 
-**步骤：**
-1. 编写失败的工作区页面冒烟测试
-2. 运行标记测试确认新页面缺失
-3. 创建共享工作区引导并将每个工具移到自己的路由后面
-4. 运行标记测试并手动验证逐页导航
-5. 提交页面拆分
+**Step 1: Write the failing test**
+
+```python
+# tests/test_connection_page_markup.py (extend)
+
+def test_workspace_pages_exist(client):
+    """Test that all workspace pages exist"""
+    pages = ['/terminal', '/monitor', '/filebrowser', '/diagnose', '/arthas-console', '/profiler', '/history']
+    for page in pages:
+        response = client.get(page)
+        assert response.status_code == 200
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_connection_page_markup.py -v`
+Expected: FAIL with "404 NOT FOUND"
+
+**Step 3: Write minimal implementation**
+
+```html
+<!-- static/terminal.html -->
+<!DOCTYPE html>
+<html>
+<head>
+    <title>终端</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+    <div id="terminal-container">
+        <div class="terminal-header">
+            <h2>终端</h2>
+            <button id="back-btn" class="btn btn-secondary">返回</button>
+        </div>
+        <div id="terminal-content">
+            <!-- 终端内容 -->
+        </div>
+    </div>
+    <script src="/static/js/components/page-shell.js"></script>
+    <script src="/static/js/components/connection-page-context.js"></script>
+    <script src="/static/js/page-workspace.js"></script>
+</body>
+</html>
+```
+
+```javascript
+// static/js/page-workspace.js
+
+class WorkspacePage {
+    constructor() {
+        this.connectionId = null;
+        this.init();
+    }
+    
+    init() {
+        this.parseQueryString();
+        this.loadConnection();
+        this.initWorkspace();
+    }
+    
+    parseQueryString() {
+        const params = new URLSearchParams(window.location.search);
+        this.connectionId = params.get('conn');
+    }
+    
+    loadConnection() {
+        if (this.connectionId) {
+            // 加载连接信息
+        }
+    }
+    
+    initWorkspace() {
+        // 初始化工作区
+    }
+}
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `pytest tests/test_connection_page_markup.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add static/terminal.html static/monitor.html static/filebrowser.html static/diagnose.html static/arthas-console.html static/profiler.html static/history.html static/js/page-workspace.js static/js/page-history.js
+git commit -m "feat: split workspace into separate pages"
+```
 
 ### 任务 6：将 AI 移至全局抽屉并将状态栏降级为仅轻量上下文
 
-**文件：**
-- 修改：`tests/test_connection_page_markup.py`
-- 修改：`static/js/components/page-shell.js`, `static/js/ai-chat.js`, `static/js/components/conn-status-bar.js`
-- 修改：`static/index.html`, `static/connection-detail.html`, `static/terminal.html`, `static/monitor.html`, `static/filebrowser.html`, `static/diagnose.html`, `static/arthas-console.html`, `static/profiler.html`, `static/history.html`, `static/css/app.css`
-- 测试：`tests/test_connection_page_markup.py`
+**Files:**
+- Modify: `tests/test_connection_page_markup.py`
+- Modify: `static/js/components/page-shell.js`, `static/js/ai-chat.js`, `static/js/components/conn-status-bar.js`
+- Modify: `static/index.html`, `static/connection-detail.html`, `static/terminal.html`, `static/monitor.html`, `static/filebrowser.html`, `static/diagnose.html`, `static/arthas-console.html`, `static/profiler.html`, `static/history.html`, `static/css/app.css`
+- Test: `tests/test_connection_page_markup.py`
 
-**步骤：**
-1. 扩展 AI 启动器和状态栏降级的冒烟测试
-2. 运行冒烟测试确认旧 AI 标签/状态操作仍然存在
-3. 用全局抽屉替换 AI 标签并简化当前连接条
-4. 运行冒烟测试并完成完整浏览器回归
-5. 提交全局 AI 入口和状态栏清理
+**Step 1: Write the failing test**
+
+```python
+# tests/test_connection_page_markup.py (extend)
+
+def test_ai_drawer_exists(client):
+    """Test that AI drawer exists in all pages"""
+    pages = ['/', '/connection-detail', '/terminal', '/monitor', '/filebrowser', '/diagnose', '/arthas-console', '/profiler', '/history']
+    for page in pages:
+        response = client.get(page)
+        html = response.data.decode()
+        assert 'ai-drawer' in html
+        assert 'ai-drawer-btn' in html
+
+def test_status_bar_is_lightweight(client):
+    """Test that status bar is lightweight"""
+    response = client.get('/')
+    html = response.data.decode()
+    assert 'conn-status-bar' in html
+    assert '查看详情' in html
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_connection_page_markup.py -v`
+Expected: FAIL with "ai-drawer not found"
+
+**Step 3: Write minimal implementation**
+
+```javascript
+// static/js/components/page-shell.js (update)
+
+class PageShell {
+    constructor() {
+        this.init();
+    }
+    
+    init() {
+        this.renderHeader();
+        this.renderAIDrawer();
+        this.renderStatusBar();
+    }
+    
+    renderHeader() {
+        const header = document.createElement('header');
+        header.className = 'page-header';
+        header.innerHTML = `
+            <div class="header-left">
+                <h1 class="page-title">K8s Arthas Tool</h1>
+            </div>
+            <div class="header-right">
+                <button id="ai-drawer-btn" class="btn btn-icon">AI</button>
+            </div>
+        `;
+        document.body.prepend(header);
+    }
+    
+    renderAIDrawer() {
+        const drawer = document.createElement('div');
+        drawer.id = 'ai-drawer';
+        drawer.className = 'ai-drawer hidden';
+        drawer.innerHTML = `
+            <div class="ai-drawer-header">
+                <h3>AI 助手</h3>
+                <button id="close-ai-drawer" class="btn btn-icon">×</button>
+            </div>
+            <div class="ai-drawer-content">
+                <!-- AI 内容 -->
+            </div>
+        `;
+        document.body.appendChild(drawer);
+    }
+    
+    renderStatusBar() {
+        const statusBar = document.createElement('div');
+        statusBar.id = 'conn-status-bar';
+        statusBar.className = 'conn-status-bar';
+        statusBar.innerHTML = `
+            <div class="status-bar-content">
+                <span class="connection-info">未连接</span>
+                <button id="view-detail-btn" class="btn btn-link">查看详情</button>
+            </div>
+        `;
+        document.body.appendChild(statusBar);
+    }
+}
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `pytest tests/test_connection_page_markup.py -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add static/js/components/page-shell.js static/js/ai-chat.js static/js/components/conn-status-bar.js
+git commit -m "feat: move AI to global drawer and simplify status bar"
+```
 
 ## 7. 最终验证清单
 

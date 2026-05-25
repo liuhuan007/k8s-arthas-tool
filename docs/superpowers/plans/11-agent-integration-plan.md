@@ -1,11 +1,14 @@
 # Agent 集成实施计划
 
-| 项目 | 内容 |
-|---|---|
-| 文档状态 | 基于 11-agent-integration-architecture.md 设计文档整理 |
-| 创建日期 | 2026-05-24 |
-| 版本 | v1.0 |
-| 状态 | 实施计划 |
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** 实现 Agent SDK 集成，包括 Agent 抽象接口、适配器、工厂、网关、会话管理、资源控制等。
+
+**Architecture:** Agent 集成作为系统核心层，提供智能诊断能力。采用抽象接口设计，支持多 SDK 切换，具备自动降级能力。
+
+**Tech Stack:** Python, Agent SDK, 异步编程, 会话管理
+
+---
 
 ## 1. 目标
 

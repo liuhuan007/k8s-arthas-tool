@@ -1,11 +1,14 @@
 # 诊断中心实施计划
 
-| 项目 | 内容 |
-|---|---|
-| 文档状态 | 基于 2026-05-02 和 2026-05-04 文件整理 |
-| 创建日期 | 2026-05-22 |
-| 版本 | v1.0 |
-| 状态 | 实施计划 |
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** 实现诊断中心，提供能力目录、参数表单、即时执行、场景编排、历史与报告功能，形成完整的诊断闭环。
+
+**Architecture:** 诊断中心作为独立模块，负责能力目录管理、参数校验、即时诊断执行、场景方案编排和历史记录查询。与连接中心、任务中心、工具箱明确边界，不成为新的连接中心或万能工具市场。
+
+**Tech Stack:** Python, Flask, SQLite, 原生 JavaScript, HTML, CSS
+
+---
 
 ## 1. 目标
 
@@ -17,16 +20,16 @@
 
 ## 3. 阶段总览
 
-| 阶段 | 名称 | 工期 | 交付物 | 优先级 |
-|------|------|------|--------|--------|
-| **Phase 0** | 数据库迁移 | 2 天 | 数据库迁移脚本 + 测试 | P0 |
-| **Phase 1** | 诊断能力框架 | 3 天 | 后端 API + 数据模型 | P0 |
-| **Phase 2** | 统一执行器 | 3 天 | ArthasCommandExecutor | P0 |
-| **Phase 3** | 即时诊断执行 | 3 天 | 即时诊断 API + 前端 | P0 |
-| **Phase 4** | 场景方案执行 | 4 天 | 多步骤执行 + 数据传递 | P0 |
-| **Phase 5** | 定时任务增强 | 3 天 | 连接管理 + 重试策略 | P1 |
-| **Phase 6** | 定时清理机制 | 2 天 | 清理服务 + 定时调度 | P1 |
-| **Phase 7** | 前端集成测试 | 2 天 | 端到端测试 + 优化 | P1 |
+| 阶段 | 名称 | 工期 | 交付物 | 优先级 | 状态 |
+|------|------|------|--------|--------|------|
+| **Phase 0** | 数据库迁移 | 2 天 | 数据库迁移脚本 + 测试 | P0 | ✅ 已完成 |
+| **Phase 1** | 诊断能力框架 | 3 天 | 后端 API + 数据模型 | P0 | ✅ 已完成 |
+| **Phase 2** | 统一执行器 | 3 天 | ArthasCommandExecutor | P0 | ✅ 已完成 |
+| **Phase 3** | 即时诊断执行 | 3 天 | 即时诊断 API + 前端 | P0 | ✅ 已完成 |
+| **Phase 4** | 场景方案执行 | 4 天 | 多步骤执行 + 数据传递 | P0 | ✅ 已完成 |
+| **Phase 5** | 定时任务增强 | 3 天 | 连接管理 + 重试策略 | P1 | ✅ 已完成 |
+| **Phase 6** | 定时清理机制 | 2 天 | 清理服务 + 定时调度 | P1 | ✅ 已完成 |
+| **Phase 7** | 前端集成测试 | 2 天 | 端到端测试 + 优化 | P1 | ⏳ 部分完成 |
 
 **总计**：22 个工作日（约 4.5 周）
 
@@ -46,6 +49,94 @@
 | P0-8 | 扩展 `arthas_command_logs` 表字段 | 1h | 后端 | ⏳ |
 | P0-9 | 添加 `task_id`/`capability_id` 互斥约束 | 1h | 后端 | ⏳ |
 | P0-10 | 编写数据库迁移测试 | 3h | 测试 | ⏳ |
+
+### 4.2 详细任务分解
+
+#### 任务 P0-1：创建 `diagnosis_capabilities` 表
+
+**Files:**
+- Modify: `models/db.py`
+- Create: `tests/test_db_migration.py`
+
+**Step 1: Write the failing test**
+
+```python
+# tests/test_db_migration.py
+
+import pytest
+from models.db import get_db_connection
+
+def test_diagnosis_capabilities_table_exists():
+    """Test that diagnosis_capabilities table exists"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='diagnosis_capabilities'")
+    result = cursor.fetchone()
+    conn.close()
+    assert result is not None
+
+def test_diagnosis_capabilities_table_structure():
+    """Test that diagnosis_capabilities table has correct structure"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute("PRAGMA table_info(diagnosis_capabilities)")
+    columns = {row[1]: row[2] for row in cursor.fetchall()}
+    conn.close()
+    
+    assert 'id' in columns
+    assert 'name' in columns
+    assert 'type' in columns
+    assert 'category' in columns
+    assert 'level' in columns
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_db_migration.py::test_diagnosis_capabilities_table_exists -v`
+Expected: FAIL with "table does not exist"
+
+**Step 3: Write minimal implementation**
+
+```python
+# models/db.py
+
+def init_diagnosis_tables(cursor):
+    """初始化诊断能力相关表"""
+    
+    # 1. diagnosis_capabilities
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS diagnosis_capabilities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL UNIQUE,
+            type TEXT NOT NULL,
+            category TEXT NOT NULL,
+            level INTEGER NOT NULL DEFAULT 1,
+            risk_level TEXT DEFAULT 'low',
+            parameters_schema TEXT DEFAULT '{}',
+            description TEXT,
+            estimated_duration INTEGER DEFAULT 10,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (created_by) REFERENCES users(id)
+        )
+    ''')
+    
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_diag_caps_type ON diagnosis_capabilities(type)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_diag_caps_category_level ON diagnosis_capabilities(category, level)')
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `pytest tests/test_db_migration.py::test_diagnosis_capabilities_table_exists -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add models/db.py tests/test_db_migration.py
+git commit -m "feat: create diagnosis_capabilities table"
+```
 
 ### 4.2 实施步骤
 

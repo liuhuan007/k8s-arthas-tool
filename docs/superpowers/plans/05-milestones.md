@@ -1,11 +1,14 @@
 # 里程碑与路线图
 
-| 项目 | 内容 |
-|---|---|
-| 文档状态 | 基于多个实施计划文件整理 |
-| 创建日期 | 2026-05-22 |
-| 版本 | v1.0 |
-| 状态 | 里程碑规划 |
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** 定义项目里程碑和路线图，包括 P0/P1/P2 阶段的核心交付物、技术栈和验收标准。
+
+**Architecture:** 基于 Flask + SQLite + kubectl + Arthas 的 K8s 智能诊断平台，采用分层架构，支持多用户认证和 RBAC。
+
+**Tech Stack:** Python, Flask, SQLite, kubectl, Arthas, 原生 JavaScript, HTML, CSS
+
+---
 
 ## 1. 项目总体路线图
 

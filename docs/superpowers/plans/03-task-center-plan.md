@@ -1,11 +1,14 @@
 # 任务中心实施计划
 
-| 项目 | 内容 |
-|---|---|
-| 文档状态 | 基于 2026-05-04 和 2026-05-13 文件整理 |
-| 创建日期 | 2026-05-22 |
-| 版本 | v1.0 |
-| 状态 | 实施计划 |
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** 任务中心负责 run 生命周期、日志、调度、清理、产物索引，不直接执行 kubectl、不直接维护 port-forward、不直接执行 Arthas HTTP 细节。
+
+**Architecture:** 任务中心作为执行记录和调度中心，与连接中心、诊断中心、工具箱明确边界。统一执行日志以 `task_logs` 作为权威表，支持即时诊断和定时任务。
+
+**Tech Stack:** Python, Flask, SQLite, pytest
+
+---
 
 ## 1. 目标
 

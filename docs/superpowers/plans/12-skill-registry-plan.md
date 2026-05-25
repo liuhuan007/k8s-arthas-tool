@@ -1,11 +1,14 @@
 # Skill Registry 实施计划
 
-| 项目 | 内容 |
-|---|---|
-| 文档状态 | 基于 12-skill-registry-workflow-engine-gateway.md 设计文档整理 |
-| 创建日期 | 2026-05-24 |
-| 版本 | v1.0 |
-| 状态 | 实施计划 |
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** 实现 Skill Registry + Workflow Engine + Agent Tool Gateway，包括导入、校验、版本化、发布、DSL 执行、受控工具暴露等。
+
+**Architecture:** 系统核心抽象层，定义诊断能力的注册、执行和安全暴露。采用分层设计，支持管理态和生产执行态分离。
+
+**Tech Stack:** Python, SQLite, 异步编程, DSL 执行引擎
+
+---
 
 ## 1. 目标
 

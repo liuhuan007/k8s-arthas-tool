@@ -1,11 +1,14 @@
 # 数据模型实施计划
 
-| 项目 | 内容 |
-|---|---|
-| 文档状态 | 基于 06-data-model.md 设计文档整理 |
-| 创建日期 | 2026-05-24 |
-| 版本 | v1.0 |
-| 状态 | 实施计划 |
+> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+
+**Goal:** 实现数据模型设计，包括新增表结构、现有表扩展、索引优化、数据迁移脚本和数据初始化策略。
+
+**Architecture:** 数据模型作为系统基础层，为所有业务模块提供数据存储和查询支持。采用 SQLite 数据库，WAL 模式，支持高性能并发读写。
+
+**Tech Stack:** Python, SQLite, pytest
+
+---
 
 ## 1. 目标
 
@@ -331,17 +334,153 @@ def init_diagnosis_capabilities():
 
 ### 任务 1：创建数据库迁移脚本
 
-**文件：**
-- 修改：`models/db.py`
-- 创建：`tests/test_db_migration.py`
+**Files:**
+- Modify: `models/db.py`
+- Create: `tests/test_db_migration.py`
 
-**步骤：**
-1. 设计迁移脚本框架
-2. 实现新表创建函数
-3. 实现现有表扩展函数
-4. 实现索引创建函数
-5. 编写迁移测试
-6. 验证迁移脚本幂等性
+**Step 1: Write the failing test**
+
+```python
+# tests/test_db_migration.py
+
+import pytest
+from models.db import get_db_connection, migrate_database
+
+def test_migrate_database_creates_tables():
+    """Test that migrate_database creates all required tables"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 执行迁移
+    migrate_database()
+    
+    # 检查表是否存在
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = {row[0] for row in cursor.fetchall()}
+    
+    assert 'skill_registry' in tables
+    assert 'diagnosis_capabilities' in tables
+    assert 'step_logs' in tables
+    assert 'tool_packages' in tables
+    
+    conn.close()
+
+def test_migrate_database_is_idempotent():
+    """Test that migrate_database can be run multiple times safely"""
+    conn = get_db_connection()
+    
+    # 执行两次迁移
+    migrate_database()
+    migrate_database()
+    
+    # 检查表是否存在
+    cursor = conn.cursor()
+    cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+    tables = {row[0] for row in cursor.fetchall()}
+    
+    assert 'skill_registry' in tables
+    assert 'diagnosis_capabilities' in tables
+    
+    conn.close()
+```
+
+**Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_db_migration.py::test_migrate_database_creates_tables -v`
+Expected: FAIL with "migrate_database not defined"
+
+**Step 3: Write minimal implementation**
+
+```python
+# models/db.py
+
+def migrate_database():
+    """数据库迁移主函数"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    # 1. 创建新表
+    create_skill_registry_table(cursor)
+    create_diagnosis_capabilities_table(cursor)
+    create_step_logs_table(cursor)
+    create_tool_packages_table(cursor)
+    
+    # 2. 扩展现有表
+    extend_connections_table(cursor)
+    extend_arthas_commands_table(cursor)
+    extend_audit_logs_table(cursor)
+    
+    # 3. 创建索引
+    create_indexes(cursor)
+    
+    # 4. 数据迁移
+    migrate_existing_data(cursor)
+    
+    # 5. 提交事务
+    conn.commit()
+    conn.close()
+
+def create_skill_registry_table(cursor):
+    """创建 skill_registry 表"""
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS skill_registry (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            version TEXT NOT NULL,
+            description TEXT,
+            category TEXT,
+            level INTEGER,
+            risk_level TEXT,
+            estimated_duration INTEGER,
+            source TEXT,
+            status TEXT DEFAULT 'draft',
+            dsl TEXT,
+            parameters_schema TEXT,
+            llm_prompt TEXT,
+            arthas_command TEXT,
+            handler TEXT,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(name, version)
+        )
+    ''')
+
+def create_diagnosis_capabilities_table(cursor):
+    """创建 diagnosis_capabilities 表"""
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS diagnosis_capabilities (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            skill_id INTEGER,
+            name TEXT NOT NULL,
+            type TEXT NOT NULL,
+            category TEXT NOT NULL,
+            level INTEGER NOT NULL DEFAULT 1,
+            risk_level TEXT DEFAULT 'low',
+            parameters_schema TEXT DEFAULT '{}',
+            description TEXT,
+            estimated_duration INTEGER DEFAULT 10,
+            enabled INTEGER DEFAULT 1,
+            created_by INTEGER,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (skill_id) REFERENCES skill_registry(id),
+            FOREIGN KEY (created_by) REFERENCES users(id)
+        )
+    ''')
+```
+
+**Step 4: Run test to verify it passes**
+
+Run: `pytest tests/test_db_migration.py::test_migrate_database_creates_tables -v`
+Expected: PASS
+
+**Step 5: Commit**
+
+```bash
+git add models/db.py tests/test_db_migration.py
+git commit -m "feat: add database migration script"
+```
 
 ### 任务 2：实现 skill_registry 表
 
