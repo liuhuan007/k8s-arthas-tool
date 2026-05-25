@@ -529,12 +529,264 @@ def check_pod():
 _connections: Dict[str, dict] = {}
 _connections_lock = threading.Lock()
 
+# Phase 5: 连接健康状态缓存
+# 格式: {conn_id: {"status": "healthy"|"unhealthy"|"unknown", "last_check_at": str, "latency_ms": float|None}}
+_conn_health: Dict[str, dict] = {}
+_conn_health_lock = threading.Lock()
+
+# Phase 5: 连接恢复状态
+_recovery_status: Dict[str, dict] = {"recovered": [], "stale": [], "completed": False}
+
+# Phase 5: TTL 清理配置 (分钟)
+_TTL_CLEANUP_INTERVAL_SECONDS = 300  # 5 分钟
+_DEFAULT_TTL_THRESHOLD_MINUTES = 30  # 默认 30 分钟过期阈值
+
 # ✅ 关键修复: 初始化 ConnectionStateManager
 from backend.core.connection_state import ConnectionStateManager
 _state_manager = ConnectionStateManager(db)
 # 启动 TTL 清理 (每 30 分钟)
 _state_manager.schedule_ttl_cleanup(interval_seconds=1800)
 log.info("ConnectionStateManager initialized with TTL cleanup (30min interval)")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Phase 5: 连接中心增强 — 健康检查 / TTL 清理 / 状态恢复
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def _health_check_worker():
+    """后台线程：每 30 秒检测活跃连接的 Arthas HTTP 可达性"""
+    while True:
+        time.sleep(30)
+        try:
+            # 读取当前活跃连接快照
+            with _connections_lock:
+                snapshot = {cid: entry.copy() for cid, entry in _connections.items()}
+
+            for conn_id, entry in snapshot.items():
+                conn = entry.get('conn')
+                status = 'unknown'
+                latency_ms = None
+                now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+                if conn and hasattr(conn, 'http_client') and conn.http_client:
+                    try:
+                        start = time.time()
+                        # 通过 Arthas HTTP 的 version 命令检测可达性
+                        result = conn.http_client.exec_once('version') if hasattr(conn.http_client, 'exec_once') else None
+                        elapsed = (time.time() - start) * 1000
+                        if result and isinstance(result, dict) and result.get('state') == 'SUCCEEDED':
+                            status = 'healthy'
+                            latency_ms = round(elapsed, 2)
+                        else:
+                            status = 'unhealthy'
+                    except Exception as e:
+                        log.debug("[health_check] Connection %s check failed: %s", conn_id, e)
+                        status = 'unhealthy'
+                else:
+                    status = 'unknown'
+
+                with _conn_health_lock:
+                    _conn_health[conn_id] = {
+                        "status": status,
+                        "last_check_at": now_str,
+                        "latency_ms": latency_ms,
+                    }
+
+            # 清理已不在 _connections 中的健康记录
+            with _conn_health_lock:
+                stale_keys = [k for k in _conn_health if k not in snapshot]
+                for k in stale_keys:
+                    del _conn_health[k]
+
+        except Exception as e:
+            log.error("[health_check] Background health check error: %s", e, exc_info=True)
+
+
+def _ttl_cleanup_worker():
+    """后台线程：每 5 分钟检查过期连接并清理"""
+    while True:
+        time.sleep(_TTL_CLEANUP_INTERVAL_SECONDS)
+        try:
+            now = datetime.now()
+            threshold = _DEFAULT_TTL_THRESHOLD_MINUTES
+            cutoff = now.strftime('%Y-%m-%d %H:%M:%S')
+
+            # 查找 last_active_at 超过阈值的连接
+            rows = db.fetch_all(
+                'SELECT id, last_active_at, ttl_hours FROM connections '
+                'WHERE status NOT IN (?, ?) AND last_active_at IS NOT NULL',
+                ('disconnected', 'failed')
+            )
+
+            expired_ids = []
+            for row in (rows or []):
+                conn_id = row.get('id', '')
+                last_active = row.get('last_active_at')
+                ttl_hours = row.get('ttl_hours', 0)
+
+                if not last_active:
+                    continue
+
+                # 如果连接有自定义 TTL，使用自定义 TTL；否则使用默认阈值
+                if ttl_hours and ttl_hours > 0:
+                    ttl_minutes = ttl_hours * 60
+                else:
+                    ttl_minutes = threshold
+
+                try:
+                    last_active_dt = datetime.fromisoformat(last_active.replace('Z', '+00:00'))
+                    if last_active_dt.tzinfo is None:
+                        from datetime import timezone as _tz
+                        last_active_dt = last_active_dt.replace(tzinfo=_tz.utc)
+                    elapsed_minutes = (datetime.now(_tz.utc) - last_active_dt).total_seconds() / 60
+                    if elapsed_minutes > ttl_minutes:
+                        expired_ids.append(conn_id)
+                except (ValueError, TypeError):
+                    continue
+
+            for conn_id in expired_ids:
+                # 清理内存
+                with _connections_lock:
+                    entry = _connections.pop(conn_id, None)
+                if entry:
+                    conn = entry.get('conn')
+                    if conn:
+                        try:
+                            conn.disconnect()
+                        except Exception as e:
+                            log.warning("[ttl_cleanup] Disconnect %s failed: %s", conn_id, e)
+
+                # 清理健康记录
+                with _conn_health_lock:
+                    _conn_health.pop(conn_id, None)
+
+                # 清理数据库
+                db.update('connections', {
+                    'status': 'disconnected',
+                    'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                }, 'id = ?', (conn_id,))
+                log.info("[ttl_cleanup] Expired connection cleaned: %s", conn_id)
+
+            if expired_ids:
+                log.info("[ttl_cleanup] Cleaned %d expired connections", len(expired_ids))
+
+        except Exception as e:
+            log.error("[ttl_cleanup] Background TTL cleanup error: %s", e, exc_info=True)
+
+
+def _recover_connections_on_startup():
+    """服务启动时从数据库恢复上次活跃的连接"""
+    recovered = []
+    stale = []
+
+    try:
+        rows = db.fetch_all(
+            'SELECT id, cluster_name, namespace, pod_name, container_name, '
+            'user_id, status, level, local_port, java_pid FROM connections '
+            'WHERE status IN (?, ?)',
+            ('ready', 'connected')
+        )
+    except Exception as e:
+        log.error("[recovery] Failed to load connections from DB: %s", e)
+        _recovery_status["completed"] = True
+        return
+
+    for row in (rows or []):
+        conn_id = row.get('id', '')
+        cluster_name = row.get('cluster_name', '')
+        namespace = row.get('namespace', '')
+        pod_name = row.get('pod_name', '')
+        container_name = row.get('container_name', '')
+
+        if not conn_id or not cluster_name:
+            continue
+
+        try:
+            runner, err = _make_runner(cluster_name)
+            if err:
+                log.warning("[recovery] Cannot create runner for %s: %s", conn_id, err)
+                stale.append(conn_id)
+                db.update('connections', {
+                    'status': 'stale',
+                    'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                }, 'id = ?', (conn_id,))
+                continue
+
+            # 验证 Pod 是否存活
+            target = PodTarget(
+                cluster_name=cluster_name,
+                namespace=namespace,
+                pod_name=pod_name,
+                container=container_name or '',
+            )
+
+            rc, out, _ = runner._run(
+                ["get", "pod", pod_name, "-n", namespace,
+                 "-o", "jsonpath={.status.phase}"],
+                timeout=8
+            )
+
+            if rc != 0 or not out.strip():
+                log.info("[recovery] Pod %s not found or unreachable, marking stale", conn_id)
+                stale.append(conn_id)
+                db.update('connections', {
+                    'status': 'stale',
+                    'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                }, 'id = ?', (conn_id,))
+                continue
+
+            phase = out.strip()
+            if phase != 'Running':
+                log.info("[recovery] Pod %s phase=%s, marking stale", conn_id, phase)
+                stale.append(conn_id)
+                db.update('connections', {
+                    'status': 'stale',
+                    'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                }, 'id = ?', (conn_id,))
+                continue
+
+            # Pod 存活，尝试恢复 Arthas 连接
+            conn = ArthasConnection(runner, target, state_manager=_state_manager)
+            conn.connection_id = conn_id
+
+            # 尝试连接（非阻塞验证）
+            ok, msg = conn.connect()
+            if ok:
+                with _connections_lock:
+                    _connections[conn_id] = {"conn": conn, "user_id": row.get('user_id')}
+                recovered.append(conn_id)
+                db.update('connections', {
+                    'status': 'recovered',
+                    'last_active_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                    'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                }, 'id = ?', (conn_id,))
+                log.info("[recovery] Connection recovered: %s", conn_id)
+            else:
+                stale.append(conn_id)
+                db.update('connections', {
+                    'status': 'stale',
+                    'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                }, 'id = ?', (conn_id,))
+                log.info("[recovery] Connection stale (connect failed): %s — %s", conn_id, msg)
+
+        except Exception as e:
+            log.error("[recovery] Error recovering %s: %s", conn_id, e)
+            stale.append(conn_id)
+
+    _recovery_status["recovered"] = recovered
+    _recovery_status["stale"] = stale
+    _recovery_status["completed"] = True
+    log.info("[recovery] Completed: %d recovered, %d stale", len(recovered), len(stale))
+
+
+# 启动后台线程
+_health_check_thread = threading.Thread(target=_health_check_worker, daemon=True, name="health-check")
+_health_check_thread.start()
+log.info("Health check background thread started (interval: 30s)")
+
+_ttl_cleanup_thread = threading.Thread(target=_ttl_cleanup_worker, daemon=True, name="ttl-cleanup")
+_ttl_cleanup_thread.start()
+log.info("TTL cleanup background thread started (interval: %ds)", _TTL_CLEANUP_INTERVAL_SECONDS)
 
 
 # 注册 Pod 连接 API（轻量级，无需 Arthas）
@@ -981,7 +1233,125 @@ def check_connections_health():
     return jsonify({'results': results})
 
 
-@app.route('/api/arthas/commands', methods=['GET'])
+# ── Phase 5: 健康状态查询 ────────────────────────────────────────────────
+
+@app.route('/api/arthas/connections/health', methods=['GET'])
+@login_required
+def get_connections_health():
+    """返回所有连接的后台健康检查状态"""
+    with _conn_health_lock:
+        health_snapshot = dict(_conn_health)
+
+    # 只返回当前用户有权限查看的连接健康状态
+    result = {}
+    for conn_id, health in health_snapshot.items():
+        entry = _connections.get(conn_id)
+        if entry:
+            # 权限检查
+            if not current_user.is_admin and entry.get('user_id') != current_user.id:
+                continue
+        result[conn_id] = health
+
+    return jsonify({
+        "ok": True,
+        "health": result,
+        "checked_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+    })
+
+
+# ── Phase 5: TTL 手动清理 ──────────────────────────────────────────────
+
+@app.route('/api/arthas/connections/cleanup-ttl', methods=['POST'])
+@login_required
+def cleanup_ttl_connections():
+    """手动触发 TTL 过期连接清理"""
+    d = request.json or {}
+    threshold_minutes = d.get('threshold_minutes', _DEFAULT_TTL_THRESHOLD_MINUTES)
+    now = datetime.now()
+    cleaned = []
+
+    # 查找过期连接
+    rows = db.fetch_all(
+        'SELECT id, last_active_at, ttl_hours, user_id FROM connections '
+        'WHERE status NOT IN (?, ?) AND last_active_at IS NOT NULL',
+        ('disconnected', 'failed')
+    )
+
+    for row in (rows or []):
+        conn_id = row.get('id', '')
+        last_active = row.get('last_active_at')
+        ttl_hours = row.get('ttl_hours', 0)
+
+        if not last_active:
+            continue
+
+        # 权限检查
+        if not current_user.is_admin and row.get('user_id') != current_user.id:
+            continue
+
+        # 使用自定义 TTL 或手动传入的阈值
+        if ttl_hours and ttl_hours > 0:
+            ttl_min = ttl_hours * 60
+        else:
+            ttl_min = threshold_minutes
+
+        try:
+            last_active_dt = datetime.fromisoformat(last_active.replace('Z', '+00:00'))
+            if last_active_dt.tzinfo is None:
+                from datetime import timezone as _tz
+                last_active_dt = last_active_dt.replace(tzinfo=_tz.utc)
+            elapsed_minutes = (datetime.now(_tz.utc) - last_active_dt).total_seconds() / 60
+            if elapsed_minutes <= ttl_min:
+                continue
+        except (ValueError, TypeError):
+            continue
+
+        # 清理内存
+        with _connections_lock:
+            entry = _connections.pop(conn_id, None)
+        if entry:
+            conn = entry.get('conn')
+            if conn:
+                try:
+                    conn.disconnect()
+                except Exception as e:
+                    log.warning("[cleanup-ttl] Disconnect %s failed: %s", conn_id, e)
+
+        # 清理健康记录
+        with _conn_health_lock:
+            _conn_health.pop(conn_id, None)
+
+        # 清理数据库
+        db.update('connections', {
+            'status': 'disconnected',
+            'updated_at': now.strftime('%Y-%m-%d %H:%M:%S'),
+        }, 'id = ?', (conn_id,))
+        cleaned.append(conn_id)
+
+    return jsonify({
+        "ok": True,
+        "cleaned": cleaned,
+        "count": len(cleaned),
+        "threshold_minutes": threshold_minutes,
+    })
+
+
+# ── Phase 5: 连接恢复状态 ─────────────────────────────────────────────
+
+@app.route('/api/arthas/connections/recovery-status', methods=['GET'])
+@login_required
+def get_recovery_status():
+    """返回连接恢复状态"""
+    return jsonify({
+        "ok": True,
+        "recovery": {
+            "completed": _recovery_status.get("completed", False),
+            "recovered": _recovery_status.get("recovered", []),
+            "stale": _recovery_status.get("stale", []),
+            "recovered_count": len(_recovery_status.get("recovered", [])),
+            "stale_count": len(_recovery_status.get("stale", [])),
+        },
+    })
 @login_required
 def get_arthas_commands():
     """获取 Arthas 命令历史"""
@@ -2173,6 +2543,8 @@ if __name__ == "__main__":
     db.initialize()
     # 从 clusters.json 同步到数据库（仅补充缺失的记录）
     _sync_clusters_to_db()
+    # Phase 5: 从数据库恢复上次活跃的连接
+    _recover_connections_on_startup()
     # 校验生产环境安全配置
     Config.validate_production()
     print(f"🚀  K8s Arthas Tool v2026.03.23  →  http://{args.host}:{args.port}")

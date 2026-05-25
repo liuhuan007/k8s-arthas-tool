@@ -1,7 +1,7 @@
 /**
  * 连接管理组件
  * 处理连接列表、连接切换、连接删除
- * 
+ *
  * 连接层级 (level):
  *   'pod'    — 仅 Pod 连接（kubectl exec 通道）
  *   'arthas' — Pod + Arthas 连接（深度诊断）
@@ -209,14 +209,21 @@ function upgradeConnectionFromList(connId) {
 }
 
 async function deleteConnection(connId) {
-  if (!confirm('确定删除此连接？')) return;
-  
+  const confirmed = await confirmModal({
+    title: '删除连接',
+    message: '确定删除此连接？此操作不可撤销。',
+    confirmText: '删除',
+    cancelText: '取消',
+    type: 'danger',
+  });
+  if (!confirmed) return;
+
   // 如果删除的是当前连接，先断开
   if (window._currentConnId === connId) {
     await stopPoll();
     window._currentConnId = null;
   }
-  
+
   removeConnection(connId);
   renderConnList();
 }
@@ -237,9 +244,10 @@ if (typeof module !== 'undefined' && module.exports) {
     // ✅ renderConnList 已移至 app-ui.js
     addConnection,
     removeConnection,
-    switchConnection,
     deleteConnection,
-    upgradeConnectionFromList
+    upgradeConnectionFromList,
+    confirmModal,
+    hasActiveDiagnosis,
   };
 }
 
@@ -248,3 +256,187 @@ window.upgradeConnectionFromList = upgradeConnectionFromList;
 window.inferConnLevel = inferConnLevel;
 window.getConnRuntime = getConnRuntime;
 window.canUpgradeConnection = canUpgradeConnection;
+window.confirmModal = confirmModal;
+window.hasActiveDiagnosis = hasActiveDiagnosis;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 5: 自定义确认对话框 (不用原生 alert/confirm)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * 自定义确认对话框
+ * @param {object} options
+ * @param {string} options.title - 对话框标题
+ * @param {string} options.message - 确认消息内容
+ * @param {string} [options.confirmText='确认'] - 确认按钮文字
+ * @param {string} [options.cancelText='取消'] - 取消按钮文字
+ * @param {string} [options.type='default'] - 类型: default/danger/warning/info
+ * @param {string} [options.detail] - 可选的详细说明文本
+ * @returns {Promise<boolean>} 用户是否确认
+ */
+function confirmModal({ title = '确认', message = '', confirmText = '确认', cancelText = '取消', type = 'default', detail = '' } = {}) {
+  return new Promise((resolve) => {
+    // 如果已有 modal，先移除
+    const existing = document.getElementById('conn-confirm-modal');
+    if (existing) existing.remove();
+
+    const typeColors = {
+      default: '#4a90d9',
+      danger: '#e74c3c',
+      warning: '#f39c12',
+      info: '#3498db',
+    };
+    const btnColor = typeColors[type] || typeColors.default;
+    const iconMap = {
+      default: '❓',
+      danger: '⚠️',
+      warning: '⚡',
+      info: 'ℹ️',
+    };
+    const icon = iconMap[type] || iconMap.default;
+
+    const modal = document.createElement('div');
+    modal.id = 'conn-confirm-modal';
+    modal.style.cssText = `
+      position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+      background: rgba(0,0,0,0.5); z-index: 10001;
+      display: flex; align-items: center; justify-content: center;
+      animation: fadeIn 0.15s ease;
+    `;
+    modal.innerHTML = `
+      <div style="
+        background: #2a2a3e; border-radius: 12px; padding: 28px 32px;
+        max-width: 420px; width: 90%; box-shadow: 0 20px 60px rgba(0,0,0,0.5);
+        border: 1px solid rgba(255,255,255,0.1);
+        animation: slideUp 0.2s ease;
+      ">
+        <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 16px;">
+          <span style="font-size: 24px;">${icon}</span>
+          <h3 style="margin: 0; color: #e8e8f0; font-size: 18px; font-weight: 600;">${escHtml(title)}</h3>
+        </div>
+        <p style="margin: 0 0 8px; color: #c0c0d0; font-size: 14px; line-height: 1.6;">${escHtml(message)}</p>
+        ${detail ? `<p style="margin: 0 0 20px; color: #888; font-size: 12px; line-height: 1.5;">${escHtml(detail)}</p>` : '<div style="margin-bottom: 20px;"></div>'}
+        <div style="display: flex; justify-content: flex-end; gap: 10px;">
+          <button id="confirm-cancel-btn" style="
+            padding: 8px 20px; border-radius: 6px; border: 1px solid rgba(255,255,255,0.15);
+            background: transparent; color: #c0c0d0; cursor: pointer; font-size: 14px;
+            transition: background 0.2s;
+          " onmouseover="this.style.background='rgba(255,255,255,0.05)'"
+             onmouseout="this.style.background='transparent'">${escHtml(cancelText)}</button>
+          <button id="confirm-ok-btn" style="
+            padding: 8px 20px; border-radius: 6px; border: none;
+            background: ${btnColor}; color: #fff; cursor: pointer; font-size: 14px; font-weight: 500;
+            transition: opacity 0.2s;
+          " onmouseover="this.style.opacity='0.85'"
+             onmouseout="this.style.opacity='1'">${escHtml(confirmText)}</button>
+        </div>
+      </div>
+    `;
+
+    // 简单 HTML 转义
+    function escHtml(s) {
+      return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    const close = (result) => {
+      modal.style.opacity = '0';
+      modal.style.transition = 'opacity 0.15s';
+      setTimeout(() => modal.remove(), 150);
+      resolve(result);
+    };
+
+    modal.querySelector('#confirm-cancel-btn').onclick = () => close(false);
+    modal.querySelector('#confirm-ok-btn').onclick = () => close(true);
+    modal.onclick = (e) => { if (e.target === modal) close(false); };
+
+    // ESC 键关闭
+    const onKeydown = (e) => {
+      if (e.key === 'Escape') {
+        document.removeEventListener('keydown', onKeydown);
+        close(false);
+      }
+    };
+    document.addEventListener('keydown', onKeydown);
+
+    document.body.appendChild(modal);
+    modal.querySelector('#confirm-ok-btn').focus();
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Phase 5: 连接切换确认 (在切换前检查是否有活跃诊断任务)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/**
+ * 检查是否有活跃的诊断任务
+ * @returns {boolean}
+ */
+function hasActiveDiagnosis() {
+  // 检查连接状态栏或诊断状态
+  if (typeof ConnectionStore !== 'undefined') {
+    const state = ConnectionStore.getConnectionState();
+    // 如果处于 Arthas 就绪状态，可能有活跃任务
+    if (state === 'arthas_ready') {
+      // 检查是否有执行中的诊断
+      const connState = window._connState;
+      if (connState === 'running' || connState === 'executing') {
+        return true;
+      }
+    }
+  }
+  // 检查全局状态
+  if (window._activeDiagnosis || window._diagnosisRunning) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Phase 5: 包装原始 switchConnection，添加切换确认对话框
+ * 在 DOMContentLoaded 后（app-ui.js 已加载）绑定到 window
+ */
+document.addEventListener('DOMContentLoaded', () => {
+  // 延迟绑定，确保 app-ui.js 中的 switchConnection 已注册
+  setTimeout(() => {
+    const _originalSwitchConnection = window.switchConnection;
+    if (typeof _originalSwitchConnection !== 'function') return;
+
+    window.switchConnection = async function(connId) {
+      // 如果切换到当前连接，直接执行
+      const currentId = (typeof ConnectionStore !== 'undefined')
+        ? ConnectionStore.getCurrentConnId()
+        : window._currentConnId;
+      if (connId === currentId) {
+        return _originalSwitchConnection(connId);
+      }
+
+      // 检查是否有活跃的诊断任务
+      const isActive = hasActiveDiagnosis();
+      const targetConn = (window._connections || []).find(c => c.id === connId);
+      const targetLabel = targetConn
+        ? `${targetConn.cluster_name || ''} / ${targetConn.namespace || ''} / ${targetConn.pod_name || ''}`
+        : connId;
+
+      let detail = '';
+      if (isActive) {
+        detail = '当前有活跃的诊断任务正在进行中，切换连接可能导致任务中断。';
+      }
+
+      const confirmed = await confirmModal({
+        title: '切换连接',
+        message: `确定要切换到连接 "${targetLabel}" 吗？`,
+        confirmText: '切换',
+        cancelText: '取消',
+        type: isActive ? 'warning' : 'default',
+        detail,
+      });
+
+      if (confirmed) {
+        return _originalSwitchConnection(connId);
+      }
+    };
+
+    // 确保全局引用也更新
+    window.switchConnection = window.switchConnection;
+  }, 100);
+});

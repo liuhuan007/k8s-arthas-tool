@@ -28,9 +28,13 @@ const ConnectionStore = {
     podConnId: null,
     connHealth: {},
   },
-  
+
   // 监听器列表
   _listeners: [],
+
+  // Phase 5: 多标签页同步 BroadcastChannel
+  _broadcastChannel: null,
+  _isSyncingFromBroadcast: false,
   
   /**
    * 获取完整状态
@@ -40,17 +44,17 @@ const ConnectionStore = {
   },
   
   /**
-   * 更新状态 (触发所有监听器)
+   * 更新状态 (触发所有监听器 + 广播到其他标签页)
    */
   setState(updates) {
     const oldState = { ...this._state };
     this._state = { ...this._state, ...updates };
-    
-    // ✅ 关键修复: 同步到 window 全局变量
-    if (updates.currentConnId !== undefined) {
-      window._currentConnId = updates.currentConnId;
-    }
-    
+
+    // ✅ 关键修复: 所有状态更新都同步到 window 全局变量。
+    // conn-status-bar / connection-guard 等旧组件仍从 window.* 读取状态，
+    // 只同步 currentConnId 会导致连接层级显示滞后（例如已 Arthas 就绪仍显示 Pod连接）。
+    this.syncToGlobal();
+
     // 触发所有监听器
     this._listeners.forEach(fn => {
       try {
@@ -59,9 +63,14 @@ const ConnectionStore = {
         console.error('[ConnectionStore] Listener error:', e);
       }
     });
-    
+
     // 持久化到 localStorage
     this._persist();
+
+    // Phase 5: 广播状态变化到其他标签页 (非来自广播的更新才广播)
+    if (!this._isSyncingFromBroadcast) {
+      this._broadcastStateChanges(updates, oldState);
+    }
   },
   
   /**
@@ -209,7 +218,7 @@ const ConnectionStore = {
         this._state.podPhase = data.podPhase || '';
         this._state.podConnId = data.podConnId || null;
         this._state.connHealth = data.connHealth || {};
-        
+
         console.log('[ConnectionStore] Loaded (connState & runtimeInfo cleared, currentConnId=', this._state.currentConnId, ')');
       } else {
         console.log('[ConnectionStore] No stored data found');
@@ -218,6 +227,9 @@ const ConnectionStore = {
       console.error('[ConnectionStore] Init error:', e);
       this._state.connections = [];
     }
+
+    // Phase 5: 初始化 BroadcastChannel 多标签页同步
+    this._initBroadcastChannel();
   },
   
   // ── 兼容性方法 (逐步替换旧代码) ───────────────────────────────────
@@ -247,7 +259,143 @@ const ConnectionStore = {
     if (window._podConnId) this._state.podConnId = window._podConnId;
     if (window._connHealth) this._state.connHealth = window._connHealth;
   },
-  
+
+  // ── Phase 5: 多标签页 BroadcastChannel 同步 ────────────────────────────
+
+  /**
+   * 初始化 BroadcastChannel 用于跨标签页连接状态同步
+   */
+  _initBroadcastChannel() {
+    if (this._broadcastChannel) return; // 已初始化
+
+    try {
+      this._broadcastChannel = new BroadcastChannel('arthas-connection-sync');
+      this._broadcastChannel.onmessage = (event) => {
+        this._handleBroadcastMessage(event.data);
+      };
+      console.log('[ConnectionStore] BroadcastChannel initialized for multi-tab sync');
+    } catch (e) {
+      console.warn('[ConnectionStore] BroadcastChannel not supported:', e);
+      this._broadcastChannel = null;
+    }
+  },
+
+  /**
+   * 广播状态变化到其他标签页
+   * @param {object} updates - 本次 setState 的更新字段
+   * @param {object} oldState - 更新前的完整状态
+   */
+  _broadcastStateChanges(updates, oldState) {
+    if (!this._broadcastChannel) return;
+
+    // 确定事件类型
+    let eventType = null;
+    let payload = {};
+
+    if ('currentConnId' in updates && updates.currentConnId !== oldState.currentConnId) {
+      eventType = 'connection-switch';
+      payload = {
+        currentConnId: updates.currentConnId,
+        previousConnId: oldState.currentConnId,
+      };
+    } else if ('connections' in updates) {
+      const oldIds = (oldState.connections || []).map(c => c.id).sort().join(',');
+      const newIds = (updates.connections || []).map(c => c.id).sort().join(',');
+      if (oldIds !== newIds) {
+        const added = (updates.connections || []).filter(c => !oldIds.includes(c.id));
+        const removed = (oldState.connections || []).filter(c => !newIds.includes(c.id));
+        if (added.length > 0) {
+          eventType = 'connection-added';
+          payload = { connections: updates.connections, added };
+        } else if (removed.length > 0) {
+          eventType = 'connection-removed';
+          payload = { connections: updates.connections, removed };
+        }
+      }
+    } else if ('connHealth' in updates) {
+      eventType = 'health-updated';
+      payload = { connHealth: updates.connHealth };
+    }
+
+    if (!eventType) return;
+
+    try {
+      this._broadcastChannel.postMessage({
+        type: eventType,
+        payload,
+        timestamp: Date.now(),
+      });
+    } catch (e) {
+      console.warn('[ConnectionStore] Broadcast failed:', e);
+    }
+  },
+
+  /**
+   * 处理从其他标签页收到的广播消息
+   * @param {object} message - { type, payload, timestamp }
+   */
+  _handleBroadcastMessage(message) {
+    if (!message || !message.type) return;
+
+    // 标记为正在同步，避免无限广播循环
+    this._isSyncingFromBroadcast = true;
+
+    try {
+      switch (message.type) {
+        case 'connection-switch':
+          if (message.payload && message.payload.currentConnId) {
+            this._state.currentConnId = message.payload.currentConnId;
+            this.syncToGlobal();
+            this._persist();
+            this._notify();
+            console.log('[ConnectionStore] Synced connection switch from another tab:', message.payload.currentConnId);
+          }
+          break;
+
+        case 'connection-added':
+        case 'connection-removed':
+          if (message.payload && message.payload.connections) {
+            this._state.connections = message.payload.connections;
+            this.syncToGlobal();
+            this._persist();
+            this._notify();
+            console.log('[ConnectionStore] Synced connection list from another tab (' + message.type + ')');
+          }
+          break;
+
+        case 'health-updated':
+          if (message.payload && message.payload.connHealth) {
+            this._state.connHealth = message.payload.connHealth;
+            this.syncToGlobal();
+            this._persist();
+            this._notify();
+            console.log('[ConnectionStore] Synced health data from another tab');
+          }
+          break;
+
+        default:
+          console.warn('[ConnectionStore] Unknown broadcast type:', message.type);
+      }
+    } catch (e) {
+      console.error('[ConnectionStore] Error handling broadcast:', e);
+    } finally {
+      this._isSyncingFromBroadcast = false;
+    }
+  },
+
+  /**
+   * 通知所有监听器 (内部方法，用于广播同步时触发本地监听器)
+   */
+  _notify() {
+    this._listeners.forEach(fn => {
+      try {
+        fn(this._state, { ...this._state });
+      } catch (e) {
+        console.error('[ConnectionStore] Listener error:', e);
+      }
+    });
+  },
+
 };
 
 // 导出
