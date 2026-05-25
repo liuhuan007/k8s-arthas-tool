@@ -2,36 +2,103 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>连接详情 - K8s Arthas Tool</title>
     <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
-    <button id="ai-drawer-btn" class="btn btn-icon" style="display:none">AI</button>
     <div id="connection-detail-container">
         <div class="connection-detail-header">
-            <h2>连接详情</h2>
-            <button id="back-btn" class="btn btn-secondary">返回</button>
+            <button id="back-btn" class="btn btn-secondary">← 返回</button>
+            <div class="detail-header-text">
+                <h2 id="detail-title">连接详情</h2>
+                <p id="detail-subtitle" class="detail-subtitle"></p>
+            </div>
         </div>
+
+        <!-- 连接基本信息 -->
         <div id="connection-info" class="connection-info">
-            <!-- 连接信息 -->
+            <!-- 由 JS 动态渲染 -->
         </div>
+
+        <!-- 操作区（健康检查、重新连接、删除连接） -->
+        <div id="ops-panel" class="ops-panel" style="display:none;">
+            <div class="ops-panel-header">
+                <span class="ops-panel-icon">🚀</span>
+                <span class="ops-panel-title">操作</span>
+            </div>
+            <div id="ops-actions" class="ops-actions">
+                <!-- 由 JS 动态渲染 -->
+            </div>
+        </div>
+
+        <!-- 健康状态面板 -->
+        <div id="health-panel" class="health-panel" style="display:none;">
+            <div class="health-panel-header">
+                <span class="health-panel-icon">💓</span>
+                <span class="health-panel-title">健康状态</span>
+                <button id="health-refresh-btn" class="btn btn-sm btn-secondary">刷新</button>
+            </div>
+            <div id="health-content" class="health-content">
+                <!-- 由 JS 动态渲染 -->
+            </div>
+        </div>
+
+        <!-- TTL 配置面板 -->
+        <div id="ttl-panel" class="ttl-panel" style="display:none;">
+            <div class="ttl-panel-header">
+                <span class="ttl-panel-icon">⏱</span>
+                <span class="ttl-panel-title">连接有效期 (TTL)</span>
+            </div>
+            <div id="ttl-content" class="ttl-content">
+                <!-- 由 JS 动态渲染 -->
+            </div>
+        </div>
+
+        <!-- 诊断能力入口 -->
+        <div id="capabilities-panel" class="capabilities-panel" style="display:none;">
+            <div class="capabilities-panel-header">
+                <span class="capabilities-panel-icon">🛠️</span>
+                <span class="capabilities-panel-title">诊断能力</span>
+            </div>
+            <div id="capabilities-grid" class="capabilities-grid">
+                <!-- 由 JS 动态渲染 -->
+            </div>
+        </div>
+
+        <!-- 运行中任务 -->
+        <div id="tasks-panel" class="tasks-panel" style="display:none;">
+            <div class="tasks-panel-header">
+                <span class="tasks-panel-icon">📦</span>
+                <span class="tasks-panel-title">运行中任务</span>
+                <span id="tasks-count" class="tasks-count"></span>
+            </div>
+            <div id="tasks-content" class="tasks-content">
+                <!-- 由 JS 动态渲染 -->
+            </div>
+        </div>
+
+        <!-- 两步连接 UI -->
         <div id="two-step-connection-container">
-            <!-- 两步连接 UI -->
+            <!-- 由两步连接组件渲染 -->
         </div>
     </div>
+
+    <!-- 核心脚本 -->
+    <script src="/static/js/core/api.js"></script>
+    <script src="/static/js/core/auth.js"></script>
+    <script src="/static/js/core/utils.js"></script>
+    <script src="/static/js/core/connection-store.js"></script>
+
+    <!-- 组件脚本 -->
     <script src="/static/js/components/page-shell.js"></script>
     <script src="/static/js/components/connection-page-context.js"></script>
     <script src="/static/js/components/two-step-connection.js"></script>
+    <script src="/static/js/components/connection-ttl-config.js"></script>
+    <script src="/static/js/components/broadcast-channel-manager.js"></script>
+    <script src="/static/js/components/connection-switch-confirm.js"></script>
+
+    <!-- 页面逻辑 -->
     <script src="/static/js/page-connection-detail.js"></script>
-    <!-- AI Drawer -->
-    <div id="ai-drawer" class="ai-drawer hidden">
-        <div class="ai-drawer-header">
-            <h3>AI 助手</h3>
-            <button id="close-ai-drawer" class="btn btn-icon">×</button>
-        </div>
-        <div class="ai-drawer-content">
-            <!-- AI 内容 -->
-        </div>
-    </div>
 </body>
 </html>

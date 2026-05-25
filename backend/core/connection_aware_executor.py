@@ -101,16 +101,16 @@ class ConnectionAwareExecutor:
                 'status': 'failed',
                 'error_message': 'Arthas 连接已断开',
                 'finished_at': datetime.now(),
-            }, {'id': execution_id})
+            }, 'id = ?', (execution_id,))
             
             # 获取能力类型
             capability = db.fetch_one(
-                'SELECT type FROM diagnosis_capabilities WHERE id = ?',
+                'SELECT category FROM diagnosis_capabilities WHERE id = ?',
                 (capability_id,)
             )
             
             # 如果是场景方案，清理已执行的命令
-            if capability and capability['type'] == 'scenario':
+            if capability and capability['category'] == 'scenario':
                 self._rollback_scenario_steps(execution_id)
         
         listener_id = ConnectionManager.register_listener(

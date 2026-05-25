@@ -66,11 +66,13 @@ def test_arthas_user_case_product_templates_are_seeded():
         'Heapdump 内存快照工具',
         'VMOption 运行时参数查看',
         'ClassLoader 类冲突排查',
+        '在线反编译 jad',
+        'CPU 火焰图',
     ]
     for name in expected:
-        assert name in TASK_CENTER
-    for command in ('thread -n 5', 'trace ', 'watch ', 'stack ', 'logger', 'heapdump', 'vmoption', 'classloader'):
-        assert command in TASK_CENTER
+        assert name in TASK_CENTER, f'Missing template: {name}'
+    for command in ('thread -n 5', 'trace ', 'watch ', 'stack ', 'logger', 'heapdump', 'vmoption', 'classloader', 'jad ', 'profiler '):
+        assert command in TASK_CENTER, f'Missing command: {command}'
 
 
 def test_user_case_capability_metadata_exists():
@@ -90,3 +92,52 @@ def test_upload_source_route_and_safe_java_source_validation_exist():
         except ValueError:
             continue
         raise AssertionError(f'{name} should be rejected')
+
+
+def test_distribution_history_route_exists():
+    """测试：分发历史 API 端点存在。"""
+    assert "@task_bp.route('/tool-packages/distributions'" in TASK_CENTER
+    assert 'list_distributions' in TASK_CENTER
+
+
+def test_distribute_response_includes_standardized_fields():
+    """测试：分发接口返回标准化字段。"""
+    # 检查 distribute_tool_package 返回结果包含所需字段
+    assert 'local_sha256' in TASK_CENTER
+    assert 'pod_sha256' in TASK_CENTER
+    assert 'pod_check_status' in TASK_CENTER
+    assert 'install_path' in TASK_CENTER
+    assert 'sha256_match' in TASK_CENTER
+
+
+def test_record_distribution_helper_exists():
+    """测试：_record_distribution 辅助函数存在。"""
+    assert '_record_distribution' in TASK_CENTER
+    assert 'tool_package_distributions' in TASK_CENTER
+
+
+def test_distribution_history_table_schema():
+    """测试：分发历史表结构正确。"""
+    # 检查表创建 SQL 包含必要字段
+    assert 'CREATE TABLE IF NOT EXISTS tool_package_distributions' in TASK_CENTER
+    assert 'package_id INTEGER' in TASK_CENTER
+    assert 'local_sha256 TEXT' in TASK_CENTER
+    assert 'pod_sha256 TEXT' in TASK_CENTER
+    assert 'pod_check_status TEXT' in TASK_CENTER
+    assert 'status TEXT' in TASK_CENTER
+    assert 'stderr TEXT' in TASK_CENTER
+
+
+def test_distribution_history_returns_correct_structure():
+    """测试：分发历史 API 返回正确结构。"""
+    # 检查 list_distributions 返回结构
+    assert "'distributions'" in TASK_CENTER
+    assert "'count'" in TASK_CENTER
+
+
+def test_distribute_records_history_on_success_and_failure():
+    """测试：分发成功和失败时都记录历史。"""
+    # 检查 distribute_tool_package 中有两次 _record_distribution 调用（成功和失败）
+    import re
+    count = len(re.findall(r'_record_distribution\(', TASK_CENTER))
+    assert count >= 3  # 至少 3 次调用：创建目录失败、复制失败、成功

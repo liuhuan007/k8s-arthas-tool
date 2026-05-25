@@ -8,6 +8,7 @@
  */
 (function() {
   'use strict';
+  console.log('[TaskCenter] loaded version 20260514b');
 
   /**
    * 初始化任务中心
@@ -43,35 +44,45 @@
     console.log('[TaskCenter] openCreateTaskModal called');
     const modal = document.createElement('div');
     modal.className = 'capability-modal-overlay';
+    modal.style.cssText = 'position:fixed;inset:0;z-index:12000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(5,8,14,.72);backdrop-filter:blur(8px)';
     modal.innerHTML = `
-      <div class="capability-modal">
+      <div class="capability-modal" style="width:min(720px,96vw);max-height:86vh;overflow:hidden;border:1px solid var(--border-color,var(--ln,#2a3a52));border-radius:12px;background:var(--bg-card,var(--bg1,#101827));box-shadow:0 24px 80px rgba(0,0,0,.48);display:flex;flex-direction:column">
         <div class="modal-header">
           <h3>创建任务</h3>
           <button class="btn-close" onclick="this.closest('.capability-modal-overlay').remove()">✕</button>
         </div>
-        <div class="modal-body" style="padding:20px">
+        <div class="modal-body" style="padding:20px;overflow:auto;max-height:calc(86vh - 80px)">
           <div class="form-group">
             <label class="form-label">任务名称 <span class="required">*</span></label>
             <input id="newTaskName" class="form-input" placeholder="例如：CPU 巡检">
           </div>
           <div class="form-group">
-            <label class="form-label">任务类型</label>
-            <select id="newTaskType" class="form-input">
-              <option value="script">脚本任务</option>
-              <option value="pod_command">Pod 命令</option>
-              <option value="diagnosis">诊断能力</option>
+            <label class="form-label">执行位置</label>
+            <select id="newTaskExecMode" class="form-input" onchange="document.getElementById('newTaskPodTarget').style.display=this.value==='pod'?'block':'none'">
+              <option value="node">服务端本机</option>
+              <option value="pod">Pod 内执行</option>
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label">执行模式</label>
-            <select id="newTaskExecMode" class="form-input">
-              <option value="manual">手动执行</option>
-              <option value="scheduled">定时执行</option>
+            <label class="form-label">脚本运行时</label>
+            <select id="newTaskRuntime" class="form-input">
+              <option value="python">Python</option>
+              <option value="shell">Shell</option>
             </select>
           </div>
           <div class="form-group">
-            <label class="form-label">描述</label>
-            <textarea id="newTaskDesc" class="form-input" rows="3" placeholder="任务说明"></textarea>
+            <label class="form-label">超时时间(秒)</label>
+            <input id="newTaskTimeout" class="form-input" type="number" min="1" max="600" value="60">
+          </div>
+          <div id="newTaskPodTarget" style="display:none">
+            <div class="form-group"><label class="form-label">集群名称</label><input id="newTaskCluster" class="form-input" placeholder="cluster name"></div>
+            <div class="form-group"><label class="form-label">命名空间</label><input id="newTaskNamespace" class="form-input" placeholder="default"></div>
+            <div class="form-group"><label class="form-label">Pod 名称</label><input id="newTaskPod" class="form-input" placeholder="pod name"></div>
+            <div class="form-group"><label class="form-label">容器名</label><input id="newTaskContainer" class="form-input" placeholder="可选"></div>
+          </div>
+          <div class="form-group">
+            <label class="form-label">脚本内容 <span class="required">*</span></label>
+            <textarea id="newTaskScript" class="form-input" rows="8" placeholder="print('hello')"></textarea>
           </div>
         </div>
         <div class="modal-footer" style="padding:16px 20px;border-top:1px solid var(--border-color);display:flex;justify-content:flex-end;gap:8px">
@@ -95,17 +106,38 @@
       alert('请输入任务名称');
       return;
     }
+    const scriptBody = document.getElementById('newTaskScript').value.trim();
+    if (!scriptBody) {
+      alert('请输入脚本内容');
+      return;
+    }
     
     try {
+      const executionMode = document.getElementById('newTaskExecMode').value;
+      const target = executionMode === 'pod' ? {
+        cluster_name: document.getElementById('newTaskCluster').value.trim(),
+        namespace: document.getElementById('newTaskNamespace').value.trim(),
+        pod_name: document.getElementById('newTaskPod').value.trim(),
+        container: document.getElementById('newTaskContainer').value.trim(),
+      } : {};
+      if (executionMode === 'pod' && (!target.cluster_name || !target.namespace || !target.pod_name)) {
+        alert('Pod 内执行需要填写集群、命名空间和 Pod 名称');
+        return;
+      }
       await safePost('/tasks/definitions', {
         name: name,
-        execution_mode: document.getElementById('newTaskExecMode').value,
-        description: document.getElementById('newTaskDesc').value
+        execution_mode: executionMode,
+        runtime: document.getElementById('newTaskRuntime').value,
+        timeout_seconds: Number(document.getElementById('newTaskTimeout').value || 60),
+        script_body: scriptBody,
+        target,
       });
       
       toast('任务创建成功', 'ok');
       document.querySelector('.capability-modal-overlay')?.remove();
-      loadTaskDefinitions();
+      await loadTaskDefinitions();
+      await loadTaskLogs();
+      if (typeof switchTCTab === 'function') switchTCTab('definitions');
     } catch (e) {
       toast(`创建失败：${e.message}`, 'err');
     }
@@ -117,7 +149,7 @@
   async function loadTaskDefinitions() {
     try {
       const data = await safeGet('/tasks/definitions');
-      renderTaskDefinitions(data.definitions || []);
+      renderTaskDefinitions(data.tasks || data.definitions || []);
     } catch (e) {
       console.error('加载任务定义失败:', e);
     }
@@ -269,9 +301,12 @@
   window.executeTaskDefinition = async function(defId) {
     try {
       toast('开始执行任务...', 'info');
-      await safePost(`/tasks/definitions/${defId}/execute`, {});
-      toast('任务已提交执行', 'ok');
+      const result = await safePost(`/tasks/definitions/${defId}/run`, {}, 650000);
+      const runId = result.run?.id || result.run?.run_id;
+      const status = result.run?.status || 'unknown';
+      toast(status === 'success' ? '任务执行成功' : '任务执行完成，请查看日志', status === 'success' ? 'ok' : 'warn');
       loadTaskLogs();
+      if (runId) setTimeout(() => window.viewTaskLogDetail(runId), 80);
     } catch (e) {
       toast(`执行失败：${e.message}`, 'err');
     }
@@ -285,9 +320,9 @@
       const data = await safeGet(`/tasks/runs/${logId}/logs`);
       const log = data.run;
       
-      if (log.result_json) {
-        const result = JSON.parse(log.result_json);
-        alert(`执行结果：\n\n${JSON.stringify(result, null, 2)}`);
+      const result = log.result || (log.result_json ? JSON.parse(log.result_json) : null);
+      if (result || log.stdout || log.stderr || log.error_message) {
+        alert(`执行记录 ${log.id}\n状态：${log.status}\n耗时：${log.duration_ms || 0}ms\n\nstdout：\n${log.stdout || result?.stdout || ''}\n\nstderr：\n${log.stderr || result?.stderr || ''}\n\n错误：${log.error_message || ''}`);
       } else {
         alert('暂无执行结果');
       }

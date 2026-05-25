@@ -41,6 +41,16 @@ class Config:
     DEFAULT_PAGE_SIZE = 50
     MAX_PAGE_SIZE = 500
 
+    # ── Phase 5: 健康检查配置 ──────────────────────────────────────────────
+    # 健康检查后台线程扫描间隔（秒），默认 30 秒
+    HEALTH_CHECK_INTERVAL_SECONDS = int(os.environ.get('HEALTH_CHECK_INTERVAL_SECONDS', '30'))
+    # TTL 清理扫描间隔（秒），默认 300 秒（5 分钟）
+    TTL_CLEANUP_INTERVAL_SECONDS = int(os.environ.get('TTL_CLEANUP_INTERVAL_SECONDS', '300'))
+    # 默认 TTL 过期阈值（分钟），当连接未设置自定义 TTL 时使用此值，0 表示不自动过期
+    DEFAULT_TTL_THRESHOLD_MINUTES = int(os.environ.get('DEFAULT_TTL_THRESHOLD_MINUTES', '30'))
+    # 健康检查日志保留天数
+    HEALTH_CHECK_LOG_RETENTION_DAYS = int(os.environ.get('HEALTH_CHECK_LOG_RETENTION_DAYS', '7'))
+
     @classmethod
     def validate_production(cls):
         """启动时校验生产环境安全配置"""

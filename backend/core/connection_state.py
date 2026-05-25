@@ -333,6 +333,7 @@ class ConnectionStateManager:
                 "connections",
                 {
                     "status": ConnectionState.DISCONNECTED.value,
+                    "health_status": "unknown",
                     "updated_at": now.isoformat(),
                 },
                 "id = ?",

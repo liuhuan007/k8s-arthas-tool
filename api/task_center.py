@@ -34,6 +34,7 @@ from models.db import db
 from services.authorization_service import AuthorizationService
 from backend.core.parameter_validator import ParameterValidator
 from backend.core.command_builder import build_command
+from services.audit_service import AuditService
 
 
 task_bp = Blueprint('task_center', __name__, url_prefix='/api/tasks')
@@ -50,12 +51,13 @@ def list_capabilities():
     type_filter = request.args.get('type')
     category_filter = request.args.get('category')
     level_filter = request.args.get('level')
+    include_disabled = request.args.get('include_disabled') == '1'
     
     where_clauses = []
     params = []
     
     if type_filter:
-        where_clauses.append('type = ?')
+        where_clauses.append('category = ?')
         params.append(type_filter)
     if category_filter:
         where_clauses.append('category = ?')
@@ -63,6 +65,9 @@ def list_capabilities():
     if level_filter:
         where_clauses.append('level = ?')
         params.append(int(level_filter))
+
+    if not include_disabled:
+        where_clauses.append("COALESCE(status, 'active') = 'active'")
     
     # ✅ Phase 5: 权限过滤
     user_role = current_user.role if hasattr(current_user, 'role') else 'user'
@@ -454,6 +459,22 @@ _USER_CASE_CAPABILITIES = [
         'description': '定位类来源、ClassLoader hash、线上实际字节码和源码差异。',
     },
     {
+        'name': '在线反编译 jad',
+        'github_issue': '#763/#1003',
+        'product_stage': 'M1',
+        'category': 'decompile',
+        'script': 'jad --source-only ${CLASS_NAME:-com.example.Demo}',
+        'description': '在线反编译类字节码为 Java 源码，用于查看线上实际代码。',
+    },
+    {
+        'name': 'CPU 火焰图',
+        'github_issue': '#1202/#569',
+        'product_stage': 'M1',
+        'category': 'profiler',
+        'script': 'profiler start --event cpu --duration ${DURATION:-30}\nprofiler stop --format html\nprofiler getSamples',
+        'description': '生成 CPU 火焰图，可视化热点方法和调用栈。',
+    },
+    {
         'name': 'Spectre 热替换工作台',
         'github_issue': 'spectre/retransform.png',
         'product_stage': 'M2',
@@ -795,36 +816,54 @@ def _execute_task(run_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
     raise ValueError('执行位置仅支持 node / pod')
 
 
-def _create_run_record(task: Dict[str, Any], user_id: int) -> str:
+def _task_result_payload(result: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        'stdout': result.get('stdout', ''),
+        'stderr': result.get('stderr', ''),
+        'exit_code': result.get('exit_code'),
+        'work_dir': result.get('work_dir', ''),
+    }
+
+
+def _create_run_record(task: Dict[str, Any], user_id: int, execution_mode: str = 'manual') -> str:
     run_id = uuid.uuid4().hex
-    db.insert('task_runs', {
+    db.insert('task_logs', {
         'id': run_id,
         'task_id': task.get('id'),
         'user_id': user_id,
         'status': 'running',
-        'execution_mode': task.get('execution_mode'),
+        'execution_mode': execution_mode,
+        'execution_type': 'script',
+        'run_type': 'script',
         'target_json': task.get('target_json') or '{}',
+        'params_json': task.get('params_json') or '{}',
+        'capability_name': task.get('name'),
+        'rendered_command': task.get('script_body') or '',
         'started_at': _now_text(),
     })
     return run_id
 
 
 def _finish_run_record(run_id: str, result: Dict[str, Any]) -> Dict[str, Any]:
-    db.update('task_runs', {
+    current = db.fetch_one('SELECT status FROM task_logs WHERE id = ?', (run_id,))
+    if current and current.get('status') == 'cancelled':
+        return db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
+    db.update('task_logs', {
         'status': result['status'],
         'stdout': result['stdout'],
         'stderr': result['stderr'],
         'exit_code': result['exit_code'],
         'duration_ms': result['duration_ms'],
+        'result_json': _json_dumps(_task_result_payload(result)),
         'finished_at': _now_text(),
         'error_message': result['error_message'],
         'work_dir': result['work_dir'],
     }, 'id = ?', (run_id,))
-    return db.fetch_one('SELECT * FROM task_runs WHERE id = ?', (run_id,))
+    return db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
 
 
-def _execute_task_definition(task: Dict[str, Any], user_id: int) -> Dict[str, Any]:
-    run_id = _create_run_record(task, user_id)
+def _execute_task_definition(task: Dict[str, Any], user_id: int, execution_mode: str = 'manual') -> Dict[str, Any]:
+    run_id = _create_run_record(task, user_id, execution_mode)
     try:
         result = _execute_task(run_id, task)
     except Exception as exc:
@@ -837,7 +876,38 @@ def _execute_task_definition(task: Dict[str, Any], user_id: int) -> Dict[str, An
             'error_message': str(exc),
             'work_dir': '',
         }
-    return _finish_run_record(run_id, result)
+    run_record = _finish_run_record(run_id, result)
+
+    # 审计日志
+    task_name = task.get('name', '')
+    target = _json_loads(task.get('target_json'), {})
+    target_str = f"{target.get('cluster_name', '')}/{target.get('namespace', '')}/{target.get('pod_name', '')}" if target else ''
+    AuditService.log_task_executed(
+        user_id, task.get('id', 0), task_name,
+        execution_mode, target_str, run_record.get('status', 'unknown')
+    )
+
+    return run_record
+
+
+def _create_failed_task_log(task_id: Optional[int], user_id: int, execution_mode: str, error_message: str) -> str:
+    run_id = uuid.uuid4().hex
+    db.insert('task_logs', {
+        'id': run_id,
+        'task_id': task_id,
+        'user_id': user_id,
+        'status': 'failed',
+        'execution_mode': execution_mode,
+        'execution_type': 'script',
+        'run_type': 'script',
+        'target_json': '{}',
+        'params_json': '{}',
+        'result_json': _json_dumps({'error': error_message}),
+        'started_at': _now_text(),
+        'finished_at': _now_text(),
+        'error_message': error_message,
+    })
+    return run_id
 
 
 def _seed_default_templates(conn):
@@ -1061,6 +1131,19 @@ def init_task_tables():
     """初始化通用任务平台表结构。"""
     with db.connection() as conn:
         cursor = conn.cursor()
+        from backend.core.diagnosis_capabilities import init_capabilities_table
+
+        init_capabilities_table(conn)
+        for column, ddl in {
+            'status': "ALTER TABLE diagnosis_capabilities ADD COLUMN status TEXT DEFAULT 'active'",
+            'is_builtin': 'ALTER TABLE diagnosis_capabilities ADD COLUMN is_builtin INTEGER DEFAULT 1',
+            'sort_order': 'ALTER TABLE diagnosis_capabilities ADD COLUMN sort_order INTEGER DEFAULT 0',
+            'handler_key': 'ALTER TABLE diagnosis_capabilities ADD COLUMN handler_key TEXT',
+        }.items():
+            try:
+                cursor.execute(f'SELECT {column} FROM diagnosis_capabilities LIMIT 1')
+            except Exception:
+                cursor.execute(ddl)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tool_packages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1143,6 +1226,64 @@ def init_task_tables():
             )
         ''')
         cursor.execute('''
+            CREATE TABLE IF NOT EXISTS task_logs (
+                id TEXT PRIMARY KEY,
+                task_id INTEGER,
+                capability_id INTEGER,
+                user_id INTEGER,
+                status TEXT NOT NULL DEFAULT 'pending',
+                execution_mode TEXT NOT NULL DEFAULT 'manual',
+                execution_type TEXT DEFAULT 'script',
+                run_type TEXT DEFAULT 'script',
+                target_json TEXT DEFAULT '{}',
+                params_json TEXT DEFAULT '{}',
+                result_json TEXT,
+                stdout TEXT,
+                stderr TEXT,
+                exit_code INTEGER,
+                duration_ms INTEGER,
+                started_at TIMESTAMP,
+                finished_at TIMESTAMP,
+                error_message TEXT,
+                work_dir TEXT,
+                capability_name TEXT,
+                capability_version INTEGER,
+                rendered_command TEXT,
+                connection_snapshot_json TEXT,
+                capability_snapshot_json TEXT,
+                log_path TEXT,
+                retention_days INTEGER DEFAULT 30,
+                is_archived INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (task_id) REFERENCES task_definitions(id) ON DELETE SET NULL,
+                FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE SET NULL,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+        ''')
+        for column, ddl in {
+            'capability_id': 'ALTER TABLE task_logs ADD COLUMN capability_id INTEGER REFERENCES diagnosis_capabilities(id)',
+            'execution_type': "ALTER TABLE task_logs ADD COLUMN execution_type TEXT DEFAULT 'script'",
+            'run_type': "ALTER TABLE task_logs ADD COLUMN run_type TEXT DEFAULT 'script'",
+            'params_json': "ALTER TABLE task_logs ADD COLUMN params_json TEXT DEFAULT '{}'",
+            'result_json': 'ALTER TABLE task_logs ADD COLUMN result_json TEXT',
+            'stdout': 'ALTER TABLE task_logs ADD COLUMN stdout TEXT',
+            'stderr': 'ALTER TABLE task_logs ADD COLUMN stderr TEXT',
+            'exit_code': 'ALTER TABLE task_logs ADD COLUMN exit_code INTEGER',
+            'work_dir': 'ALTER TABLE task_logs ADD COLUMN work_dir TEXT',
+            'capability_name': 'ALTER TABLE task_logs ADD COLUMN capability_name TEXT',
+            'capability_version': 'ALTER TABLE task_logs ADD COLUMN capability_version INTEGER',
+            'rendered_command': 'ALTER TABLE task_logs ADD COLUMN rendered_command TEXT',
+            'connection_snapshot_json': 'ALTER TABLE task_logs ADD COLUMN connection_snapshot_json TEXT',
+            'capability_snapshot_json': 'ALTER TABLE task_logs ADD COLUMN capability_snapshot_json TEXT',
+            'log_path': 'ALTER TABLE task_logs ADD COLUMN log_path TEXT',
+            'retention_days': 'ALTER TABLE task_logs ADD COLUMN retention_days INTEGER DEFAULT 30',
+            'is_archived': 'ALTER TABLE task_logs ADD COLUMN is_archived INTEGER DEFAULT 0',
+        }.items():
+            try:
+                cursor.execute(f'SELECT {column} FROM task_logs LIMIT 1')
+            except Exception:
+                cursor.execute(ddl)
+        cursor.execute('''
             CREATE TABLE IF NOT EXISTS task_artifacts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 run_id TEXT NOT NULL,
@@ -1150,9 +1291,42 @@ def init_task_tables():
                 path TEXT NOT NULL,
                 size INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (run_id) REFERENCES task_runs(id) ON DELETE CASCADE
+                FOREIGN KEY (run_id) REFERENCES task_logs(id) ON DELETE CASCADE
             )
         ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tool_package_distributions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                package_id INTEGER NOT NULL,
+                user_id INTEGER,
+                target_cluster TEXT NOT NULL,
+                target_namespace TEXT NOT NULL,
+                target_pod TEXT NOT NULL,
+                target_container TEXT,
+                install_path TEXT NOT NULL,
+                local_sha256 TEXT,
+                pod_sha256 TEXT,
+                pod_file_size TEXT,
+                pod_check_status TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                error_message TEXT,
+                stderr TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (package_id) REFERENCES tool_packages(id) ON DELETE CASCADE,
+                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_distributions_package
+            ON tool_package_distributions(package_id, created_at DESC)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_distributions_user
+            ON tool_package_distributions(user_id, created_at DESC)
+        ''')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_task_logs_user_created ON task_logs(user_id, created_at DESC)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_task_logs_task_created ON task_logs(task_id, created_at DESC)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_task_logs_status_started ON task_logs(status, started_at DESC)')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS task_schedules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1191,11 +1365,12 @@ def init_task_tables():
 @task_bp.route('/overview', methods=['GET'])
 @login_required
 def overview():
+    run_where = "user_id = ? AND execution_type = 'script'"
     return jsonify({
         'templates': db.count('script_templates'),
         'tasks': db.count('task_definitions', 'created_by = ?', (current_user.id,)),
-        'runs': db.count('task_runs', 'user_id = ?', (current_user.id,)),
-        'running': db.count('task_runs', 'user_id = ? AND status = ?', (current_user.id, 'running')),
+        'runs': db.count('task_logs', run_where, (current_user.id,)),
+        'running': db.count('task_logs', run_where + ' AND status = ?', (current_user.id, 'running')),
         'schedules': db.count('task_schedules', 'user_id = ?', (current_user.id,)),
     })
 
@@ -1279,6 +1454,10 @@ def upload_tool_package():
         'created_by': current_user.id,
     })
     row = db.fetch_one('SELECT * FROM tool_packages WHERE id = ?', (package_id,))
+    # 审计日志
+    AuditService.log_tool_package_uploaded(
+        current_user.id, package_id, row.get('name', ''), tool_type
+    )
     return jsonify({'ok': True, 'package': _row_to_tool_package(row)}), 201
 
 
@@ -1322,6 +1501,10 @@ def delete_tool_package(package_id: int):
         except Exception:
             pass
     db.execute('DELETE FROM tool_packages WHERE id = ?', (package_id,))
+    # 审计日志
+    AuditService.log_tool_package_deleted(
+        current_user.id, package_id, row.get('name', '')
+    )
     return jsonify({'ok': True})
 
 
@@ -1355,17 +1538,22 @@ def verify_tool_package(package_id: int):
 @task_bp.route('/tool-packages/<int:package_id>/distribute', methods=['POST'])
 @login_required
 def distribute_tool_package(package_id: int):
+    """分发工具包到 Pod，并记录分发历史和校验结果。"""
     row = db.fetch_one('SELECT * FROM tool_packages WHERE id = ?', (package_id,))
     if not row:
         return _error('工具包不存在', 404)
     if row.get('status') not in ('active', 'inactive'):
         return _error('工具包状态不可分发')
+
     data = request.json or {}
     try:
         target = _validate_pod_target(data)
-        install_path = _validate_tool_install_path(data.get('install_path') or row.get('install_path') or _DEFAULT_ARTHAS_INSTALL_PATH)
+        install_path = _validate_tool_install_path(
+            data.get('install_path') or row.get('install_path') or _DEFAULT_ARTHAS_INSTALL_PATH
+        )
     except ValueError as exc:
         return _error(str(exc))
+
     file_path = row.get('file_path') or ''
     local_path = Path(file_path)
     if not file_path or not local_path.exists():
@@ -1373,36 +1561,189 @@ def distribute_tool_package(package_id: int):
     if row.get('tool_type') == 'arthas' and not install_path.endswith('.jar'):
         return _error('Arthas 工具必须分发为 .jar 文件')
 
+    # 计算本地文件 sha256
+    local_sha256 = _sha256_file(local_path)
+
     cluster = _get_cluster_config(target['cluster_name'])
     auth_err, auth_code = AuthorizationService.require_namespace_access(
         current_user, target['cluster_name'], target['namespace'])
     if auth_err:
         return _error(auth_err['error'], auth_code)
+
     from backend import KubectlExecutor
     runner = KubectlExecutor(kubeconfig=cluster.get('kubeconfig', ''), context=cluster.get('context', ''))
+
     install_dir = str(Path(install_path).parent).replace('\\', '/')
+
+    # 1. 创建目标目录
     rc_mkdir, out_mkdir, err_mkdir = runner.exec_pod(
         target['namespace'], target['pod_name'], target['container'],
         f'mkdir -p {_safe_pod_path(install_dir)}', timeout=30
     )
     if rc_mkdir != 0:
+        _record_distribution(
+            package_id, target, install_path, local_sha256,
+            'failed', f'创建 Pod 目录失败: {err_mkdir or out_mkdir}',
+            err_mkdir or '',
+            package_name=row.get('name', '')
+        )
         return _error(f'创建 Pod 目录失败: {err_mkdir or out_mkdir}', 500)
+
+    # 2. 复制文件到 Pod
     rc_cp, out_cp, err_cp = runner.cp_to_pod(
-        target['namespace'], target['pod_name'], target['container'], str(local_path), install_path
+        target['namespace'], target['pod_name'], target['container'],
+        str(local_path), install_path
     )
     if rc_cp != 0:
+        _record_distribution(
+            package_id, target, install_path, local_sha256,
+            'failed', f'分发文件失败: {err_cp or out_cp}',
+            err_cp or '',
+            package_name=row.get('name', '')
+        )
         return _error(f'分发文件失败: {err_cp or out_cp}', 500)
+
+    # 3. 校验 Pod 内文件
     rc_check, out_check, err_check = runner.exec_pod(
         target['namespace'], target['pod_name'], target['container'],
         f'ls -lh {_safe_pod_path(install_path)} && (sha256sum {_safe_pod_path(install_path)} 2>/dev/null || true)',
         timeout=30,
     )
+
+    # 解析 Pod 校验结果
+    pod_sha256 = ''
+    pod_file_size = ''
+    pod_check_status = 'unknown'
+    if rc_check == 0 and out_check:
+        lines = out_check.strip().split('\n')
+        for line in lines:
+            if 'sha256sum' in line.lower() or len(line.strip()) == 64:
+                # 可能是 sha256 输出
+                parts = line.strip().split()
+                if len(parts) >= 1 and len(parts[0]) == 64:
+                    pod_sha256 = parts[0]
+                    pod_check_status = 'verified'
+                    break
+            if line and not line.startswith('ls '):
+                pod_file_size = line
+                pod_check_status = 'exists'
+
+    # 记录分发历史
+    distribution_status = 'success' if rc_check == 0 else 'failed'
+    error_msg = '' if rc_check == 0 else (err_check or out_check or 'Pod 内文件校验失败')
+    stderr = '\n'.join(x for x in (err_mkdir, err_cp, err_check) if x)
+
+    _record_distribution(
+        package_id, target, install_path, local_sha256,
+        distribution_status, error_msg, stderr,
+        pod_sha256, pod_file_size, pod_check_status,
+        package_name=row.get('name', '')
+    )
+
+    # 审计日志已在 _record_distribution 中记录
+
+    # 返回标准化结果
     return jsonify({
         'ok': rc_check == 0,
+        'package_id': package_id,
         'target': target,
         'install_path': install_path,
+        'local_sha256': local_sha256,
+        'pod_sha256': pod_sha256,
+        'pod_file_size': pod_file_size,
+        'pod_check_status': pod_check_status,
+        'sha256_match': local_sha256 == pod_sha256 if pod_sha256 else None,
         'stdout': '\n'.join(x for x in (out_mkdir, out_cp, out_check) if x),
-        'stderr': '\n'.join(x for x in (err_mkdir, err_cp, err_check) if x),
+        'stderr': stderr,
+        'error_message': error_msg,
+    })
+
+
+def _record_distribution(
+    package_id: int,
+    target: Dict[str, str],
+    install_path: str,
+    local_sha256: str,
+    status: str,
+    error_message: str,
+    stderr: str,
+    pod_sha256: str = '',
+    pod_file_size: str = '',
+    pod_check_status: str = '',
+    package_name: str = '',
+) -> None:
+    """记录工具包分发历史。"""
+    try:
+        db.insert('tool_package_distributions', {
+            'package_id': package_id,
+            'user_id': current_user.id,
+            'target_cluster': target.get('cluster_name', ''),
+            'target_namespace': target.get('namespace', ''),
+            'target_pod': target.get('pod_name', ''),
+            'target_container': target.get('container', ''),
+            'install_path': install_path,
+            'local_sha256': local_sha256,
+            'pod_sha256': pod_sha256,
+            'pod_file_size': pod_file_size,
+            'pod_check_status': pod_check_status,
+            'status': status,
+            'error_message': error_message,
+            'stderr': stderr,
+        })
+
+        # 审计日志
+        target_str = f"{target.get('cluster_name', '')}/{target.get('namespace', '')}/{target.get('pod_name', '')}"
+        AuditService.log_tool_package_distributed(
+            current_user.id, package_id, package_name or '',
+            target_str, install_path, status
+        )
+    except Exception as exc:
+        log.warning('记录分发历史失败: %s', exc)
+
+
+@task_bp.route('/tool-packages/distributions', methods=['GET'])
+@login_required
+def list_distributions():
+    """查询工具包分发历史。"""
+    limit = min(int(request.args.get('limit', 50)), 200)
+    offset = int(request.args.get('offset', 0))
+    package_id = request.args.get('package_id', type=int)
+
+    where_clauses = ['1=1']
+    params = []
+
+    if not getattr(current_user, 'is_admin', False):
+        where_clauses.append('user_id = ?')
+        params.append(current_user.id)
+
+    if package_id:
+        where_clauses.append('package_id = ?')
+        params.append(package_id)
+
+    where_sql = ' AND '.join(where_clauses)
+    rows = db.fetch_all(
+        f'''
+        SELECT d.*,
+               p.name AS package_name,
+               p.tool_type AS package_tool_type
+        FROM tool_package_distributions d
+        LEFT JOIN tool_packages p ON p.id = d.package_id
+        WHERE {where_sql}
+        ORDER BY d.created_at DESC
+        LIMIT ? OFFSET ?
+        ''',
+        tuple(params + [limit, offset])
+    )
+
+    distributions = []
+    for row in rows:
+        item = dict(row)
+        distributions.append(item)
+
+    return jsonify({
+        'ok': True,
+        'distributions': distributions,
+        'count': len(distributions),
     })
 
 
@@ -1560,6 +1901,7 @@ def create_definition():
 
 
 @task_bp.route('/definitions/<int:task_id>/run', methods=['POST'])
+@task_bp.route('/definitions/<int:task_id>/execute', methods=['POST'])
 @login_required
 def run_definition(task_id: int):
     task = db.fetch_one('SELECT * FROM task_definitions WHERE id = ? AND created_by = ?', (task_id, current_user.id))
@@ -1595,9 +1937,9 @@ def list_runs():
     offset = int(request.args.get('offset', 0))
     rows = db.fetch_all('''
         SELECT r.*, d.name AS task_name
-        FROM task_runs r
+        FROM task_logs r
         LEFT JOIN task_definitions d ON d.id = r.task_id
-        WHERE r.user_id = ?
+        WHERE r.user_id = ? AND r.execution_type = 'script'
         ORDER BY r.created_at DESC
         LIMIT ? OFFSET ?
     ''', (current_user.id, limit, offset))
@@ -1607,20 +1949,25 @@ def list_runs():
 @task_bp.route('/runs/<run_id>/logs', methods=['GET'])
 @login_required
 def get_run_logs(run_id: str):
-    """查询执行记录详情。优先查 task_logs（诊断记录），再查 task_runs（脚本任务）。"""
-    # 1. 优先查 task_logs（诊断能力执行记录）
+    """查询执行记录详情。优先查 task_logs，再兼容旧 task_runs。"""
+    # 1. 优先查 task_logs（统一执行记录）
     row = db.fetch_one('''
-        SELECT t.*, c.name AS capability_name, c.category AS capability_category
+        SELECT t.*, d.name AS task_name, c.name AS capability_name, c.category AS capability_category
         FROM task_logs t
+        LEFT JOIN task_definitions d ON d.id = t.task_id
         LEFT JOIN diagnosis_capabilities c ON c.id = t.capability_id
         WHERE t.id = ? AND t.user_id = ?
     ''', (run_id, current_user.id))
     if row:
         item = dict(row)
-        item['task_name'] = item.get('capability_name') or '即时诊断'
+        item['task_name'] = item.get('task_name') or item.get('capability_name') or '即时诊断'
         item['target'] = _json_loads(item.pop('target_json', None), {})
         item['params'] = _json_loads(item.pop('params_json', None), {})
         item['result'] = _json_loads(item.pop('result_json', None), None)
+        item['connection_snapshot'] = _json_loads(item.pop('connection_snapshot_json', None), {})
+        item['capability_snapshot'] = _json_loads(item.pop('capability_snapshot_json', None), {})
+        item['run_id'] = item.get('id')
+        item['execution_id'] = item.get('id')
         return jsonify({'run': item})
     
     # 2. 回退查 task_runs（脚本任务记录）
@@ -1645,7 +1992,10 @@ def cancel_task_run(run_id: str):
     """
     row = db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
     if not row:
-        return _error('执行记录不存在', 404)
+        old_row = db.fetch_one('SELECT * FROM task_runs WHERE id = ?', (run_id,))
+        if not old_row:
+            return _error('执行记录不存在', 404)
+        return _error('旧执行记录不支持取消', 400)
     if row.get('user_id') != current_user.id and not getattr(current_user, 'is_admin', False):
         return _error('无权取消该执行记录', 403)
     if row.get('status') not in ('pending', 'running'):
@@ -1663,11 +2013,11 @@ def cancel_task_run(run_id: str):
 @task_bp.route('/diagnosis/history', methods=['GET'])
 @login_required
 def diagnosis_history():
-    """查询诊断执行历史（能力执行记录）。"""
+    """查询诊断执行历史（能力执行记录 + Profiler 采样记录）。"""
     limit = min(int(request.args.get('limit', 50)), 200)
     offset = int(request.args.get('offset', 0))
 
-    where_sql = 't.capability_id IS NOT NULL'
+    where_sql = '1=1'
     params = []
     if not getattr(current_user, 'is_admin', False):
         where_sql += ' AND t.user_id = ?'
@@ -1848,9 +2198,10 @@ def _run_due_schedules_once() -> int:
         user_id = schedule.get('user_id') or task.get('created_by') or 0
         _sched_log.info('调度 %s 触发: task=%s user=%s', schedule['id'], task['id'], user_id)
         try:
-            _execute_task_definition(task, user_id)
+            _execute_task_definition(task, user_id, execution_mode='scheduled')
         except Exception as exc:
             _sched_log.error('调度 %s 执行异常: %s', schedule['id'], exc)
+            _create_failed_task_log(task.get('id'), user_id, 'scheduled', str(exc))
 
         next_run = _compute_next_run_at(schedule['interval_seconds'])
         db.update('task_schedules', {
@@ -2015,12 +2366,21 @@ def _row_to_diagnosis_run(row: Dict[str, Any]) -> Dict[str, Any]:
     return item
 
 
-def _ensure_arthas_connection_ready(connection: Dict[str, Any]) -> None:
-    if connection.get('level') != 'arthas':
-        raise ValueError('当前能力需要 Arthas Ready 连接')
+def _ensure_connection_ready_for_capability(connection: Dict[str, Any], capability: Dict[str, Any]) -> None:
+    category = capability.get('category')
+    required_arthas = category in ('quick', 'tool', 'scenario', 'ai') or int(capability.get('level') or 1) >= 2
+    if required_arthas and connection.get('level') != 'arthas':
+        raise ValueError('当前能力需要 Arthas Ready 连接，请升级连接')
+    if not required_arthas and connection.get('level') not in ('pod', 'arthas'):
+        raise ValueError('当前能力需要 Pod 连接')
     status = (connection.get('status') or '').lower()
-    if status and status not in ('ready', 'active', 'connected'):
+    allowed_statuses = {'ready', 'active', 'connected'} if required_arthas else {'ready', 'active', 'connected', 'pod_ready'}
+    if status and status not in allowed_statuses:
         raise ValueError('Arthas 连接状态不可用，请重新建立连接')
+
+
+def _ensure_arthas_connection_ready(connection: Dict[str, Any]) -> None:
+    _ensure_connection_ready_for_capability(connection, {'category': 'tool', 'level': 2})
 
 
 def _run_diagnosis_execution(
@@ -2102,7 +2462,7 @@ def execute_diagnosis():
         return _error('无权使用该连接', 403)
 
     try:
-        _ensure_arthas_connection_ready(connection)
+        _ensure_connection_ready_for_capability(connection, capability)
         active_conn = _get_active_arthas_connection(connection_id, connection)
     except ValueError as exc:
         return _error(str(exc), 409)
@@ -2207,7 +2567,7 @@ def _execute_arthas_command(capability, extension, params, connection):
     }
 
 
-def _execute_scenario(capability, extension, params, connection):
+def _execute_scenario(capability, extension, params, connection, run_id=None):
     """执行场景方案（多步骤）"""
     from backend.core.arthas_executor import ArthasCommandExecutor
 
@@ -2224,7 +2584,12 @@ def _execute_scenario(capability, extension, params, connection):
     step_results = []
     total_duration = 0
     
+    cancelled = False
+
     for step in steps:
+        if run_id and _is_task_log_cancelled(run_id):
+            cancelled = True
+            break
         # 构建命令（支持 ${stepN.field} 语法）
         command = build_command(step['command'], params, step_outputs)
         
@@ -2272,12 +2637,13 @@ def _execute_scenario(capability, extension, params, connection):
     
     # 判断整体状态
     all_success = all(r.get('success') for r in step_results)
-    status = 'success' if all_success else 'partial'
+    status = 'cancelled' if cancelled else ('success' if all_success else 'partial')
     
     return {
         'status': status,
         'total_steps': len(steps),
         'completed_steps': len(step_results),
+        'cancelled': cancelled,
         'steps': step_results,
         'duration_ms': total_duration,
     }
@@ -2393,7 +2759,7 @@ def update_script_template(template_id):
     if not fields:
         return jsonify({'ok': False, 'message': '无更新内容'}), 400
     
-    db.update('script_templates', fields, {'id': template_id})
+    db.update('script_templates', fields, 'id = ?', (template_id,))
     
     return jsonify({
         'ok': True,
@@ -2418,21 +2784,6 @@ def delete_script_template(template_id):
     return jsonify({
         'ok': True,
         'message': '脚本模板已删除'
-    })
-
-
-@task_bp.route('/capabilities/<int:cap_id>/versions', methods=['GET'])
-@login_required
-def get_capability_versions(cap_id):
-    """获取能力版本历史"""
-    from backend.core.diagnosis_capabilities import get_capability_versions
-    
-    limit = request.args.get('limit', 20, type=int)
-    versions = get_capability_versions(cap_id, limit)
-    
-    return jsonify({
-        'ok': True,
-        'versions': versions
     })
 
 
@@ -2464,7 +2815,7 @@ def check_connections_health():
             
             # 更新连接状态
             if not is_healthy:
-                db.update('connections', {'status': 'unhealthy'}, {'id': conn_id})
+                db.update('connections', {'status': 'unhealthy'}, 'id = ?', (conn_id,))
         except Exception as e:
             health_results.append({
                 'connection_id': conn_id,
@@ -2472,7 +2823,7 @@ def check_connections_health():
                 'error': str(e),
                 'last_checked': datetime.now().isoformat(),
             })
-            db.update('connections', {'status': 'unhealthy'}, {'id': conn_id})
+            db.update('connections', {'status': 'unhealthy'}, 'id = ?', (conn_id,))
     
     return jsonify({
         'ok': True,

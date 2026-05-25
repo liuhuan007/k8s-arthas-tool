@@ -516,21 +516,19 @@ async function podConnect() {
     // ✅ 移除 Java 检查,统一提示
     toast('Pod 连接成功，可启动 Arthas 进行深度诊断', 'success');
 
-    // 同步到全局状态
-    _syncState && _syncState();
-    
     // ✅ 关键修复: 设置 window._currentConnId,让状态栏能找到当前连接
+    if (typeof _currentConnId !== 'undefined') _currentConnId = d.connection_id;
     window._currentConnId = d.connection_id;
     window._connState = ConnectionState.POD_CONNECTED;
-    
-    // 恢复被 _syncState() 覆盖的状态
-    console.log('[Pod Connect] _syncState() 完成,恢复状态...');
     _connState = savedConnState;
     _runtimeInfo = savedRuntimeInfo;
     _podConnId = savedPodConnId;
     _podPhase = savedPodPhase;
+
+    // 同步到全局状态。跳过从 ConnectionStore 回读，避免旧快照覆盖刚建立的 Pod 状态。
+    _syncState && _syncState({ skipMerge: true });
     
-    console.log('[Pod Connect] 恢复后: _connState=', _connState, ', _runtimeInfo=', _runtimeInfo);
+    console.log('[Pod Connect] 同步后: _connState=', _connState, ', _runtimeInfo=', _runtimeInfo);
     
     // 再次更新 UI
     updateConnectionButton();
@@ -629,6 +627,8 @@ async function upgradeToArthas() {
     // 更新全局连接状态（兼容旧代码）
     _connected = true;
     _currentConnId = _podConnId;
+    window._currentConnId = _podConnId;
+    window._connState = ConnectionState.ARTHAS_READY;
     _ap = getT();
 
     // 更新连接信息（升级 level 为 arthas）
@@ -641,6 +641,34 @@ async function upgradeToArthas() {
       conn.arthas_address = d.arthas_address;
       conn.http_url = d.http_url;
       conn.status = 'connected';
+    }
+
+    const currentConnId = _podConnId || _currentConnId || window._currentConnId;
+    if (currentConnId && typeof ConnectionStore !== 'undefined') {
+      const connHealth = {
+        ...(typeof _connHealth !== 'undefined' ? _connHealth : {}),
+        [currentConnId]: { alive: true, pod_exists: true, pod_phase: _podPhase || 'Running' }
+      };
+      ConnectionStore.setState({
+        currentConnId,
+        connState: ConnectionState.ARTHAS_READY,
+        runtimeInfo: _runtimeInfo || null,
+        podConnId: currentConnId,
+        connHealth,
+      });
+      ConnectionStore.updateConnection(currentConnId, {
+        level: 'arthas',
+        status: 'connected',
+        local_port: d.local_port,
+        java_pid: d.java_pid,
+        arthas_version: d.arthas_version,
+        arthas_address: d.arthas_address,
+        http_url: d.http_url,
+        runtime: _runtimeInfo || null,
+        runtime_version: _runtimeInfo?.version || _runtimeInfo?.runtime_version || null,
+        alive: true
+      });
+      console.log('[Arthas Upgrade] ConnectionStore 状态已同步为 arthas_ready:', currentConnId);
     }
 
     // 更新 UI
@@ -666,20 +694,8 @@ async function upgradeToArthas() {
 
     // 同步到全局状态
     _syncState && _syncState();
+    if (typeof saveConnections === 'function') saveConnections();
     renderConnList && renderConnList();
-    
-    // ✅ 关键修复: 更新 ConnectionStore 中的连接状态
-    const currentConnId = _currentConnId || window._currentConnId;
-    if (currentConnId && typeof ConnectionStore !== 'undefined') {
-      ConnectionStore.updateConnection(currentConnId, {
-        level: 'arthas',
-        status: 'connected',
-        runtime: _runtimeInfo?.runtime_type || null,
-        runtime_version: _runtimeInfo?.version || null,
-        alive: true
-      });
-      console.log('[Arthas Upgrade] ConnectionStore 更新为 arthas:', currentConnId);
-    }
 
     // 刷新连接信息提示条
     if (typeof csbRefresh === 'function') csbRefresh();

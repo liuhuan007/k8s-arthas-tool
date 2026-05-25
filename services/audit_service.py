@@ -386,3 +386,79 @@ class AuditService:
         """获取所有可用的资源类型"""
         rows = db.fetch_all('SELECT DISTINCT resource_type FROM audit_logs WHERE resource_type IS NOT NULL ORDER BY resource_type')
         return [row['resource_type'] for row in rows]
+    
+    # ─────────────────────────────────────────────────────────────
+    # 工具包相关
+    # ─────────────────────────────────────────────────────────────
+    
+    @staticmethod
+    def log_tool_package_distributed(user_id: int, package_id: int, package_name: str,
+                                        target: str, install_path: str, status: str):
+        """记录工具包分发"""
+        client = AuditService._get_client_info()
+        db.insert('audit_logs', {
+            'user_id': user_id,
+            'action': 'tool_package_distributed',
+            'resource_type': 'tool_package',
+            'resource_id': str(package_id),
+            'details': f'分发工具包 {package_name} 到 {target}:{install_path}, 状态: {status}',
+            **client
+        })
+    
+    @staticmethod
+    def log_tool_package_uploaded(user_id: int, package_id: int, package_name: str, tool_type: str):
+        """记录工具包上传"""
+        client = AuditService._get_client_info()
+        db.insert('audit_logs', {
+            'user_id': user_id,
+            'action': 'tool_package_uploaded',
+            'resource_type': 'tool_package',
+            'resource_id': str(package_id),
+            'details': f'上传工具包 {package_name} (类型: {tool_type})',
+            **client
+        })
+    
+    @staticmethod
+    def log_tool_package_deleted(user_id: int, package_id: int, package_name: str):
+        """记录工具包删除"""
+        client = AuditService._get_client_info()
+        db.insert('audit_logs', {
+            'user_id': user_id,
+            'action': 'tool_package_deleted',
+            'resource_type': 'tool_package',
+            'resource_id': str(package_id),
+            'details': f'删除工具包 {package_name}',
+            **client
+        })
+    
+    # ─────────────────────────────────────────────────────────────
+    # 任务执行相关
+    # ─────────────────────────────────────────────────────────────
+    
+    @staticmethod
+    def log_task_executed(user_id: int, task_id: int, task_name: str,
+                           execution_mode: str, target: str, status: str):
+        """记录任务执行"""
+        client = AuditService._get_client_info()
+        db.insert('audit_logs', {
+            'user_id': user_id,
+            'action': 'task_executed',
+            'resource_type': 'task',
+            'resource_id': str(task_id),
+            'details': f'执行任务 {task_name} (模式: {execution_mode}, 目标: {target}), 状态: {status}',
+            **client
+        })
+    
+    @staticmethod
+    def log_script_template_executed(user_id: int, template_id: int, template_name: str,
+                                      execution_mode: str, target: str, status: str):
+        """记录脚本模板执行"""
+        client = AuditService._get_client_info()
+        db.insert('audit_logs', {
+            'user_id': user_id,
+            'action': 'script_template_executed',
+            'resource_type': 'script_template',
+            'resource_id': str(template_id),
+            'details': f'执行脚本模板 {template_name} (模式: {execution_mode}, 目标: {target}), 状态: {status}',
+            **client
+        })
