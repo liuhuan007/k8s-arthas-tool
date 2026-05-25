@@ -156,3 +156,44 @@ if (typeof module !== 'undefined' && module.exports) {
     renderProfilerStatus
   };
 }
+
+// ── Phase 7 新增：支持从诊断中心启动 ─────────────────────
+// 从诊断中心启动性能采样
+async function startProfilerFromDiagnosisCenter(connId, mode, duration) {
+  if (!connId) {
+    toast('请先建立连接', 'error');
+    return;
+  }
+  
+  try {
+    const resp = await safePost('/api/profiler/tasks', {
+      connection_id: connId,
+      type: mode || 'cpu',
+      duration: duration || 60
+    });
+    
+    if (!resp.success) {
+      toast('启动采样失败: ' + (resp.error || '未知错误'), 'error');
+      return;
+    }
+    
+    // 启动任务
+    const startResp = await safePost('/api/profiler/tasks/' + resp.task_id + '/start');
+    
+    if (startResp.success) {
+      toast('性能采样已启动（任务ID: ' + resp.task_id + '）', 'success');
+      
+      // 如果需要轮询状态，可以在这里启动
+      if (typeof window.dcStartProfilerPoll === 'function') {
+        window.dcStartProfilerPoll(resp.task_id);
+      }
+    } else {
+      toast('启动任务失败', 'error');
+    }
+  } catch (e) {
+    toast('启动性能采样失败: ' + e.message, 'error');
+  }
+}
+
+// 暴露给诊断中心调用
+window.startProfilerFromDiagnosisCenter = startProfilerFromDiagnosisCenter;

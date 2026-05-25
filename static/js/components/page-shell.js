@@ -63,14 +63,83 @@ class PageShell {
         drawer.className = 'ai-drawer hidden';
         drawer.innerHTML = `
             <div class="ai-drawer-header">
-                <h3>AI 助手</h3>
-                <button id="close-ai-drawer" class="btn btn-icon" onclick="pageShell.toggleAIDrawer()">×</button>
+                <h3>🤖 AI 助手</h3>
+                <div class="ai-drawer-header-actions">
+                    <button class="btn btn-icon" onclick="if(typeof aiClearChat==='function') aiClearChat()" title="清空对话">🗑️</button>
+                    <button id="close-ai-drawer" class="btn btn-icon" onclick="pageShell.toggleAIDrawer()">×</button>
+                </div>
             </div>
-            <div class="ai-drawer-content">
-                <!-- AI 内容 -->
+            <div class="ai-drawer-messages" id="aiDrawerMessages">
+                <div class="ai-welcome">
+                    <div class="ai-welcome-icon">🤖</div>
+                    <div class="ai-welcome-title">Java 诊断 AI 助手</div>
+                    <div class="ai-welcome-desc">我可以帮你分析 Java 应用性能问题，通过 Arthas 命令自动诊断 Pod 中的应用。</div>
+                    <div class="ai-welcome-tips">
+                        <div class="ai-tip" onclick="if(typeof aiQuickAsk==='function') aiQuickAsk('CPU 占用很高怎么排查？')">🔥 CPU 飙高排查</div>
+                        <div class="ai-tip" onclick="if(typeof aiQuickAsk==='function') aiQuickAsk('接口响应慢如何定位？')">⏱️ 接口慢定位</div>
+                        <div class="ai-tip" onclick="if(typeof aiQuickAsk==='function') aiQuickAsk('内存泄漏怎么排查？')">💾 内存泄漏排查</div>
+                        <div class="ai-tip" onclick="if(typeof aiQuickAsk==='function') aiQuickAsk('线程死锁怎么检测？')">🔒 线程死锁检测</div>
+                    </div>
+                </div>
+            </div>
+            <div class="ai-drawer-input-area">
+                <div class="ai-drawer-input-wrap">
+                    <textarea id="aiDrawerInput" class="ai-drawer-input" placeholder="描述你的 Java 应用问题..." rows="1"
+                        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();pageShell.sendAIMessage()}"
+                        oninput="pageShell.autoResizeInput(this)"></textarea>
+                    <button class="ai-drawer-send-btn" onclick="pageShell.sendAIMessage()">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
+                    </button>
+                </div>
             </div>
         `;
         document.body.appendChild(drawer);
+    }
+    
+    sendAIMessage() {
+        const input = document.getElementById('aiDrawerInput');
+        if (!input || !input.value.trim()) return;
+        
+        const message = input.value.trim();
+        input.value = '';
+        this.autoResizeInput(input);
+        
+        // 如果存在原有的aiSend函数，使用它
+        if (typeof aiSend === 'function') {
+            // 将消息设置到原有的输入框
+            const originalInput = document.getElementById('aiInput');
+            if (originalInput) {
+                originalInput.value = message;
+                aiSend();
+            }
+        } else {
+            // 简单的消息显示
+            this.addAIMessage('user', message);
+            this.addAIMessage('ai', 'AI 助手功能正在初始化中，请稍候...');
+        }
+    }
+    
+    addAIMessage(role, content) {
+        const messagesContainer = document.getElementById('aiDrawerMessages');
+        if (!messagesContainer) return;
+        
+        // 移除欢迎信息
+        const welcome = messagesContainer.querySelector('.ai-welcome');
+        if (welcome) welcome.remove();
+        
+        const messageDiv = document.createElement('div');
+        messageDiv.className = `ai-message ai-message-${role}`;
+        messageDiv.innerHTML = `
+            <div class="ai-message-avatar">${role === 'user' ? '👤' : '🤖'}</div>
+            <div class="ai-message-content">${content}</div>
+        `;
+        messagesContainer.appendChild(messageDiv);
+        messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    }
+    
+    autoResizeInput(textarea) {
+        textarea.style.height = 'auto';
+        textarea.style.height = Math.min(textarea.scrollHeight, 120) + 'px';
     }
     
     renderStatusBar() {

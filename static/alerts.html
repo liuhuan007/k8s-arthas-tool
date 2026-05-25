@@ -3,15 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <title>告警中心 - K8s Arthas Tool</title>
-    <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="css/app.css">
     <style>
         /* ── 告警中心页面样式 ─────────────────────────────────────── */
+        body {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+            background: var(--bg);
+            color: var(--tx);
+            font-family: var(--mono);
+            font-size: 13px;
+        }
         .alerts-page {
             flex: 1;
             overflow: auto;
             padding: 18px;
-            background: radial-gradient(circle at 18% 10%, rgba(255, 59, 48, 0.06), transparent 28%),
-                        radial-gradient(circle at 88% 0%, rgba(255, 149, 0, 0.05), transparent 26%);
+            background: radial-gradient(circle at 18% 10%, rgba(0, 122, 255, 0.06), transparent 28%),
+                        radial-gradient(circle at 88% 0%, rgba(0, 92, 196, 0.05), transparent 26%);
         }
         .alerts-page::-webkit-scrollbar { width: 6px; }
         .alerts-page::-webkit-scrollbar-thumb { background: var(--ln2); border-radius: 3px; }
@@ -23,16 +33,16 @@
             gap: 16px;
             padding: 18px 20px;
             margin-bottom: 14px;
-            border: 1px solid rgba(255, 59, 48, 0.15);
+            border: 1px solid rgba(0, 122, 255, 0.15);
             border-radius: 14px;
-            background: linear-gradient(135deg, rgba(16, 22, 31, 0.96), rgba(30, 20, 20, 0.82));
+            background: linear-gradient(135deg, rgba(16, 22, 31, 0.96), rgba(20, 28, 40, 0.82));
             box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18);
         }
         .alerts-kicker {
             font-size: 9px;
             letter-spacing: 1.8px;
             text-transform: uppercase;
-            color: var(--a5);
+            color: var(--a);
             margin-bottom: 6px;
         }
         .alerts-hero h1 {
@@ -514,14 +524,25 @@
     </style>
 </head>
 <body>
+<!-- 顶部导航栏 -->
+<div class="topbar">
+    <div class="tb-logo">
+        <div class="tb-hex"></div>
+        <span class="tb-title">K8s <em>Arthas</em></span>
+    </div>
+    <div class="tb-links">
+        <a href="/index.html" class="tb-lnk">← 返回工作台</a>
+        <span class="tb-page-title">告警中心</span>
+    </div>
+</div>
 <div class="alerts-page" id="alerts-page">
     <!-- 页面内容由 JS 动态渲染 -->
 </div>
 
-<script src="/static/js/core/api.js"></script>
-<script src="/static/js/core/utils.js"></script>
-<script src="/static/js/components/alert-card.js"></script>
-<script src="/static/js/components/alert-rules.js"></script>
+<script src="js/core/api.js"></script>
+<script src="js/core/utils.js"></script>
+<script src="js/components/alert-card.js"></script>
+<script src="js/components/alert-rules.js"></script>
 
 <script>
 (function() {

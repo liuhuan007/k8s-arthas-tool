@@ -50,6 +50,11 @@
     if (tabName === 'history') {
       dcLoadHistory();
     }
+
+    // Phase 7 新增：显示性能采样对话框
+    if (tabName === 'profiler') {
+      dcShowProfilerDialog();
+    }
   };
 
   // ── 搜索 ──────────────────────────────────────────────────────────────
@@ -415,6 +420,183 @@
         el.style.display = 'none';
       }
     }, 3000);
+  }
+
+  // ── Phase 7：性能采样对话框 ────────────────────────────────────────────
+
+  /**
+   * 显示性能采样配置面板
+   */
+  window.dcShowProfilerDialog = function () {
+    var panel = document.getElementById('dc-panel-profiler');
+    if (!panel) return;
+
+    var connId = _getCurrentConnectionId() || '';
+    var connLabel = connId || '未选择连接';
+
+    panel.innerHTML = ''
+      + '<div class="profiler-dialog">'
+      + '  <div class="profiler-dialog-header">'
+      + '    <h3>性能采样</h3>'
+      + '    <span class="profiler-conn-label">连接: ' + _esc(connLabel) + '</span>'
+      + '  </div>'
+      + '  <div class="profiler-dialog-body">'
+      + '    <div class="profiler-mode-group">'
+      + '      <label class="profiler-mode-label">采样模式</label>'
+      + '      <div class="profiler-mode-btns">'
+      + '        <button class="pf-mode-btn active" data-mode="cpu" onclick="dcProfilerSelectMode(this,\'cpu\')">CPU 采样</button>'
+      + '        <button class="pf-mode-btn" data-mode="jfr" onclick="dcProfilerSelectMode(this,\'jfr\')">JFR 录制</button>'
+      + '        <button class="pf-mode-btn" data-mode="threaddump" onclick="dcProfilerSelectMode(this,\'threaddump\')">线程 Dump</button>'
+      + '        <button class="pf-mode-btn" data-mode="heapdump" onclick="dcProfilerSelectMode(this,\'heapdump\')">堆 Dump</button>'
+      + '      </div>'
+      + '    </div>'
+      + '    <div class="profiler-dur-group" id="dcProfilerDurGroup">'
+      + '      <label class="profiler-dur-label">采样时长: <span id="dcProfilerDurVal">30</span>s</label>'
+      + '      <input type="range" id="dcProfilerDurSlider" min="5" max="300" value="30" oninput="dcProfilerUpdateDur(this.value)">'
+      + '    </div>'
+      + '    <div class="profiler-actions">'
+      + '      <button class="btn btn-primary" id="dcProfilerStartBtn" onclick="dcProfilerStart()">开始采样</button>'
+      + '      <button class="btn btn-danger" id="dcProfilerStopBtn" onclick="dcProfilerStop()" disabled>停止采样</button>'
+      + '    </div>'
+      + '    <div id="dcProfilerStatus" class="profiler-status-area"></div>'
+      + '  </div>'
+      + '</div>';
+
+    // 恢复状态
+    _dcProfilerMode = 'cpu';
+    _dcProfilerTaskId = null;
+    _dcProfilerPollTimer = null;
+  };
+
+  // 性能采样内部状态
+  var _dcProfilerMode = 'cpu';
+  var _dcProfilerTaskId = null;
+  var _dcProfilerPollTimer = null;
+
+  window.dcProfilerSelectMode = function (btn, mode) {
+    _dcProfilerMode = mode;
+    document.querySelectorAll('#dc-panel-profiler .pf-mode-btn').forEach(function (b) {
+      b.classList.toggle('active', b === btn);
+    });
+    // dump 类型不需要时长
+    var durGroup = document.getElementById('dcProfilerDurGroup');
+    if (durGroup) {
+      durGroup.style.display = (mode === 'threaddump' || mode === 'heapdump') ? 'none' : '';
+    }
+  };
+
+  window.dcProfilerUpdateDur = function (val) {
+    var label = document.getElementById('dcProfilerDurVal');
+    if (label) label.textContent = val;
+  };
+
+  window.dcProfilerStart = async function () {
+    var connId = _getCurrentConnectionId();
+    if (!connId) {
+      dcShowError('请先在连接中心建立 Pod 连接');
+      return;
+    }
+
+    var startBtn = document.getElementById('dcProfilerStartBtn');
+    var stopBtn = document.getElementById('dcProfilerStopBtn');
+    var statusEl = document.getElementById('dcProfilerStatus');
+
+    if (startBtn) startBtn.disabled = true;
+
+    try {
+      var duration = parseInt(document.getElementById('dcProfilerDurSlider').value, 10) || 30;
+
+      // 创建任务
+      var resp = await safePost('/api/profiler/tasks', {
+        connection_id: connId,
+        type: _dcProfilerMode,
+        event: _dcProfilerMode,
+        duration: duration,
+      });
+
+      if (!resp.success) {
+        dcShowError('创建采样任务失败: ' + (resp.error || '未知错误'));
+        if (startBtn) startBtn.disabled = false;
+        return;
+      }
+
+      _dcProfilerTaskId = resp.task_id;
+
+      // 启动任务
+      var startResp = await safePost('/api/profiler/tasks/' + resp.task_id + '/start');
+      if (!startResp.success) {
+        dcShowError('启动采样任务失败: ' + (startResp.message || '未知错误'));
+        if (startBtn) startBtn.disabled = false;
+        return;
+      }
+
+      if (stopBtn) stopBtn.disabled = false;
+      if (statusEl) statusEl.innerHTML = '<div class="pf-status running">采样进行中... (任务ID: ' + _esc(resp.task_id) + ')</div>';
+
+      // 开始轮询
+      _dcProfilerStartPoll(resp.task_id);
+
+    } catch (e) {
+      dcShowError('启动采样失败: ' + e.message);
+      if (startBtn) startBtn.disabled = false;
+    }
+  };
+
+  window.dcProfilerStop = async function () {
+    if (!_dcProfilerTaskId) return;
+    try {
+      await safePost('/api/profiler/tasks/' + _dcProfilerTaskId + '/stop');
+      _dcClearProfilerPoll();
+      var statusEl = document.getElementById('dcProfilerStatus');
+      if (statusEl) statusEl.innerHTML = '<div class="pf-status stopped">采样已停止</div>';
+      var startBtn = document.getElementById('dcProfilerStartBtn');
+      var stopBtn = document.getElementById('dcProfilerStopBtn');
+      if (startBtn) startBtn.disabled = false;
+      if (stopBtn) stopBtn.disabled = true;
+    } catch (e) {
+      dcShowError('停止采样失败: ' + e.message);
+    }
+  };
+
+  function _dcProfilerStartPoll (taskId) {
+    _dcClearProfilerPoll();
+    _dcProfilerPollTimer = setInterval(async function () {
+      try {
+        var data = await safeGet('/api/profiler/tasks/' + taskId);
+        if (!data.success) return;
+        var task = data.task;
+        var statusEl = document.getElementById('dcProfilerStatus');
+        if (!statusEl) return;
+
+        var pct = task.progress || 0;
+        var statusText = task.status === 'completed' ? '采样完成' :
+                         task.status === 'failed' ? '采样失败: ' + (task.message || '') :
+                         '采样进行中... ' + pct + '%';
+        var statusClass = task.status === 'completed' ? 'completed' :
+                          task.status === 'failed' ? 'failed' : 'running';
+
+        statusEl.innerHTML = '<div class="pf-status ' + statusClass + '">'
+          + '<span>' + _esc(statusText) + '</span>'
+          + (task.status === 'running' ? '<div class="pf-progress-bar"><div class="pf-progress-fill" style="width:' + pct + '%"></div></div>' : '')
+          + (task.status === 'completed' && task.output_path ? '<div class="pf-output"><a href="/api/files?path=' + encodeURIComponent(task.output_path) + '" target="_blank" class="btn btn-small">查看结果</a></div>' : '')
+          + '</div>';
+
+        if (task.status === 'completed' || task.status === 'failed') {
+          _dcClearProfilerPoll();
+          var startBtn = document.getElementById('dcProfilerStartBtn');
+          var stopBtn = document.getElementById('dcProfilerStopBtn');
+          if (startBtn) startBtn.disabled = false;
+          if (stopBtn) stopBtn.disabled = true;
+        }
+      } catch (_) {}
+    }, 2000);
+  }
+
+  function _dcClearProfilerPoll () {
+    if (_dcProfilerPollTimer) {
+      clearInterval(_dcProfilerPollTimer);
+      _dcProfilerPollTimer = null;
+    }
   }
 
   // ── 工具函数 ──────────────────────────────────────────────────────────

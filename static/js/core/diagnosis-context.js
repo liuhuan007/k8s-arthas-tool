@@ -4,7 +4,7 @@
  * 架构设计：
  * - 管理当前 Arthas 连接
  * - 追踪活跃执行任务
- * - 连接切换时自动取消正在执行的诊断
+ * - 连接切换只影响后续新建诊断，不自动取消正在执行的诊断
  * - 提供事件监听机制
  */
 
@@ -27,6 +27,9 @@ const DiagnosisContext = {
     execution.executionId = runId;
     execution.runId = runId;
     this.activeExecutions.set(runId, execution);
+    if (typeof window.replaceDiagnosisExecutionId === 'function') {
+      window.replaceDiagnosisExecutionId(localId, runId);
+    }
     return execution;
   },
 
@@ -36,17 +39,9 @@ const DiagnosisContext = {
   onConnectionChange(newConn) {
     const oldConn = this.currentConnection;
     
-    // 连接切换，取消所有正在执行的诊断
+    // 连接切换只更新当前上下文；已提交执行由后端 run_id 固化连接快照。
     if (newConn?.id !== oldConn?.id) {
-      console.warn('[DiagnosisContext] 连接已切换，取消所有正在执行的诊断任务');
-      
-      this.activeExecutions.forEach((exec, id) => {
-        if (exec.status === 'running') {
-          this.cancelExecution(id);
-        }
-      });
-      
-      this.activeExecutions.clear();
+      console.info('[DiagnosisContext] 连接已切换，运行中诊断保持原 run_id 继续轮询');
     }
     
     this.currentConnection = newConn;
@@ -76,6 +71,10 @@ const DiagnosisContext = {
       capabilityId,
       capabilityName,
     });
+
+    if (typeof window.registerDiagnosisExecution === 'function') {
+      window.registerDiagnosisExecution(executionId, capabilityName, Date.now());
+    }
   },
   
   /**
@@ -94,6 +93,10 @@ const DiagnosisContext = {
         status,
         result,
       });
+
+      if (typeof window.completeDiagnosisExecution === 'function') {
+        window.completeDiagnosisExecution(executionId, status);
+      }
       
       // 3 秒后移除（保留历史记录）
       setTimeout(() => {
@@ -145,6 +148,10 @@ const DiagnosisContext = {
         executionId: backendRunId,
         capabilityId: execution.capabilityId,
       });
+
+      if (typeof window.completeDiagnosisExecution === 'function') {
+        window.completeDiagnosisExecution(backendRunId, 'cancelled');
+      }
       
       // 调用后端取消 API（非阻塞）
       try {

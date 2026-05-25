@@ -72,6 +72,7 @@ const PAGE_SCENE_META = {
   'mcp-center': { required: 'none', showConnBar: false },
   'task-center': { required: 'none', showConnBar: false },
   'toolchain-center': { required: 'none', showConnBar: false },
+  'external-system': { required: 'none', showConnBar: false },
   'user-management': { required: 'none', showConnBar: false },
   'audit-logs': { required: 'none', showConnBar: false },
   'hotfix': { required: 'arthas', showConnBar: true },
@@ -306,6 +307,9 @@ async function loadToolchainCenter() {
     if (typeof renderToolboxDualLayout === 'function') {
       renderToolboxDualLayout();
     }
+
+    // ✅ 新增：加载分发历史
+    await loadDistributionHistory();
   } catch (e) {
     toast(`工具链加载失败：${e.message}`, 'err');
   } finally {
@@ -367,11 +371,110 @@ async function distributeToolPackage(packageId) {
   if (!target.cluster_name || !target.pod_name) return toast('请填写 Pod 分发目标', 'warn');
   try {
     toast('开始分发离线工具到 Pod...', 'info');
-    await safePost(`/tasks/tool-packages/${packageId}/distribute`, target, 300000);
-    toast('离线工具已分发到 Pod', 'ok');
+    const result = await safePost(`/tasks/tool-packages/${packageId}/distribute`, target, 300000);
+    const data = result.data || result;
+
+    if (data.ok) {
+      let msg = '离线工具已分发到 Pod';
+      if (data.install_path) {
+        msg += `\n安装路径: ${data.install_path}`;
+      }
+      if (data.pod_check_status === 'verified' && data.sha256_match !== null) {
+        msg += data.sha256_match
+          ? '\n✓ SHA256 校验一致'
+          : `\n⚠ SHA256 不匹配\n本地: ${data.local_sha256}\nPod: ${data.pod_sha256}`;
+      }
+      toast(msg, 'ok');
+
+      // 显示分发详情
+      if (data.stderr) {
+        console.warn('分发警告:', data.stderr);
+      }
+    } else {
+      let errMsg = data.error_message || '分发失败';
+      if (data.stderr) {
+        errMsg += `\n\nPod stderr:\n${data.stderr}`;
+      }
+      toast(errMsg, 'err');
+    }
+
+    await loadToolchainCenter();
+    await loadDistributionHistory();
   } catch (e) {
-    toast(`分发失败：${e.message}`, 'err');
+    let errMsg = `分发失败：${e.message}`;
+    if (e.response?.data?.stderr) {
+      errMsg += `\n\nPod stderr:\n${e.response.data.stderr}`;
+    }
+    toast(errMsg, 'err');
   }
+}
+
+// ── 工具包分发历史 ───────────────────────────────────────────────────────
+let _distributionHistory = [];
+
+async function loadDistributionHistory() {
+  try {
+    const data = await safeGet('/tasks/tool-packages/distributions?limit=20');
+    _distributionHistory = data.distributions || [];
+    renderDistributionHistory();
+  } catch (e) {
+    console.warn('加载分发历史失败:', e.message);
+    // 不显示 toast，避免干扰用户
+  }
+}
+
+function renderDistributionHistory() {
+  const container = document.getElementById('distributionHistory');
+  if (!container) return;
+
+  if (!_distributionHistory.length) {
+    container.innerHTML = '<div class="empty-hint">暂无分发记录</div>';
+    return;
+  }
+
+  container.innerHTML = _distributionHistory.map(d => {
+    const statusClass = d.status === 'success' ? 'status-ok' : 'status-err';
+    const statusText = d.status === 'success' ? '✓ 成功' : '✗ 失败';
+    const time = d.created_at ? new Date(d.created_at).toLocaleString('zh-CN') : '';
+    const target = [d.target_cluster, d.target_namespace, d.target_pod]
+      .filter(Boolean)
+      .join('/');
+
+    let details = '';
+    if (d.pod_check_status === 'verified' && d.local_sha256 && d.pod_sha256) {
+      const match = d.local_sha256 === d.pod_sha256;
+      details += `<div class="dist-detail">`;
+      details += `<span>本地 SHA256: <code>${d.local_sha256.substring(0, 16)}...</code></span>`;
+      details += `<span>Pod SHA256: <code>${d.pod_sha256.substring(0, 16)}...</code></span>`;
+      details += `<span class="${match ? 'text-ok' : 'text-err'}">${match ? '✓ 校验一致' : '⚠ 校验不匹配'}</span>`;
+      details += `</div>`;
+    }
+
+    if (d.stderr) {
+      details += `<div class="dist-stderr"><strong>stderr:</strong><pre>${escapeHtml(d.stderr)}</pre></div>`;
+    }
+
+    return `
+      <div class="dist-record ${statusClass}">
+        <div class="dist-header">
+          <span class="dist-status">${statusText}</span>
+          <span class="dist-package">${d.package_name || '工具包 #' + d.package_id}</span>
+          <span class="dist-target" title="${target}">${target}</span>
+          <span class="dist-path">${d.install_path}</span>
+          <span class="dist-time">${time}</span>
+        </div>
+        ${details}
+        ${d.error_message ? `<div class="dist-error">${escapeHtml(d.error_message)}</div>` : ''}
+      </div>
+    `;
+  }).join('');
+}
+
+function escapeHtml(text) {
+  if (!text) return '';
+  const div = document.createElement('div');
+  div.textContent = text;
+  return div.innerHTML;
 }
 
 async function toggleToolPackageStatus(packageId, status) {
@@ -883,8 +986,10 @@ function _mergeExternalConnectionState() {
   }
 }
 
-function _syncState() {
-  _mergeExternalConnectionState();
+function _syncState(options = {}) {
+  if (!options.skipMerge) {
+    _mergeExternalConnectionState();
+  }
   
   // ✅ 优先使用 ConnectionStore
   if (typeof ConnectionStore !== 'undefined') {
@@ -986,6 +1091,7 @@ const WORKSPACE_META = {
   history: { kicker: 'History', title: '历史记录', sub: '查看命令、采样和文件下载记录' },
   'task-center': { kicker: 'Task Center', title: '任务中心', sub: '规划 Pod 定时脚本、执行结果和任务历史' },
   'toolchain-center': { kicker: 'Toolchain', title: '工具链', sub: '管理 Arthas、async-profiler、jattach 与离线缓存' },
+  'external-system': { kicker: 'External System', title: '外部系统', sub: '在右侧工作区嵌入展示外部系统页面' },
   'user-management': { kicker: 'System Management', title: '用户管理', sub: '管理账号、角色、状态与集群授权' },
   'audit-logs': { kicker: 'Audit Logs', title: '审计日志', sub: '查看登录、连接、诊断与资源变更操作记录' },
 };
@@ -1473,8 +1579,10 @@ async function switchConnection(connId) {
 
       // 同步两步连接状态
       if (newLevel === 'pod') {
+        _connState = ConnectionState.POD_CONNECTED;
+        _runtimeInfo = d.runtime || conn.runtime || _getRt(conn);
         window._connState = ConnectionState.POD_CONNECTED;
-        window._runtimeInfo = d.runtime || _getRt(conn);
+        window._runtimeInfo = _runtimeInfo;
         if (typeof _podConnId !== 'undefined') _podConnId = d.connection_id || connId;
         if (typeof _podPhase !== 'undefined') _podPhase = d.pod_phase;
         _connected = false; // Pod 连接不代表 Arthas 可用
@@ -1490,6 +1598,7 @@ async function switchConnection(connId) {
           }
         }
       } else {
+        _connState = ConnectionState.ARTHAS_READY;
         window._connState = ConnectionState.ARTHAS_READY;
         if (typeof _runtimeInfo !== 'undefined' && d.runtime) _runtimeInfo = d.runtime;
         _connected = true;
@@ -1505,7 +1614,7 @@ async function switchConnection(connId) {
       }
 
       // 同步状态到 window
-      _syncState();
+      _syncState({ skipMerge: true });
       
       // ✅ 关键修复: 同步到 ConnectionStore
       if (typeof ConnectionStore !== 'undefined') {
@@ -2037,7 +2146,7 @@ function saveConnections() {
   }
   
   // 【关键修复】同步到 window
-  _syncState();
+  _syncState({ skipMerge: true });
 }
 
 function loadConnections() {
@@ -2327,7 +2436,7 @@ function switchTab(n) {
   }
 
   // 先切 Tab（允许切换到任何 Tab）
-  const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','history','diag','diagnosis-cap','user-management','audit-logs'];
+  const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','external-system','history','diag','diagnosis-cap','user-management','audit-logs'];
   allTabs.forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
     document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
@@ -6499,6 +6608,10 @@ window.hotswapReset = hotswapReset;
 window.hotswapJad = hotswapJad;
 window.hotswapMc = hotswapMc;
 window.hotswapRetransform = hotswapRetransform;
+
+// ✅ 工具包分发历史
+window.loadDistributionHistory = loadDistributionHistory;
+window.renderDistributionHistory = renderDistributionHistory;
 
 // ✅ 初始化 ConnectionStore (DOM Ready 后)
 if (document.readyState === 'loading') {

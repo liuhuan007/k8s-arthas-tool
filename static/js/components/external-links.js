@@ -88,10 +88,11 @@
       `;
       
       links.forEach(link => {
+        const safeLink = encodeURIComponent(JSON.stringify({ url: link.url, id: link.id, name: link.name }));
         html += `
           <button class="side-nav-item external-link" 
                   data-link-id="${link.id}"
-                  onclick="openExternalLink('${link.url}', '${link.id}', '${link.name}')"
+                  onclick="openExternalLinkFromData('${safeLink}')"
                   title="${link.description || ''}">
             <span>${link.icon}</span><span>${link.name}</span>
           </button>
@@ -109,6 +110,15 @@
   /**
    * 打开外部链接
    */
+  window.openExternalLinkFromData = function(encoded) {
+    try {
+      const link = JSON.parse(decodeURIComponent(encoded));
+      openExternalLink(link.url, link.id, link.name);
+    } catch (e) {
+      console.error('[ExternalLinks] Invalid link data:', e);
+    }
+  };
+
   window.openExternalLink = function(url, linkId, name) {
     console.log('[ExternalLinks] Opening:', linkId, url);
     
@@ -116,13 +126,13 @@
     logLinkAccess(linkId);
     
     // ✅ 在 iframe 中嵌入打开
-    openExternalSystem(url, name || linkId);
+    openExternalSystem(url, name || linkId, linkId);
   };
   
   /**
    * 打开外部系统 (iframe 嵌入)
    */
-  function openExternalSystem(url, title) {
+  function openExternalSystem(url, title, linkId) {
     const panel = document.getElementById('panel-external-system');
     const iframe = document.getElementById('externalSystemIframe');
     const loading = document.getElementById('externalSystemLoading');
@@ -134,28 +144,25 @@
       return;
     }
     
-    // ✅ 跨域检测: 如果是跨域地址,先尝试在新标签页打开
-    const isCrossOrigin = isCrossOriginUrl(url);
-    
-    if (isCrossOrigin) {
-      console.warn('[ExternalLinks] 跨域地址,直接在新标签页打开:', url);
-      window.open(url, '_blank');
-      return;
-    }
-    
     // 切换到外部系统面板
     switchTab('external-system');
+    document.querySelectorAll('.panel').forEach(item => item.classList.remove('on'));
+    panel.classList.add('on');
+    document.querySelectorAll('.side-nav-item.external-link').forEach(item => {
+      item.classList.toggle('on', item.dataset.linkId === linkId);
+    });
     
     // 更新标题
     titleEl.textContent = title;
+    panel.dataset.externalUrl = url;
     
     // 显示加载状态
     loading.style.display = 'flex';
     error.style.display = 'none';
     iframe.style.display = 'none';
     
-    // 设置 iframe src
-    iframe.src = url;
+    // 设置 iframe src。优先使用后端白名单代理移除 X-Frame-Options/CSP 嵌入限制。
+    iframe.src = linkId ? `/external_proxy/${encodeURIComponent(linkId)}/` : url;
     
     // 监听加载完成
     iframe.onload = function() {
@@ -171,7 +178,7 @@
       console.error('[ExternalLinks] iframe 加载失败:', url);
     };
     
-    // ✅ 增强: 监听加载错误 (3秒后如果还在加载,可能是被阻止)
+    // ✅ 增强: 监听加载错误。给跨域慢页面更长时间，避免误判为空白。
     setTimeout(() => {
       if (loading.style.display !== 'none') {
         // 可能是不允许 iframe 嵌入
@@ -179,21 +186,7 @@
         error.style.display = 'flex';
         console.warn('[ExternalLinks] 可能不允许 iframe 嵌入:', url);
       }
-    }, 3000);
-  }
-  
-  /**
-   * 检测是否为跨域 URL
-   */
-  function isCrossOriginUrl(url) {
-    try {
-      const urlObj = new URL(url);
-      const currentOrigin = window.location.origin;
-      return urlObj.origin !== currentOrigin;
-    } catch (e) {
-      // 如果 URL 解析失败,默认认为跨域
-      return true;
-    }
+    }, 8000);
   }
   
   /**
@@ -224,8 +217,10 @@
    */
   window.openExternalInNewTab = function() {
     const iframe = document.getElementById('externalSystemIframe');
-    if (iframe && iframe.src) {
-      window.open(iframe.src, '_blank');
+    const panel = document.getElementById('panel-external-system');
+    const url = panel?.dataset?.externalUrl || iframe?.src;
+    if (url) {
+      window.open(url, '_blank');
     }
   };
   

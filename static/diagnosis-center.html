@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>诊断中心 - K8s Arthas Tool</title>
-    <link rel="stylesheet" href="/static/css/app.css">
-    <link rel="stylesheet" href="/static/css/components/diagnosis.css">
+    <link rel="stylesheet" href="css/app.css">
+    <link rel="stylesheet" href="css/components/diagnosis.css">
     <style>
         /* ═══ 诊断中心专属样式 ═══ */
         .dc-page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
@@ -298,6 +298,7 @@
         <div class="dc-tabs">
             <div class="dc-tab active" data-tab="capabilities" onclick="dcSwitchTab('capabilities')">诊断能力</div>
             <div class="dc-tab" data-tab="history" onclick="dcSwitchTab('history')">执行历史</div>
+            <div class="dc-tab" data-tab="profiler" onclick="dcSwitchTab('profiler')">性能采样</div>
             <div class="dc-tab" data-tab="chat" onclick="dcSwitchTab('chat')">AI Agent</div>
             <div id="dcActiveCount" class="dc-tab" style="display:none;cursor:pointer;color:var(--a)">
                 <span id="dcActiveCountText"></span>
@@ -330,6 +331,9 @@
             <div class="dc-panel" id="dc-panel-history">
                 <div id="dcHistoryContainer"></div>
             </div>
+
+            <!-- 性能采样面板 -->
+            <div class="dc-panel" id="dc-panel-profiler"></div>
 
             <!-- Agent 对话面板 -->
             <div class="dc-panel" id="dc-panel-chat">
@@ -380,17 +384,17 @@
     </div>
 
     <!-- 脚本依赖 -->
-    <script src="/static/js/core/api.js"></script>
-    <script src="/static/js/core/utils.js"></script>
-    <script src="/static/js/core/diagnosis-context.js"></script>
-    <script src="/static/js/core/connection-store.js"></script>
-    <script src="/static/js/components/diagnosis-renderer.js"></script>
-    <script src="/static/js/components/parameter-form.js"></script>
-    <script src="/static/js/components/execution-progress.js"></script>
-    <script src="/static/js/components/execution-history.js"></script>
-    <script src="/static/js/components/diagnosis-report.js"></script>
-    <script src="/static/js/components/agent-chat.js"></script>
-    <script src="/static/js/components/diagnosis.js"></script>
-    <script src="/static/js/components/diagnosis-center.js"></script>
+    <script src="js/core/api.js"></script>
+    <script src="js/core/utils.js"></script>
+    <script src="js/core/diagnosis-context.js"></script>
+    <script src="js/core/connection-store.js"></script>
+    <script src="js/components/diagnosis-renderer.js"></script>
+    <script src="js/components/parameter-form.js"></script>
+    <script src="js/components/execution-progress.js"></script>
+    <script src="js/components/execution-history.js"></script>
+    <script src="js/components/diagnosis-report.js"></script>
+    <script src="js/components/agent-chat.js"></script>
+    <script src="js/components/diagnosis.js"></script>
+    <script src="js/components/diagnosis-center.js"></script>
 </body>
 </html>

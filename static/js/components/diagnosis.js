@@ -31,6 +31,7 @@
       if (_currentFilter.type) params.type = _currentFilter.type;
       if (_currentFilter.category) params.category = _currentFilter.category;
       if (_currentFilter.level) params.level = _currentFilter.level;
+      if (typeof isAdmin === 'function' && isAdmin()) params.include_disabled = '1';
 
       const data = await safeGet('/tasks/capabilities', params);
       let capabilities = data.capabilities || [];
@@ -145,14 +146,19 @@
     const riskBadge = getRiskBadge(cap.risk_level);
     const categoryLabel = getCategoryLabel(cap.category);
     const duration = cap.estimated_duration || 10;
+    const adminActions = (typeof isAdmin === 'function' && isAdmin()) ? `
+      <button class="btn btn-small" onclick="window.diagOpenCapabilityModal(${cap.id})">编辑</button>
+      <button class="btn btn-small danger-text" onclick="window.diagDisableCapability(${cap.id})" ${cap.status === 'disabled' ? 'disabled' : ''}>禁用</button>
+    ` : '';
 
     return `
-      <div class="capability-card" data-cap-id="${cap.id}" data-category="${cap.category}">
+      <div class="capability-card ${cap.status === 'disabled' ? 'is-disabled' : ''}" data-cap-id="${cap.id}" data-category="${cap.category}">
         <div class="capability-header">
           <h4 class="capability-name">${escapeHtml(cap.name)}</h4>
           <div class="capability-badges">
             ${riskBadge}
             <span class="badge badge-category">${categoryLabel}</span>
+            ${cap.status === 'disabled' ? '<span class="badge badge-medium">已禁用</span>' : ''}
           </div>
         </div>
         
@@ -165,12 +171,127 @@
         
         <div class="capability-actions">
           ${hasParams 
-            ? `<button class="btn btn-config" onclick="window.diagShowCapForm(${cap.id})">配置参数</button>`
-            : `<button class="btn btn-primary" onclick="window.diagExecuteCap(${cap.id})">执行诊断</button>`
+            ? `<button class="btn btn-config" onclick="window.diagShowCapForm(${cap.id})" ${cap.status === 'disabled' ? 'disabled' : ''}>配置参数</button>`
+            : `<button class="btn btn-primary" onclick="window.diagExecuteCap(${cap.id})" ${cap.status === 'disabled' ? 'disabled' : ''}>执行诊断</button>`
           }
+          ${adminActions}
         </div>
       </div>
     `;
+  }
+
+  window.diagOpenCapabilityModal = function(capId = null) {
+    if (typeof isAdmin === 'function' && !isAdmin()) {
+      showError('仅管理员可维护诊断能力');
+      return;
+    }
+    const cap = capId ? _capabilities.find(item => item.id === capId) : null;
+    const schemaText = cap ? normalizeSchemaForEdit(cap.parameters_schema) : '{}';
+    const modal = document.createElement('div');
+    modal.className = 'capability-modal-overlay';
+    modal.innerHTML = `
+      <div class="capability-modal">
+        <div class="modal-header">
+          <h3>${cap ? '编辑能力' : '新建能力'}</h3>
+          <button class="btn-close" onclick="this.closest('.capability-modal-overlay').remove()">✕</button>
+        </div>
+        <div class="modal-body">
+          <form id="diagCapabilityEditForm" onsubmit="window.diagSubmitCapabilityForm(event, ${cap ? cap.id : 'null'})">
+            <label>名称<input id="diagCapName" required value="${escapeAttr(cap?.name || '')}"></label>
+            <label>分类
+              <select id="diagCapCategory">
+                ${['quick','tool','scenario','ai'].map(category => `<option value="${category}" ${cap?.category === category ? 'selected' : ''}>${getCategoryLabel(category)}</option>`).join('')}
+              </select>
+            </label>
+            <label>层级<input id="diagCapLevel" type="number" min="1" max="4" value="${cap?.level || 1}"></label>
+            <label>可见性
+              <select id="diagCapVisibility">
+                <option value="public" ${cap?.visibility !== 'private' ? 'selected' : ''}>public</option>
+                <option value="private" ${cap?.visibility === 'private' ? 'selected' : ''}>private</option>
+              </select>
+            </label>
+            <label>状态
+              <select id="diagCapStatus">
+                <option value="active" ${cap?.status !== 'disabled' ? 'selected' : ''}>active</option>
+                <option value="disabled" ${cap?.status === 'disabled' ? 'selected' : ''}>disabled</option>
+              </select>
+            </label>
+            <label>风险
+              <select id="diagCapRisk">
+                ${['low','medium','high'].map(risk => `<option value="${risk}" ${cap?.risk_level === risk ? 'selected' : ''}>${risk}</option>`).join('')}
+              </select>
+            </label>
+            <label>预计耗时(s)<input id="diagCapDuration" type="number" min="0" value="${cap?.estimated_duration || 10}"></label>
+            <label>描述<textarea id="diagCapDesc" rows="3">${escapeHtml(cap?.description || '')}</textarea></label>
+            <label>Arthas 命令<textarea id="diagCapCommand" rows="2">${escapeHtml(cap?.arthas_command || '')}</textarea></label>
+            <label>参数 Schema(JSON)<textarea id="diagCapSchema" rows="5">${escapeHtml(schemaText)}</textarea></label>
+            <div class="diag-form-footer">
+              <button type="button" class="btn btn-g" onclick="this.closest('.capability-modal-overlay').remove()">取消</button>
+              <button type="submit" class="btn btn-p">保存</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  };
+
+  window.diagSubmitCapabilityForm = async function(event, capId = null) {
+    event.preventDefault();
+    let schema;
+    try {
+      schema = JSON.parse(document.getElementById('diagCapSchema').value || '{}');
+    } catch (_) {
+      showError('参数 Schema 必须是合法 JSON');
+      return;
+    }
+    const payload = {
+      name: document.getElementById('diagCapName').value.trim(),
+      category: document.getElementById('diagCapCategory').value,
+      level: Number(document.getElementById('diagCapLevel').value || 1),
+      visibility: document.getElementById('diagCapVisibility').value,
+      status: document.getElementById('diagCapStatus').value,
+      risk_level: document.getElementById('diagCapRisk').value,
+      estimated_duration: Number(document.getElementById('diagCapDuration').value || 0),
+      description: document.getElementById('diagCapDesc').value.trim(),
+      arthas_command: document.getElementById('diagCapCommand').value.trim(),
+      parameters_schema: schema,
+    };
+    try {
+      if (capId) {
+        await safePut(`/tasks/capabilities/${capId}`, payload);
+      } else {
+        await safePost('/tasks/capabilities', payload);
+      }
+      document.querySelector('.capability-modal-overlay')?.remove();
+      showSuccess(capId ? '能力已更新' : '能力已创建');
+      await loadCapabilities();
+      renderCapabilityCards();
+    } catch (e) {
+      showError('保存能力失败: ' + e.message);
+    }
+  };
+
+  window.diagDisableCapability = async function(capId) {
+    if (!confirm('确认禁用该能力？历史记录不会被删除。')) return;
+    try {
+      await safeDelete(`/tasks/capabilities/${capId}`);
+      showSuccess('能力已禁用');
+      await loadCapabilities();
+      renderCapabilityCards();
+    } catch (e) {
+      showError('禁用能力失败: ' + e.message);
+    }
+  };
+
+  function normalizeSchemaForEdit(schema) {
+    if (!schema) return '{}';
+    if (typeof schema === 'object') return JSON.stringify(schema, null, 2);
+    try { return JSON.stringify(JSON.parse(schema), null, 2); } catch (_) { return schema; }
+  }
+
+  function escapeAttr(text) {
+    return escapeHtml(text).replace(/"/g, '&quot;');
   }
 
   /**

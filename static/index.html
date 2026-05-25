@@ -35,7 +35,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="css/app.css?v=20260411i">
-<link rel="stylesheet" href="css/components/diagnosis.css?v=20260514a">
+<link rel="stylesheet" href="css/components/diagnosis.css?v=20260525a">
 
 <!-- 核心模块（按依赖顺序） -->
 <script src="js/core/api.js"></script>
@@ -85,6 +85,15 @@ document.addEventListener('DOMContentLoaded', function() {
 
 <!-- 连接信息提示条 -->
 <script src="js/components/conn-status-bar.js?v=20260419a"></script>
+
+<!-- Phase 5: 多标签页同步管理器 -->
+<script src="js/components/broadcast-channel-manager.js?v=20260525a"></script>
+
+<!-- Phase 5: TTL 配置组件 -->
+<script src="js/components/connection-ttl-config.js?v=20260525a"></script>
+
+<!-- Phase 5: 连接切换确认组件 -->
+<script src="js/components/connection-switch-confirm.js?v=20260525a"></script>
 
 <!-- 精准错误提示组件 -->
 <script src="js/components/error-notification.js?v=20260417a"></script>
@@ -761,6 +770,20 @@ document.addEventListener('DOMContentLoaded', function() {
                 <input id="toolTargetInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
                 <button class="btn btn-g task-fill-btn" type="button" onclick="fillToolchainPodTargetFromCurrent()">从当前 Pod 连接填充</button>
                 <div class="task-help">工具包列表中的"分发到 Pod"会调用 distributeToolPackage(packageId)，使用上方目标信息。</div>
+              </div>
+            </section>
+
+            <!-- 分发历史 -->
+            <section class="task-card" style="margin-top:16px">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">分发历史</div>
+                  <div class="task-card-sub">最近工具包分发记录</div>
+                </div>
+                <button class="btn btn-g" onclick="loadDistributionHistory()">刷新</button>
+              </div>
+              <div id="distributionHistory" class="distribution-history-list">
+                <div class="sb-empty">暂无分发记录</div>
               </div>
             </section>
           </div>
@@ -1597,7 +1620,7 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
 
     <!-- ✅ 新增: 统一诊断中心面板 -->
-    <div class="panel" id="panel-diagnosis-cap" style="display:none">
+    <div class="panel" id="panel-diagnosis-cap">
       <div class="diagnosis-cap-section">
         <div class="ops-hero">
           <div>

@@ -25,6 +25,17 @@
     updateExecutionIndicator();
   };
 
+  window.replaceDiagnosisExecutionId = function(localId, runId) {
+    if (!localId || !runId || localId === runId) return;
+    const execution = _activeExecutions.get(localId);
+    if (!execution) return;
+    _activeExecutions.delete(localId);
+    execution.id = runId;
+    execution.runId = runId;
+    _activeExecutions.set(runId, execution);
+    updateExecutionIndicator();
+  };
+
   /**
    * 完成执行任务
    */
@@ -47,7 +58,7 @@
    * 获取活跃执行数
    */
   window.getDiagnosisActiveCount = function() {
-    return Array.from(_activeExecutions.values()).filter(e => e.status === 'running').length;
+    return getExecutionList().filter(e => e.status === 'running').length;
   };
 
   /**
@@ -76,7 +87,7 @@
    * 显示活跃执行列表
    */
   window.showActiveExecutions = function() {
-    const executions = Array.from(_activeExecutions.values());
+    const executions = getExecutionList();
     
     const list = executions.map(e => {
       const duration = e.status === 'running' 
@@ -87,8 +98,10 @@
         <div class="execution-item">
           <div class="execution-name">${escapeHtml(e.name)}</div>
           <div class="execution-meta">
+            <span>run_id: ${escapeHtml(e.runId || e.id)}</span>
             <span class="execution-status ${e.status}">${e.status}</span>
             <span>耗时: ${duration}</span>
+            ${e.status === 'running' ? `<button class="btn btn-small danger-text" onclick="window.cancelDiagnosisExecution('${escapeAttr(e.runId || e.id)}')">取消</button>` : ''}
           </div>
         </div>
       `;
@@ -114,6 +127,29 @@
     });
   };
 
+  window.cancelDiagnosisExecution = function(runId) {
+    if (window.DiagnosisContext) {
+      DiagnosisContext.cancelExecution(runId);
+    }
+    const modal = document.querySelector('.execution-modal-overlay');
+    if (modal) modal.remove();
+    updateExecutionIndicator();
+  };
+
+  function getExecutionList() {
+    if (window.DiagnosisContext && DiagnosisContext.activeExecutions) {
+      return Array.from(DiagnosisContext.activeExecutions.values()).map(item => ({
+        id: item.executionId,
+        runId: item.runId || item.executionId,
+        name: item.capabilityName,
+        startTime: item.startTime,
+        endTime: item.endTime,
+        status: item.status,
+      }));
+    }
+    return Array.from(_activeExecutions.values());
+  }
+
   /**
    * HTML 转义
    */
@@ -122,6 +158,10 @@
     const div = document.createElement('div');
     div.textContent = text;
     return div.innerHTML;
+  }
+
+  function escapeAttr(text) {
+    return escapeHtml(text).replace(/'/g, '&#39;').replace(/"/g, '&quot;');
   }
 
 })();
