@@ -1,0 +1,45 @@
+sequenceDiagram
+    participant User
+    participant UI as diagnosis.html
+    participant CapPanel as Capability Panel
+    participant FormModal as Form Modal
+    participant ProgressModal as Progress Modal
+    participant ResultDisplay as Result Display
+    participant HistoryPanel as History Panel
+    participant Context as DiagnosisContext
+    participant API as Backend API
+
+    User->>UI: Open diagnosis.html
+    UI->>Context: Initialize
+    Context->>API: GET /tasks/capabilities
+    API-->>Context: Capabilities list
+    Context-->>CapPanel: Render cards
+
+    User->>CapPanel: Click capability card
+    alt Has Parameters
+        CapPanel->>FormModal: Show parameter form
+        User->>FormModal: Fill parameters
+        FormModal->>Context: Execute with params
+    else No Parameters
+        CapPanel->>Context: Execute directly
+    end
+
+    Context->>API: POST /diagnosis/execute
+    API-->>Context: execution_id
+
+    alt Async Execution
+        Context->>ProgressModal: Show progress
+        loop Polling
+            Context->>API: GET /diagnosis/status
+            API-->>Context: status update
+            Context-->>ProgressModal: Update UI
+        end
+        Context->>ResultDisplay: Show result
+    else Sync Execution
+        Context->>ResultDisplay: Show result
+    end
+
+    Context->>HistoryPanel: Refresh history
+    HistoryPanel->>API: GET /diagnosis/history
+    API-->>HistoryPanel: History data
+    HistoryPanel-->>User: Display history

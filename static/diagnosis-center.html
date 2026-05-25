@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>诊断中心 - K8s Arthas Tool</title>
+    <link rel="stylesheet" href="/static/css/app.css">
+    <link rel="stylesheet" href="/static/css/components/diagnosis.css">
+    <style>
+        /* ═══ 诊断中心专属样式 ═══ */
+        .dc-page { display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
+        .dc-header {
+            flex-shrink: 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            background: linear-gradient(180deg, var(--bg1), rgba(16,22,31,.92));
+            border-bottom: 1px solid var(--ln);
+        }
+        .dc-header-left { display: flex; align-items: center; gap: 12px; }
+        .dc-header h2 { font-size: 16px; font-weight: 700; color: var(--tx); margin: 0; }
+        .dc-header-sub { font-size: 10px; color: var(--tx3); letter-spacing: .5px; }
+        .dc-header-actions { display: flex; gap: 8px; }
+        .dc-tabs {
+            flex-shrink: 0;
+            display: flex;
+            gap: 0;
+            border-bottom: 1px solid var(--ln);
+            background: var(--bg1);
+            padding: 0 16px;
+        }
+        .dc-tab {
+            padding: 10px 18px;
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--tx2);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            transition: all .15s;
+            white-space: nowrap;
+        }
+        .dc-tab:hover { color: var(--tx); background: rgba(255,255,255,.02); }
+        .dc-tab.active { color: var(--a); border-bottom-color: var(--a); }
+        .dc-tab .tab-count {
+            background: var(--bg3);
+            border-radius: 10px;
+            padding: 1px 6px;
+            font-size: 10px;
+            margin-left: 4px;
+        }
+        .dc-body { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+        .dc-panel { flex: 1; overflow-y: auto; padding: 20px; display: none; }
+        .dc-panel.active { display: block; }
+        .dc-panel::-webkit-scrollbar { width: 6px; }
+        .dc-panel::-webkit-scrollbar-thumb { background: var(--ln2); border-radius: 3px; }
+
+        /* 能力筛选栏 */
+        .dc-filter-bar {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+            flex-wrap: wrap;
+        }
+        .dc-filter-btn {
+            padding: 6px 14px;
+            border: 1px solid var(--ln2);
+            border-radius: 16px;
+            background: transparent;
+            color: var(--tx2);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all .15s;
+        }
+        .dc-filter-btn:hover { border-color: var(--a); color: var(--a); }
+        .dc-filter-btn.active {
+            background: rgba(0,122,255,.12);
+            border-color: var(--a);
+            color: var(--a);
+        }
+        .dc-search-input {
+            flex: 1;
+            min-width: 200px;
+            padding: 6px 12px;
+            border: 1px solid var(--ln2);
+            border-radius: 16px;
+            background: var(--bg2);
+            color: var(--tx);
+            font-size: 11px;
+            font-family: var(--mono);
+            outline: none;
+            transition: border-color .15s;
+        }
+        .dc-search-input:focus { border-color: var(--a); }
+        .dc-search-input::placeholder { color: var(--tx3); }
+
+        /* 结果面板容器 */
+        .dc-result-container {
+            display: none;
+            margin-bottom: 20px;
+        }
+        .dc-result-container.visible { display: block; }
+
+        /* Agent 对话面板 */
+        .dc-chat-container {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+        }
+        .dc-chat-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+        .dc-chat-messages::-webkit-scrollbar { width: 4px; }
+        .dc-chat-messages::-webkit-scrollbar-thumb { background: var(--ln2); border-radius: 2px; }
+        .dc-chat-input-area {
+            flex-shrink: 0;
+            padding: 12px 16px;
+            border-top: 1px solid var(--ln);
+            background: var(--bg1);
+        }
+        .dc-chat-input-wrap {
+            display: flex;
+            gap: 8px;
+            align-items: flex-end;
+        }
+        .dc-chat-input {
+            flex: 1;
+            padding: 8px 12px;
+            border: 1px solid var(--ln2);
+            border-radius: 8px;
+            background: var(--bg2);
+            color: var(--tx);
+            font-size: 12px;
+            font-family: var(--mono);
+            resize: none;
+            outline: none;
+            min-height: 36px;
+            max-height: 120px;
+            transition: border-color .15s;
+        }
+        .dc-chat-input:focus { border-color: var(--a); }
+        .dc-chat-send-btn {
+            padding: 8px 16px;
+            background: var(--a);
+            border: none;
+            border-radius: 8px;
+            color: #fff;
+            font-size: 12px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all .15s;
+            white-space: nowrap;
+        }
+        .dc-chat-send-btn:hover { filter: brightness(1.1); }
+        .dc-chat-send-btn:disabled { opacity: .5; cursor: not-allowed; }
+
+        /* Agent 消息 */
+        .dc-chat-msg {
+            display: flex;
+            gap: 10px;
+            max-width: 85%;
+        }
+        .dc-chat-msg.user { align-self: flex-end; flex-direction: row-reverse; }
+        .dc-chat-msg.assistant { align-self: flex-start; }
+        .dc-chat-msg.system { align-self: center; max-width: 95%; }
+        .dc-chat-avatar {
+            width: 32px;
+            height: 32px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+            flex-shrink: 0;
+        }
+        .dc-chat-msg.user .dc-chat-avatar { background: rgba(0,122,255,.15); }
+        .dc-chat-msg.assistant .dc-chat-avatar { background: rgba(52,199,89,.15); }
+        .dc-chat-bubble {
+            padding: 10px 14px;
+            border-radius: 12px;
+            font-size: 12px;
+            line-height: 1.6;
+            word-break: break-word;
+        }
+        .dc-chat-msg.user .dc-chat-bubble {
+            background: var(--a);
+            color: #fff;
+            border-bottom-right-radius: 4px;
+        }
+        .dc-chat-msg.assistant .dc-chat-bubble {
+            background: var(--bg3);
+            color: var(--tx);
+            border-bottom-left-radius: 4px;
+        }
+        .dc-chat-msg.system .dc-chat-bubble {
+            background: transparent;
+            color: var(--tx3);
+            font-size: 11px;
+            text-align: center;
+            padding: 4px 0;
+        }
+        .dc-chat-bubble pre {
+            background: var(--bg);
+            padding: 8px;
+            border-radius: 4px;
+            font-size: 11px;
+            overflow-x: auto;
+            margin: 6px 0;
+            white-space: pre-wrap;
+        }
+        .dc-chat-bubble code {
+            background: var(--bg);
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-size: 11px;
+        }
+        .dc-chat-typing {
+            display: inline-flex;
+            gap: 4px;
+            padding: 4px 0;
+        }
+        .dc-chat-typing span {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--tx3);
+            animation: typingBounce 1.4s infinite;
+        }
+        .dc-chat-typing span:nth-child(2) { animation-delay: 0.2s; }
+        .dc-chat-typing span:nth-child(3) { animation-delay: 0.4s; }
+        @keyframes typingBounce {
+            0%, 60%, 100% { transform: translateY(0); }
+            30% { transform: translateY(-4px); }
+        }
+
+        /* Agent 对话欢迎 */
+        .dc-chat-welcome {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 40px 20px;
+            text-align: center;
+        }
+        .dc-chat-welcome-icon { font-size: 48px; margin-bottom: 12px; }
+        .dc-chat-welcome-title { font-size: 16px; font-weight: 700; color: var(--tx); margin-bottom: 6px; }
+        .dc-chat-welcome-desc { font-size: 12px; color: var(--tx3); margin-bottom: 20px; max-width: 400px; line-height: 1.6; }
+        .dc-chat-quick-actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            justify-content: center;
+        }
+        .dc-chat-quick-btn {
+            padding: 6px 14px;
+            border: 1px solid var(--ln2);
+            border-radius: 16px;
+            background: transparent;
+            color: var(--tx2);
+            font-size: 11px;
+            cursor: pointer;
+            transition: all .15s;
+        }
+        .dc-chat-quick-btn:hover {
+            border-color: var(--a);
+            color: var(--a);
+            background: rgba(0,122,255,.06);
+        }
+
+        /* 响应式 */
+        @media (max-width: 768px) {
+            .dc-filter-bar { flex-direction: column; align-items: stretch; }
+            .dc-search-input { min-width: auto; }
+            .dc-chat-msg { max-width: 95%; }
+        }
+    </style>
+</head>
+<body>
+    <div class="dc-page">
+        <!-- 顶栏 -->
+        <div class="dc-header">
+            <div class="dc-header-left">
+                <h2>诊断中心</h2>
+                <span class="dc-header-sub">K8s Arthas 智能诊断平台</span>
+            </div>
+            <div class="dc-header-actions">
+                <button class="dc-tab" onclick="window.dcBackToMain()" style="border:1px solid var(--ln2);border-radius:4px;font-size:11px;padding:4px 12px">返回</button>
+            </div>
+        </div>
+
+        <!-- Tab 栏 -->
+        <div class="dc-tabs">
+            <div class="dc-tab active" data-tab="capabilities" onclick="dcSwitchTab('capabilities')">诊断能力</div>
+            <div class="dc-tab" data-tab="history" onclick="dcSwitchTab('history')">执行历史</div>
+            <div class="dc-tab" data-tab="chat" onclick="dcSwitchTab('chat')">AI Agent</div>
+            <div id="dcActiveCount" class="dc-tab" style="display:none;cursor:pointer;color:var(--a)">
+                <span id="dcActiveCountText"></span>
+            </div>
+        </div>
+
+        <!-- 内容区 -->
+        <div class="dc-body">
+            <!-- 诊断能力面板 -->
+            <div class="dc-panel active" id="dc-panel-capabilities">
+                <!-- 筛选栏 -->
+                <div class="dc-filter-bar">
+                    <input type="text" class="dc-search-input" id="dcSearchInput"
+                        placeholder="搜索诊断能力..." oninput="dcOnSearch(this.value)">
+                    <button class="dc-filter-btn active" data-level="all" onclick="dcFilterByLevel('all', this)">全部</button>
+                    <button class="dc-filter-btn" data-level="1" onclick="dcFilterByLevel('1', this)">⚡ 快速</button>
+                    <button class="dc-filter-btn" data-level="2" onclick="dcFilterByLevel('2', this)">🔍 诊断</button>
+                    <button class="dc-filter-btn" data-level="3" onclick="dcFilterByLevel('3', this)">📋 场景</button>
+                    <button class="dc-filter-btn" data-level="4" onclick="dcFilterByLevel('4', this)">🤖 AI</button>
+                </div>
+
+                <!-- 结果展示区 -->
+                <div class="dc-result-container" id="dcResultContainer"></div>
+
+                <!-- 能力卡片网格 -->
+                <div id="dcCapabilityGrid"></div>
+            </div>
+
+            <!-- 执行历史面板 -->
+            <div class="dc-panel" id="dc-panel-history">
+                <div id="dcHistoryContainer"></div>
+            </div>
+
+            <!-- Agent 对话面板 -->
+            <div class="dc-panel" id="dc-panel-chat">
+                <div class="dc-chat-container">
+                    <div class="dc-chat-messages" id="dcChatMessages">
+                        <div class="dc-chat-welcome" id="dcChatWelcome">
+                            <div class="dc-chat-welcome-icon">🤖</div>
+                            <div class="dc-chat-welcome-title">AI 诊断助手</div>
+                            <div class="dc-chat-welcome-desc">我可以帮你分析 Java 应用性能问题，自动执行诊断并生成分析报告。</div>
+                            <div class="dc-chat-quick-actions">
+                                <button class="dc-chat-quick-btn" onclick="dcAgentQuickAsk('CPU 占用很高怎么排查？')">🔥 CPU 飙高排查</button>
+                                <button class="dc-chat-quick-btn" onclick="dcAgentQuickAsk('接口响应慢如何定位？')">⏱️ 接口慢定位</button>
+                                <button class="dc-chat-quick-btn" onclick="dcAgentQuickAsk('内存泄漏怎么排查？')">💾 内存泄漏排查</button>
+                                <button class="dc-chat-quick-btn" onclick="dcAgentQuickAsk('线程死锁怎么检测？')">🔒 线程死锁检测</button>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="dc-chat-input-area">
+                        <div class="dc-chat-input-wrap">
+                            <textarea class="dc-chat-input" id="dcChatInput"
+                                placeholder="描述你的 Java 应用问题..." rows="1"
+                                onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();dcAgentSend()}"
+                                oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px'"></textarea>
+                            <button class="dc-chat-send-btn" id="dcChatSendBtn" onclick="dcAgentSend()">发送</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- 加载遮罩 -->
+        <div id="diagLoadingOverlay" style="position:fixed;inset:0;background:rgba(0,0,0,.5);display:none;align-items:center;justify-content:center;z-index:9999">
+            <div class="loading-spinner">
+                <div class="spinner"></div>
+                <div class="loading-text" id="dcLoadingText">加载中...</div>
+            </div>
+        </div>
+
+        <!-- 参数表单弹窗 -->
+        <div id="diagFormModal" style="display:none;position:fixed;inset:0;z-index:1200;display:none;align-items:center;justify-content:center;padding:24px;background:rgba(5,8,14,.72);backdrop-filter:blur(8px)">
+            <div id="diagFormContainer"></div>
+        </div>
+
+        <!-- 进度弹窗 -->
+        <div id="diagProgressModal" style="display:none;position:fixed;inset:0;z-index:1200;align-items:center;justify-content:center;padding:24px;background:rgba(5,8,14,.72);backdrop-filter:blur(8px)">
+            <div id="diagProgressContainer"></div>
+        </div>
+    </div>
+
+    <!-- 脚本依赖 -->
+    <script src="/static/js/core/api.js"></script>
+    <script src="/static/js/core/utils.js"></script>
+    <script src="/static/js/core/diagnosis-context.js"></script>
+    <script src="/static/js/core/connection-store.js"></script>
+    <script src="/static/js/components/diagnosis-renderer.js"></script>
+    <script src="/static/js/components/parameter-form.js"></script>
+    <script src="/static/js/components/execution-progress.js"></script>
+    <script src="/static/js/components/execution-history.js"></script>
+    <script src="/static/js/components/diagnosis-report.js"></script>
+    <script src="/static/js/components/agent-chat.js"></script>
+    <script src="/static/js/components/diagnosis.js"></script>
+    <script src="/static/js/components/diagnosis-center.js"></script>
+</body>
+</html>
