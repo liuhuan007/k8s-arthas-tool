@@ -304,6 +304,36 @@ def _start_anomaly_detector():
 
 _start_anomaly_detector()
 
+
+# ── Phase 5: 启动健康检查服务和连接恢复 ──────────────────────────────────────
+def _start_phase5_services():
+    """初始化 Phase 5 健康检查和连接恢复服务"""
+    try:
+        from services.health_check_service import HealthCheckService
+        health_svc = HealthCheckService(
+            db=db,
+            connections=_connections,
+            connections_lock=_connections_lock,
+            conn_health=_conn_health,
+            conn_health_lock=_conn_health_lock,
+        )
+        health_svc.start()
+        log.info("[Phase5] HealthCheckService started")
+    except Exception as e:
+        log.error("[Phase5] 启动健康检查服务失败: %s", e, exc_info=True)
+
+    try:
+        from services.connection_recovery_service import ConnectionRecoveryService
+        recovery_svc = ConnectionRecoveryService(db=db)
+        recovery_svc.recover_on_startup()
+        log.info("[Phase5] ConnectionRecoveryService: recovery on startup completed")
+    except Exception as e:
+        log.error("[Phase5] 启动连接恢复服务失败: %s", e, exc_info=True)
+
+
+_start_phase5_services()
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 辅助函数
 
@@ -453,6 +483,14 @@ def history_page():
 def alerts_page():
     """告警中心页面"""
     return send_from_directory('static', 'alerts.html')
+
+
+@app.route('/diagnosis-center')
+@app.route('/diagnosis-center.html')
+@login_required
+def diagnosis_center_page():
+    """诊断中心页面"""
+    return send_from_directory('static', 'diagnosis-center.html')
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1505,170 +1543,134 @@ def arthas_session_close():
 @app.route('/api/profile/start', methods=['POST'])
 @login_required
 def start_profiler():
-    """启动性能分析任务"""
+    """启动性能分析任务（委托 ProfilerService，保持旧版响应格式）"""
+    from services.profiler_service import get_profiler_service
+
     d = request.json or {}
-    # DEPRECATED: conn_id parameter support (remove in v2.0)
     conn_id = d.get('conn_id') or d.get('connection_id') or ''
-    # 优先使用 mode，兼容旧版 type 参数
-    task_type = d.get('mode') or d.get('type', 'profiler')  # profiler/jfr/threaddump/heapdump
+    task_type = d.get('mode') or d.get('type', 'profiler')
     duration = int(d.get('duration', 60))
-    fmt = d.get('format', 'html')  # html/collapsed/jfr
-    # 根据任务类型设置默认事件
-    mode = task_type
-    if mode == 'jfr':
+    fmt = d.get('format', 'html')
+    if task_type == 'jfr':
         event = d.get('event', d.get('jfr_settings', 'default'))
-    elif mode in ('threaddump', 'heapdump'):
-        event = d.get('event', mode)  # dump 类型事件=类型名
+    elif task_type in ('threaddump', 'heapdump'):
+        event = d.get('event', task_type)
     else:
-        event = d.get('event', 'cpu')  # profiler 默认 cpu
-    
+        event = d.get('event', 'cpu')
+
     conn, err = _ensure_connection(conn_id, d)
     if err:
         return jsonify({"state": "FAILED", "message": err}), 404
 
     conn_id = conn_id or f"{d.get('cluster_name','')}/{d.get('namespace','default')}/{d.get('pod_name','')}"
-    
-    # 检查同一连接是否已有运行中的任务（防止重复提交）
+
+    # 检查同一连接是否已有运行中的任务
     running_task = db.fetch_one(
         'SELECT id, type, event, created_at FROM profiler_tasks WHERE connection_id = ? AND status IN (?, ?) LIMIT 1',
         (conn_id, 'running', 'starting')
     )
     if running_task:
         return jsonify({
-            "state": "FAILED", 
+            "state": "FAILED",
             "message": f"该连接已有运行中的任务 (ID: {running_task['id']}, 类型: {running_task['type']}/{running_task['event']}, 启动于: {running_task['created_at']})，请等待完成后再试"
         }), 409
-    
-    task_id = str(uuid.uuid4())[:8]
-    
-    # 保存任务到数据库
+
     user_id = current_user.id if current_user.is_authenticated else None
-    now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    db.insert('profiler_tasks', {
-        'id': task_id,
-        'connection_id': conn_id,
-        'user_id': user_id,
-        'type': task_type,
-        'status': 'running',
-        'cluster_name': d.get('cluster_name', ''),
-        'namespace': d.get('namespace', 'default'),
-        'pod_name': d.get('pod_name', ''),
-        'mode': task_type,
-        'event': event,
-        'duration': duration,
-        'format': fmt,
-        'progress': 0,
-        'created_at': now_ts,
-        'updated_at': now_ts,
-    })
-    
+    svc = get_profiler_service()
+    task_id = svc.create_task(
+        connection_id=conn_id,
+        task_type=task_type,
+        event=event,
+        duration=duration,
+        fmt=fmt,
+        user_id=user_id,
+    )
+
     from services.audit_service import AuditService
     AuditService.log_task_created(user_id, task_id, task_type)
-    
-    # 后台执行任务
-    def run_task():
-        import logging
-        logger = logging.getLogger(__name__)
-        workflow = ProfilerWorkflow(conn)
-        try:
-            result = workflow.run(duration=duration, fmt=fmt, mode=task_type, event=event,
-                                   output_dir=str(OUTPUT_DIR))
-            output_path = (result.get('local_file', '') or result.get('output_path', '')) if isinstance(result, dict) else ''
-            message = result.get('message', '') if isinstance(result, dict) else ''
-            logger.info(f"[Profiler] Task {task_id} completed: {output_path}")
-            db.update('profiler_tasks', {
-                'status': 'completed',
-                'progress': 100,
-                'output_path': output_path,
-                'message': message,
-                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }, 'id = ?', (task_id,))
-        except Exception as e:
-            logger.error(f"[Profiler] Task {task_id} failed: {e}", exc_info=True)
-            db.update('profiler_tasks', {
-                'status': 'failed',
-                'message': str(e),
-                'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-            }, 'id = ?', (task_id,))
-    
-    import threading
-    threading.Thread(target=run_task, daemon=True).start()
-    
+
+    result = svc.start_task(task_id)
+    if not result.get('success'):
+        return jsonify({"state": "FAILED", "message": result.get('message', '启动失败')}), 500
+
     return jsonify({"ok": True, "task_id": task_id})
 
 
-# ── 任务状态轮询（前端 pfPoll 使用）───
 @app.route('/api/profile/<task_id>', methods=['GET'])
 @login_required
 def get_profile_status(task_id: str):
     """获取任务状态 + 关联日志（供前端轮询使用）"""
-    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
-    if not task:
-        return jsonify({"error": "任务不存在", "status": "failed"}), 404
-    
-    # 直接从 task 获取消息，不再使用 profiler_logs 表
+    from services.profiler_service import get_profiler_service
+
+    svc = get_profiler_service()
+    result = svc.get_task_status(task_id)
+    if not result.get('success'):
+        return jsonify({"error": result.get('message', '任务不存在'), "status": "failed"}), 404
+
+    task = result['task']
     logs = []
     if task.get('message'):
-        logs = [{"message": task['message'], "timestamp": task['updated_at']}]
-    
-    # 提取输出文件名（从 output_path 中获取文件名）
+        logs = [{"message": task['message'], "timestamp": task.get('updated_at', '')}]
+
     output_file = None
     if task.get('output_path'):
         output_file = Path(task['output_path']).name or task['output_path']
-    
+
     return jsonify({
         "status": task['status'],
-        "type": task['type'],
+        "type": task.get('type', ''),
         "event": task.get('event', ''),
         "duration": task.get('duration', 60),
-        "progress": task.get('progress', _calc_progress(task)),
+        "progress": task.get('progress', 0),
         "output_file": output_file,
         "logs": logs,
-        "created_at": task.get('created_at', ''),  # 添加创建时间，供前端恢复进度计算
+        "created_at": task.get('created_at', ''),
     })
 
 
-# ── 任务状态查询（profiler.js 组件兼容）───
 @app.route('/api/profile/status', methods=['POST'])
 @login_required
 def profile_status():
     """查询采样任务状态（profiler.js 组件使用）"""
+    from services.profiler_service import get_profiler_service
+
     d = request.json or {}
     task_id = d.get('task_id', '')
-    
-    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
-    if not task:
-        return jsonify({"status": "not_found", "error": "任务不存在"}), 404
-    
-    # 直接从 task 获取消息
+
+    svc = get_profiler_service()
+    result = svc.get_task_status(task_id)
+    if not result.get('success'):
+        return jsonify({"status": "not_found", "error": result.get('message', '任务不存在')}), 404
+
+    task = result['task']
     logs = []
     if task.get('message'):
         logs = [task['message']]
-    
+
     return jsonify({
         "status": task['status'],
         "logs": logs,
-        "progress": task.get('progress', _calc_progress(task)),
+        "progress": task.get('progress', 0),
     })
 
 
-# ── 停止任务（profiler.js 组件使用）───
 @app.route('/api/profile/stop', methods=['POST'])
 @login_required
 def stop_profiler():
     """停止正在运行的采样任务"""
+    from services.profiler_service import get_profiler_service
+
     d = request.json or {}
     task_id = d.get('task_id', '')
-    
-    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
-    if not task:
-        return jsonify({"error": "任务不存在"}), 404
-    
-    if task['status'] not in ('running', 'pending'):
-        return jsonify({"ok": False, "msg": f"当前状态 {task['status']}，无法停止"})
-    
-    db.update('profiler_tasks', {'status': 'stopped', 'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')},
-             'id = ?', (task_id,))
+
+    svc = get_profiler_service()
+    result = svc.stop_task(task_id)
+    if not result.get('success'):
+        task = db.fetch_one('SELECT status FROM profiler_tasks WHERE id = ?', (task_id,))
+        if not task:
+            return jsonify({"error": "任务不存在"}), 404
+        return jsonify({"ok": False, "msg": result.get('message', '无法停止')})
+
     return jsonify({"ok": True, "status": "stopped"})
 
 
@@ -1722,60 +1724,24 @@ def clear_profiler_logs(connection_id):
         return jsonify({"error": str(e)}), 500
 
 
-def _calc_progress(task):
-    """根据任务状态和时间估算进度百分比"""
-    if task['status'] == 'completed':
-        return 100
-    if task['status'] in ('failed', 'stopped'):
-        return 0
-    created = task.get('created_at', '')
-    if not created:
-        return 10
-    try:
-        t = datetime.strptime(created[:19], '%Y-%m-%d %H:%M:%S')
-        elapsed = (datetime.now() - t).total_seconds()
-        return min(90, max(5, int(elapsed / 2)))
-    except:
-        return 50
-
-
 @app.route('/api/profile/tasks', methods=['GET'])
 @login_required
 def list_profiler_tasks():
     """获取性能分析任务列表"""
+    from services.profiler_service import get_profiler_service
+
     conn_id = request.args.get('conn_id', '')
-    
-    # 尝试从数据库获取，表不存在时返回空列表
-    try:
-        sql = '''SELECT pt.*, u.username 
-                 FROM profiler_tasks pt 
-                 LEFT JOIN users u ON pt.user_id = u.id 
-                 WHERE 1=1'''
-        params = []
-        
-        if conn_id:
-            sql += ' AND pt.connection_id = ?'
-            params.append(conn_id)
-        
-        # 非管理员只看到自己的任务
-        if current_user.is_authenticated and not current_user.is_admin:
-            sql += ' AND pt.user_id = ?'
-            params.append(current_user.id)
-        
-        sql += ' ORDER BY pt.created_at DESC LIMIT 50'
-        
-        raw_tasks = db.fetch_all(sql, tuple(params))
-    except Exception:
-        raw_tasks = []
-    
-    # 格式化输出，兼容前端期望的格式
+    user_id = None if current_user.is_admin else current_user.id
+
+    svc = get_profiler_service()
+    raw_tasks = svc.list_tasks(connection_id=conn_id or None, user_id=user_id)
+
     tasks = []
-    for t in (raw_tasks or []):
-        # 检查是否有输出文件
+    for t in raw_tasks:
         output_path = t.get('output_path', '')
         has_file = bool(output_path) and Path(output_path).exists() if output_path else False
         file_name = Path(output_path).name if has_file else ''
-        
+
         tasks.append({
             'id': t.get('id', ''),
             'status': t.get('status', 'pending'),
@@ -1785,8 +1751,7 @@ def list_profiler_tasks():
             'updated_at': t.get('updated_at', ''),
             'has_file': has_file,
             'file_name': file_name,
-            'username': t.get('username', '-'),
-            # 兼容前端 config 格式
+            'username': '-',
             'config': {
                 'cluster': t.get('cluster_name', ''),
                 'namespace': t.get('namespace', ''),
@@ -1798,7 +1763,7 @@ def list_profiler_tasks():
                 'format': t.get('format', 'html'),
             }
         })
-    
+
     return jsonify(tasks)
 
 
@@ -1806,17 +1771,20 @@ def list_profiler_tasks():
 @login_required
 def get_profiler_task(task_id: str):
     """获取任务详情"""
-    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
-    if not task:
-        return jsonify({"error": "任务不存在"}), 404
-    
+    from services.profiler_service import get_profiler_service
+
+    svc = get_profiler_service()
+    result = svc.get_task_status(task_id)
+    if not result.get('success'):
+        return jsonify({"error": result.get('message', '任务不存在')}), 404
+
+    task = result['task']
+
     # 检查权限
     if not current_user.is_admin and task.get('user_id') != current_user.id:
         return jsonify({"error": "无权限"}), 403
-    
-    # 格式化输出
-    result = dict(task)
-    result['config'] = {
+
+    task['config'] = {
         'cluster': task.get('cluster_name', ''),
         'namespace': task.get('namespace', ''),
         'pod': task.get('pod_name', ''),
@@ -1826,8 +1794,8 @@ def get_profiler_task(task_id: str):
         'duration': task.get('duration', 60),
         'format': task.get('format', 'html'),
     }
-    
-    return jsonify({"task": result})
+
+    return jsonify({"task": task})
 
 
 @app.route('/api/profile', methods=['GET'])
@@ -1841,15 +1809,16 @@ def list_profiles():
 @login_required
 def cancel_profiler_task(task_id: str):
     """取消采样任务"""
-    task = db.fetch_one('SELECT * FROM profiler_tasks WHERE id = ?', (task_id,))
-    if not task:
-        return jsonify({"error": "任务不存在"}), 404
-    
-    if task['status'] not in ('running', 'pending'):
-        return jsonify({"ok": False, "msg": f"当前状态 {task['status']}，无法取消"})
-    
-    db.update('profiler_tasks', {'status': 'cancelled', 'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')},
-             'id = ?', (task_id,))
+    from services.profiler_service import get_profiler_service
+
+    svc = get_profiler_service()
+    result = svc.stop_task(task_id)
+    if not result.get('success'):
+        task = db.fetch_one('SELECT status FROM profiler_tasks WHERE id = ?', (task_id,))
+        if not task:
+            return jsonify({"error": "任务不存在"}), 404
+        return jsonify({"ok": False, "msg": result.get('message', '无法取消')})
+
     return jsonify({"ok": True, "status": "cancelled"})
 
 
@@ -2549,160 +2518,6 @@ def download_local_file(filename: str):
     return send_file(str(p), as_attachment=True, download_name=filename)
 
 
-# ═══════════════════════════════════════════════════════════════════════════════
-# Phase 6: 异常检测 + 告警 API
-# ═══════════════════════════════════════════════════════════════════════════════
-
-def _get_detector():
-    """获取异常检测器单例"""
-    from services.anomaly_detector import get_anomaly_detector
-    return get_anomaly_detector(db=db)
-
-
-# ── 异常事件 ──────────────────────────────────────────────────────────────────
-
-@app.route('/api/anomaly/events', methods=['GET'])
-@login_required
-def list_anomaly_events():
-    """查询异常事件（支持过滤和分页）"""
-    detector = _get_detector()
-    result = detector.get_events(
-        cluster=request.args.get('cluster', ''),
-        namespace=request.args.get('namespace', ''),
-        pod=request.args.get('pod', ''),
-        severity=request.args.get('severity', ''),
-        page=int(request.args.get('page', 1)),
-        page_size=int(request.args.get('page_size', 50)),
-    )
-    return jsonify(result)
-
-
-@app.route('/api/anomaly/events/stats', methods=['GET'])
-@login_required
-def anomaly_events_stats():
-    """异常事件统计"""
-    detector = _get_detector()
-    stats = detector.get_events_stats()
-    return jsonify(stats)
-
-
-@app.route('/api/anomaly/events/<int:event_id>', methods=['DELETE'])
-@login_required
-def delete_anomaly_event(event_id):
-    """删除异常事件"""
-    detector = _get_detector()
-    ok = detector.delete_event(event_id)
-    if not ok:
-        return jsonify({"error": "事件不存在"}), 404
-    return jsonify({"ok": True})
-
-
-# ── 告警规则 CRUD ─────────────────────────────────────────────────────────────
-
-@app.route('/api/anomaly/rules', methods=['GET'])
-@login_required
-def list_anomaly_rules():
-    """获取所有告警规则"""
-    detector = _get_detector()
-    rules = detector.get_all_rules()
-    return jsonify({"rules": rules})
-
-
-@app.route('/api/anomaly/rules', methods=['POST'])
-@login_required
-def create_anomaly_rule():
-    """创建告警规则"""
-    d = request.json or {}
-    if not d.get('name'):
-        return jsonify({"error": "规则名称不能为空"}), 400
-    if not d.get('metric'):
-        return jsonify({"error": "监控指标不能为空"}), 400
-
-    detector = _get_detector()
-    rule_id = detector.create_rule({
-        "name": d.get("name", ""),
-        "metric": d.get("metric", ""),
-        "operator": d.get("operator", ">"),
-        "threshold": d.get("threshold", 0),
-        "duration": d.get("duration", 0),
-        "severity": d.get("severity", "warning"),
-        "enabled": d.get("enabled", True),
-        "description": d.get("description", ""),
-        "created_by": current_user.username if current_user.is_authenticated else "",
-    })
-    rule = detector.get_rule_by_id(rule_id)
-    return jsonify({"ok": True, "rule": rule}), 201
-
-
-@app.route('/api/anomaly/rules/<int:rule_id>', methods=['PUT'])
-@login_required
-def update_anomaly_rule(rule_id):
-    """更新告警规则"""
-    d = request.json or {}
-    detector = _get_detector()
-    ok = detector.update_rule(rule_id, d)
-    if not ok:
-        return jsonify({"error": "规则不存在"}), 404
-    rule = detector.get_rule_by_id(rule_id)
-    return jsonify({"ok": True, "rule": rule})
-
-
-@app.route('/api/anomaly/rules/<int:rule_id>', methods=['DELETE'])
-@login_required
-def delete_anomaly_rule(rule_id):
-    """删除告警规则"""
-    detector = _get_detector()
-    ok = detector.delete_rule(rule_id)
-    if not ok:
-        return jsonify({"error": "规则不存在"}), 404
-    return jsonify({"ok": True})
-
-
-# ── 通知 ──────────────────────────────────────────────────────────────────────
-
-@app.route('/api/anomaly/notifications', methods=['GET'])
-@login_required
-def list_anomaly_notifications():
-    """获取通知列表"""
-    detector = _get_detector()
-    unread_only = request.args.get('unread_only', 'false').lower() == 'true'
-    notifications = detector.get_notifications(
-        user_id=current_user.id if current_user.is_authenticated else 0,
-        unread_only=unread_only,
-    )
-    unread_count = detector.get_unread_count(
-        user_id=current_user.id if current_user.is_authenticated else 0,
-    )
-    return jsonify({
-        "notifications": notifications,
-        "unread_count": unread_count,
-    })
-
-
-@app.route('/api/anomaly/notifications/<int:notif_id>/read', methods=['POST'])
-@login_required
-def mark_notification_read(notif_id):
-    """标记通知为已读"""
-    detector = _get_detector()
-    ok = detector.mark_notification_read(notif_id)
-    if not ok:
-        return jsonify({"error": "通知不存在"}), 404
-    return jsonify({"ok": True})
-
-
-@app.route('/api/anomaly/notifications/read-all', methods=['POST'])
-@login_required
-def mark_all_notifications_read():
-    """标记所有通知为已读"""
-    db_obj = _get_detector()._get_db()
-    db_obj.update(
-        "alert_notifications",
-        {"is_read": 1},
-        "user_id = ? AND is_read = 0",
-        (current_user.id,),
-    )
-    return jsonify({"ok": True})
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 主入口
@@ -2724,5 +2539,5 @@ if __name__ == "__main__":
     _recover_connections_on_startup()
     # 校验生产环境安全配置
     Config.validate_production()
-    print(f"🚀  K8s Arthas Tool v2026.03.23  →  http://{args.host}:{args.port}")
+    print(f"[START] K8s Arthas Tool v2026.03.23 -> http://{args.host}:{args.port}")
     app.run(host=args.host, port=args.port, debug=True, request_handler=_TimedRequestHandler)
