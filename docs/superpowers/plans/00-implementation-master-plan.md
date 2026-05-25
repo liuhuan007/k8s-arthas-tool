@@ -68,7 +68,7 @@
 | Phase 3 | Agent SDK集成（P0） | 2周 | Phase 2 | ✅ 已完成 |
 | Phase 4 | 诊断能力（前端） | 2周 | Phase 3 | ✅ 已完成 |
 | Phase 5 | 连接中心增强 | 2周 | Phase 4 | ✅ 已完成 |
-| Phase 6 | 异常检测 + 告警 | 2周 | Phase 5 | ⏳ 待开始 |
+| Phase 6 | 异常检测 + 告警 | 2周 | Phase 5 | ✅ 已完成 |
 | Phase 7 | 现有模块迁移 | 2周 | Phase 6 | ⏳ 待开始 |
 | Phase 8 | AI辅助分析 | 2周 | Phase 7 | ⏳ 待开始 |
 | Phase 9 | 知识沉淀 | 2周 | Phase 8 | ⏳ 待开始 |
