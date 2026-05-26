@@ -279,9 +279,21 @@ class AgentToolGateway:
         return definitions
 
     def _check_permission(self, tool_name: str, user_id: int = None) -> bool:
-        """检查权限"""
-        # TODO: 实现更细粒度的权限控制
-        return True
+        """检查权限：high 风险工具仅 admin 可用"""
+        tool = self.tools.get(tool_name)
+        if not tool:
+            return False
+        risk_level = tool.get('risk_level', 'low')
+        if risk_level != 'high':
+            return True
+        if not user_id:
+            return False
+        try:
+            from models.db import db
+            user = db.fetch_one('SELECT is_admin FROM users WHERE id = ?', (user_id,))
+            return bool(user and user.get('is_admin'))
+        except Exception:
+            return False
 
     def _log_audit(self, tool_name: str, params: Dict[str, Any],
                   user_id: int = None, context: Dict[str, Any] = None):
