@@ -1219,17 +1219,7 @@ def init_task_tables():
                 cursor.execute(f'SELECT {column} FROM task_logs LIMIT 1')
             except Exception:
                 cursor.execute(ddl)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS task_artifacts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                run_id TEXT NOT NULL,
-                name TEXT NOT NULL,
-                path TEXT NOT NULL,
-                size INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (run_id) REFERENCES task_logs(id) ON DELETE CASCADE
-            )
-        ''')
+        # task_artifacts 表已移除（空壳表，无 INSERT 操作）
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS tool_package_distributions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

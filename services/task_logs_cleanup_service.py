@@ -87,15 +87,7 @@ class TaskLogsCleanupService:
             #     (retention_days,)
             # )
             
-            # 5. 清理关联数据（task_artifacts 级联删除）
-            db.execute(
-                """
-                DELETE FROM task_artifacts 
-                WHERE run_id NOT IN (SELECT id FROM task_logs)
-                """
-            )
-            
-            # 6. 清理孤立的 arthas_command_logs（独立清理）
+            # 5. 清理孤立的 arthas_command_logs（独立清理）
             arthas_retention_days = int(get_cleanup_config('arthas_command_logs.retention_days', '30'))
             db.execute(
                 """
