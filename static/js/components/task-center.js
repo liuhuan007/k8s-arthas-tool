@@ -565,6 +565,150 @@
     applyLogFilters();
   };
 
+  // ── 报告管理 ──────────────────────────────────────────────────────────
+  let _allReports = [];
+
+  /**
+   * 加载任务报告（成功执行的记录）
+   */
+  window.loadTaskReports = async function() {
+    try {
+      const data = await safeGet('/tasks/runs', { limit: 200, status: 'success' });
+      _allReports = (data.runs || []).filter(r => r.status === 'success');
+      renderTaskReports(_allReports);
+    } catch (e) {
+      console.error('加载报告失败:', e);
+    }
+  };
+
+  /**
+   * 渲染任务报告列表
+   */
+  function renderTaskReports(reports) {
+    const container = document.getElementById('taskReportList');
+    if (!container) return;
+
+    if (reports.length === 0) {
+      container.innerHTML = `
+        <div class="tc-empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity=".25">
+            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
+          </svg>
+          <div class="tc-empty-title">暂无执行报告</div>
+          <div class="tc-empty-sub">成功执行的任务将自动生成报告</div>
+        </div>
+      `;
+      return;
+    }
+
+    container.innerHTML = reports.map(r => {
+      const duration = r.duration_ms ? (r.duration_ms >= 1000 ? `${(r.duration_ms / 1000).toFixed(1)}s` : `${r.duration_ms}ms`) : '-';
+      const timeAgo = formatTimeAgo(r.started_at);
+
+      return `
+        <div class="tc-report-item">
+          <div class="tc-report-icon">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--a3)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          </div>
+          <div class="tc-report-content">
+            <div class="tc-report-title">${escapeHtml(r.task_name || r.capability_name || '执行报告')}</div>
+            <div class="tc-report-meta">
+              <span>${timeAgo}</span>
+              <span>耗时 ${duration}</span>
+              <span>${r.execution_mode || '-'}</span>
+            </div>
+          </div>
+          <div class="tc-report-actions">
+            <button class="tc-btn tc-btn-ghost" onclick="viewTaskLogDetail(${r.id})" title="查看详情">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            </button>
+            <button class="tc-btn tc-btn-ghost" onclick="exportReport(${r.id})" title="导出报告">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            </button>
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  /**
+   * 导出单个报告
+   */
+  window.exportReport = async function(runId) {
+    try {
+      const data = await safeGet(`/tasks/runs/${runId}/logs`);
+      const log = data.run;
+      const result = log.result || (log.result_json ? JSON.parse(log.result_json) : null);
+
+      const report = {
+        id: log.id,
+        task_name: log.task_name || log.capability_name,
+        status: log.status,
+        execution_mode: log.execution_mode,
+        started_at: log.started_at,
+        duration_ms: log.duration_ms,
+        stdout: log.stdout || result?.stdout || '',
+        stderr: log.stderr || result?.stderr || '',
+        error_message: log.error_message || '',
+        rendered_command: log.rendered_command || ''
+      };
+
+      const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `report-${log.id}-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      toast('报告已导出', 'ok');
+    } catch (e) {
+      toast(`导出失败：${e.message}`, 'err');
+    }
+  };
+
+  /**
+   * 导出全部报告
+   */
+  window.exportAllReports = async function() {
+    if (_allReports.length === 0) {
+      toast('暂无报告可导出', 'err');
+      return;
+    }
+
+    try {
+      const allData = [];
+      for (const r of _allReports.slice(0, 50)) {
+        try {
+          const data = await safeGet(`/tasks/runs/${r.id}/logs`);
+          const log = data.run;
+          const result = log.result || (log.result_json ? JSON.parse(log.result_json) : null);
+          allData.push({
+            id: log.id,
+            task_name: log.task_name || log.capability_name,
+            status: log.status,
+            started_at: log.started_at,
+            duration_ms: log.duration_ms,
+            stdout: log.stdout || result?.stdout || '',
+            stderr: log.stderr || result?.stderr || ''
+          });
+        } catch {}
+      }
+
+      const blob = new Blob([JSON.stringify(allData, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `task-reports-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      toast(`已导出 ${allData.length} 条报告`, 'ok');
+    } catch (e) {
+      toast(`导出失败：${e.message}`, 'err');
+    }
+  };
+
   /**
    * 渲染执行历史
    */

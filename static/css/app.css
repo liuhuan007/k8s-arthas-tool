@@ -2571,3 +2571,20 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 .tc-radio-icon{font-size:24px}
 .tc-radio-title{font-size:12px;font-weight:600;color:var(--tx)}
 .tc-radio-desc{font-size:10px;color:var(--tx3)}
+
+/* ── 报告管理 ──────────────────────────────────────────────────────────── */
+.tc-reports-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:14px;border-bottom:1px solid var(--ln)}
+.tc-reports-title{font-size:14px;font-weight:700;color:var(--tx);margin:0}
+.tc-reports-desc{font-size:11px;color:var(--tx3);margin:4px 0 0}
+.tc-reports-actions{display:flex;gap:8px;flex-shrink:0}
+
+.tc-report-item{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg1);border:1px solid var(--ln);border-radius:10px;margin:8px 14px;transition:all .2s}
+.tc-report-item:hover{border-color:rgba(0,122,255,.3);box-shadow:0 2px 12px rgba(0,0,0,.1)}
+
+.tc-report-icon{width:36px;height:36px;border-radius:8px;background:rgba(52,199,89,.08);display:flex;align-items:center;justify-content:center;flex-shrink:0}
+
+.tc-report-content{flex:1;min-width:0}
+.tc-report-title{font-size:12px;font-weight:600;color:var(--tx);margin-bottom:4px}
+.tc-report-meta{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--tx3)}
+
+.tc-report-actions{display:flex;gap:6px;flex-shrink:0}
