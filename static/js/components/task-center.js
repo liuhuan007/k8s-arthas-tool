@@ -97,106 +97,235 @@
     document.getElementById(`tcPanel-${tabName}`).style.display = 'block';
   };
   
+  let _currentStep = 1;  // 创建任务步骤
+
   /**
    * 打开创建任务模态框
    */
   window.openCreateTaskModal = function() {
-    console.log('[TaskCenter] openCreateTaskModal called');
+    _currentStep = 1;
     const modal = document.createElement('div');
-    modal.className = 'capability-modal-overlay';
-    modal.style.cssText = 'position:fixed;inset:0;z-index:12000;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(5,8,14,.72);backdrop-filter:blur(8px)';
+    modal.className = 'tc-modal-overlay';
+    modal.id = 'tcCreateModal';
     modal.innerHTML = `
-      <div class="capability-modal" style="width:min(720px,96vw);max-height:86vh;overflow:hidden;border:1px solid var(--border-color,var(--ln,#2a3a52));border-radius:12px;background:var(--bg-card,var(--bg1,#101827));box-shadow:0 24px 80px rgba(0,0,0,.48);display:flex;flex-direction:column">
-        <div class="modal-header">
-          <h3>创建任务</h3>
-          <button class="btn-close" onclick="this.closest('.capability-modal-overlay').remove()">✕</button>
+      <div class="tc-modal" style="width:min(680px,96vw)">
+        <div class="tc-modal-header">
+          <div class="tc-modal-title-row">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
+            <h3 class="tc-modal-title">创建任务</h3>
+          </div>
+          <button class="tc-modal-close" onclick="this.closest('.tc-modal-overlay').remove()">&times;</button>
         </div>
-        <div class="modal-body" style="padding:20px;overflow:auto;max-height:calc(86vh - 80px)">
-          <div class="form-group">
-            <label class="form-label">任务名称 <span class="required">*</span></label>
-            <input id="newTaskName" class="form-input" placeholder="例如：CPU 巡检">
+
+        <!-- 步骤指示器 -->
+        <div class="tc-steps">
+          <div class="tc-step tc-step-active" data-step="1">
+            <span class="tc-step-no">1</span>
+            <span class="tc-step-label">基本信息</span>
           </div>
-          <div class="form-group">
-            <label class="form-label">执行位置</label>
-            <select id="newTaskExecMode" class="form-input" onchange="document.getElementById('newTaskPodTarget').style.display=this.value==='pod'?'block':'none'">
-              <option value="node">服务端本机</option>
-              <option value="pod">Pod 内执行</option>
-            </select>
+          <div class="tc-step-line"></div>
+          <div class="tc-step" data-step="2">
+            <span class="tc-step-no">2</span>
+            <span class="tc-step-label">执行配置</span>
           </div>
-          <div class="form-group">
-            <label class="form-label">脚本运行时</label>
-            <select id="newTaskRuntime" class="form-input">
-              <option value="python">Python</option>
-              <option value="shell">Shell</option>
-            </select>
-          </div>
-          <div class="form-group">
-            <label class="form-label">超时时间(秒)</label>
-            <input id="newTaskTimeout" class="form-input" type="number" min="1" max="600" value="60">
-          </div>
-          <div id="newTaskPodTarget" style="display:none">
-            <div class="form-group"><label class="form-label">集群名称</label><input id="newTaskCluster" class="form-input" placeholder="cluster name"></div>
-            <div class="form-group"><label class="form-label">命名空间</label><input id="newTaskNamespace" class="form-input" placeholder="default"></div>
-            <div class="form-group"><label class="form-label">Pod 名称</label><input id="newTaskPod" class="form-input" placeholder="pod name"></div>
-            <div class="form-group"><label class="form-label">容器名</label><input id="newTaskContainer" class="form-input" placeholder="可选"></div>
-          </div>
-          <div class="form-group">
-            <label class="form-label">脚本内容 <span class="required">*</span></label>
-            <textarea id="newTaskScript" class="form-input" rows="8" placeholder="print('hello')"></textarea>
+          <div class="tc-step-line"></div>
+          <div class="tc-step" data-step="3">
+            <span class="tc-step-no">3</span>
+            <span class="tc-step-label">脚本内容</span>
           </div>
         </div>
-        <div class="modal-footer" style="padding:16px 20px;border-top:1px solid var(--border-color);display:flex;justify-content:flex-end;gap:8px">
-          <button class="btn btn-g" onclick="this.closest('.capability-modal-overlay').remove()">取消</button>
-          <button class="btn btn-p" onclick="submitCreateTaskV2()">创建</button>
+
+        <div class="tc-modal-body">
+          <!-- Step 1: 基本信息 -->
+          <div class="tc-step-panel" id="tcStep1">
+            <div class="tc-form-group">
+              <label class="tc-form-label">任务名称 <span class="tc-required">*</span></label>
+              <input id="newTaskName" class="tc-input" placeholder="例如：CPU 巡检、内存分析" style="width:100%">
+              <span class="tc-form-hint">任务名称应简明描述任务目的</span>
+            </div>
+            <div class="tc-form-group">
+              <label class="tc-form-label">执行位置</label>
+              <div class="tc-radio-group">
+                <label class="tc-radio-card tc-radio-active" data-value="node">
+                  <input type="radio" name="execMode" value="node" checked onchange="togglePodTarget(false)">
+                  <span class="tc-radio-icon">🖥️</span>
+                  <span class="tc-radio-title">服务端本机</span>
+                  <span class="tc-radio-desc">在服务端执行脚本</span>
+                </label>
+                <label class="tc-radio-card" data-value="pod">
+                  <input type="radio" name="execMode" value="pod" onchange="togglePodTarget(true)">
+                  <span class="tc-radio-icon">📦</span>
+                  <span class="tc-radio-title">Pod 内执行</span>
+                  <span class="tc-radio-desc">在 K8s Pod 中执行</span>
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 2: 执行配置 -->
+          <div class="tc-step-panel" id="tcStep2" style="display:none">
+            <div class="tc-form-row">
+              <div class="tc-form-group tc-form-half">
+                <label class="tc-form-label">脚本运行时</label>
+                <select id="newTaskRuntime" class="tc-select" style="width:100%">
+                  <option value="shell">Shell</option>
+                  <option value="python">Python</option>
+                </select>
+              </div>
+              <div class="tc-form-group tc-form-half">
+                <label class="tc-form-label">超时时间(秒)</label>
+                <input id="newTaskTimeout" class="tc-input" type="number" min="1" max="600" value="60" style="width:100%">
+              </div>
+            </div>
+            <div id="newTaskPodTarget" style="display:none">
+              <div class="tc-form-row">
+                <div class="tc-form-group tc-form-half">
+                  <label class="tc-form-label">集群名称 <span class="tc-required">*</span></label>
+                  <input id="newTaskCluster" class="tc-input" placeholder="cluster name" style="width:100%">
+                </div>
+                <div class="tc-form-group tc-form-half">
+                  <label class="tc-form-label">命名空间 <span class="tc-required">*</span></label>
+                  <input id="newTaskNamespace" class="tc-input" placeholder="default" style="width:100%">
+                </div>
+              </div>
+              <div class="tc-form-row">
+                <div class="tc-form-group tc-form-half">
+                  <label class="tc-form-label">Pod 名称 <span class="tc-required">*</span></label>
+                  <input id="newTaskPod" class="tc-input" placeholder="pod name" style="width:100%">
+                </div>
+                <div class="tc-form-group tc-form-half">
+                  <label class="tc-form-label">容器名</label>
+                  <input id="newTaskContainer" class="tc-input" placeholder="可选" style="width:100%">
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Step 3: 脚本内容 -->
+          <div class="tc-step-panel" id="tcStep3" style="display:none">
+            <div class="tc-form-group">
+              <label class="tc-form-label">脚本内容 <span class="tc-required">*</span></label>
+              <textarea id="newTaskScript" class="tc-textarea" rows="12" placeholder="# 在此输入脚本内容&#10;&#10;echo 'Hello from Task Center'&#10;uptime&#10;df -h" style="width:100%"></textarea>
+              <span class="tc-form-hint">支持 Shell 和 Python 脚本</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="tc-modal-footer">
+          <button class="tc-btn" id="tcStepPrev" onclick="taskStepPrev()" style="display:none">上一步</button>
+          <div style="flex:1"></div>
+          <button class="tc-btn" onclick="this.closest('.tc-modal-overlay').remove()">取消</button>
+          <button class="tc-btn tc-btn-primary" id="tcStepNext" onclick="taskStepNext()">下一步</button>
         </div>
       </div>
     `;
+
     document.body.appendChild(modal);
     modal.addEventListener('click', (e) => {
       if (e.target === modal) modal.remove();
     });
+
+    // Radio card active state
+    modal.querySelectorAll('.tc-radio-card').forEach(card => {
+      card.addEventListener('click', () => {
+        modal.querySelectorAll('.tc-radio-card').forEach(c => c.classList.remove('tc-radio-active'));
+        card.classList.add('tc-radio-active');
+      });
+    });
   };
+
+  /**
+   * 切换 Pod 目标显示
+   */
+  window.togglePodTarget = function(show) {
+    const el = document.getElementById('newTaskPodTarget');
+    if (el) el.style.display = show ? 'block' : 'none';
+  };
+
+  /**
+   * 步骤导航
+   */
+  window.taskStepNext = function() {
+    if (_currentStep === 1) {
+      const name = document.getElementById('newTaskName')?.value?.trim();
+      if (!name) { toast('请输入任务名称', 'err'); return; }
+    }
+    if (_currentStep === 3) {
+      submitCreateTaskV2();
+      return;
+    }
+    _currentStep++;
+    updateStepUI();
+  };
+
+  window.taskStepPrev = function() {
+    if (_currentStep > 1) {
+      _currentStep--;
+      updateStepUI();
+    }
+  };
+
+  function updateStepUI() {
+    // 面板切换
+    [1, 2, 3].forEach(i => {
+      const panel = document.getElementById(`tcStep${i}`);
+      if (panel) panel.style.display = i === _currentStep ? 'block' : 'none';
+    });
+
+    // 步骤指示器
+    document.querySelectorAll('.tc-step').forEach(step => {
+      const s = parseInt(step.dataset.step);
+      step.classList.toggle('tc-step-active', s === _currentStep);
+      step.classList.toggle('tc-step-done', s < _currentStep);
+    });
+
+    // 按钮
+    const prev = document.getElementById('tcStepPrev');
+    const next = document.getElementById('tcStepNext');
+    if (prev) prev.style.display = _currentStep > 1 ? '' : 'none';
+    if (next) next.textContent = _currentStep === 3 ? '创建任务' : '下一步';
+  }
   
   /**
    * 提交创建任务
    */
   window.submitCreateTaskV2 = async function() {
-    const name = document.getElementById('newTaskName').value.trim();
+    const name = document.getElementById('newTaskName')?.value?.trim();
     if (!name) {
-      alert('请输入任务名称');
+      toast('请输入任务名称', 'err');
       return;
     }
-    const scriptBody = document.getElementById('newTaskScript').value.trim();
+    const scriptBody = document.getElementById('newTaskScript')?.value?.trim();
     if (!scriptBody) {
-      alert('请输入脚本内容');
+      toast('请输入脚本内容', 'err');
       return;
     }
-    
+
     try {
-      const executionMode = document.getElementById('newTaskExecMode').value;
+      const executionMode = document.querySelector('input[name="execMode"]:checked')?.value || 'node';
       const target = executionMode === 'pod' ? {
-        cluster_name: document.getElementById('newTaskCluster').value.trim(),
-        namespace: document.getElementById('newTaskNamespace').value.trim(),
-        pod_name: document.getElementById('newTaskPod').value.trim(),
-        container: document.getElementById('newTaskContainer').value.trim(),
+        cluster_name: document.getElementById('newTaskCluster')?.value?.trim(),
+        namespace: document.getElementById('newTaskNamespace')?.value?.trim(),
+        pod_name: document.getElementById('newTaskPod')?.value?.trim(),
+        container: document.getElementById('newTaskContainer')?.value?.trim(),
       } : {};
       if (executionMode === 'pod' && (!target.cluster_name || !target.namespace || !target.pod_name)) {
-        alert('Pod 内执行需要填写集群、命名空间和 Pod 名称');
+        toast('Pod 内执行需要填写集群、命名空间和 Pod 名称', 'err');
         return;
       }
       await safePost('/tasks/definitions', {
         name: name,
         execution_mode: executionMode,
-        runtime: document.getElementById('newTaskRuntime').value,
-        timeout_seconds: Number(document.getElementById('newTaskTimeout').value || 60),
+        runtime: document.getElementById('newTaskRuntime')?.value || 'shell',
+        timeout_seconds: Number(document.getElementById('newTaskTimeout')?.value || 60),
         script_body: scriptBody,
         target,
       });
-      
+
       toast('任务创建成功', 'ok');
-      document.querySelector('.capability-modal-overlay')?.remove();
+      document.querySelector('.tc-modal-overlay')?.remove();
       await loadTaskDefinitions();
-      await loadTaskLogs();
+      await loadTaskStats();
       if (typeof switchTCTab === 'function') switchTCTab('definitions');
     } catch (e) {
       toast(`创建失败：${e.message}`, 'err');

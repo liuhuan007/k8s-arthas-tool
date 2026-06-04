@@ -2536,3 +2536,38 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 .tc-page-btn:disabled{opacity:.3;cursor:not-allowed}
 
 .tc-page-num{font-family:var(--mono);font-size:11px;color:var(--tx2);min-width:50px;text-align:center}
+
+/* ── 创建任务表单 ──────────────────────────────────────────────────────── */
+.tc-steps{display:flex;align-items:center;justify-content:center;gap:0;padding:16px 20px;border-bottom:1px solid var(--ln)}
+.tc-step{display:flex;align-items:center;gap:8px}
+.tc-step-no{width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:600;background:var(--bg3);color:var(--tx3);border:2px solid var(--ln);transition:all .2s}
+.tc-step-label{font-size:11px;color:var(--tx3);transition:all .2s}
+.tc-step-line{width:40px;height:2px;background:var(--ln);margin:0 8px}
+
+.tc-step-active .tc-step-no{background:var(--a);color:#fff;border-color:var(--a);box-shadow:0 0 12px rgba(0,122,255,.3)}
+.tc-step-active .tc-step-label{color:var(--tx);font-weight:600}
+.tc-step-done .tc-step-no{background:var(--a3);color:#fff;border-color:var(--a3)}
+
+.tc-step-panel{padding:20px}
+
+.tc-form-group{margin-bottom:16px}
+.tc-form-label{display:block;font-size:11px;font-weight:600;color:var(--tx2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px}
+.tc-required{color:var(--a5)}
+.tc-form-hint{display:block;font-size:10px;color:var(--tx3);margin-top:4px}
+
+.tc-form-row{display:flex;gap:12px}
+.tc-form-half{flex:1}
+
+.tc-textarea{padding:10px;background:var(--bg2);border:1px solid var(--ln);border-radius:6px;color:var(--tx);font-family:var(--mono);font-size:12px;line-height:1.6;outline:none;resize:vertical;transition:border-color .15s}
+.tc-textarea::placeholder{color:var(--tx3)}
+.tc-textarea:hover{border-color:var(--a)}
+.tc-textarea:focus{border-color:var(--a);box-shadow:0 0 0 2px rgba(0,122,255,.12)}
+
+.tc-radio-group{display:flex;gap:10px}
+.tc-radio-card{flex:1;display:flex;flex-direction:column;align-items:center;gap:6px;padding:16px;background:var(--bg2);border:2px solid var(--ln);border-radius:10px;cursor:pointer;transition:all .2s;text-align:center}
+.tc-radio-card:hover{border-color:rgba(0,122,255,.3)}
+.tc-radio-card.tc-radio-active{border-color:var(--a);background:rgba(0,122,255,.06);box-shadow:0 0 0 2px rgba(0,122,255,.15)}
+.tc-radio-card input[type="radio"]{display:none}
+.tc-radio-icon{font-size:24px}
+.tc-radio-title{font-size:12px;font-weight:600;color:var(--tx)}
+.tc-radio-desc{font-size:10px;color:var(--tx3)}
