@@ -1191,6 +1191,13 @@ def init_task_tables():
                 FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
             )
         ''')
+        # 迁移: script_templates 扩展 capability_id
+        try:
+            cursor.execute('ALTER TABLE script_templates ADD COLUMN capability_id INTEGER REFERENCES diagnosis_capabilities(id)')
+            log.info("Schema migrated: script_templates.capability_id added")
+        except Exception:
+            pass  # 列已存在
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS task_definitions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,

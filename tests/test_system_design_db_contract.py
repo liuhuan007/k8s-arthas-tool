@@ -88,7 +88,7 @@ class TestConnectionsIncrementalFields:
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 测试：arthas_commands 表增量字段
+# 测试：arthas_command_logs 表增量字段
 # ═══════════════════════════════════════════════════════════════════════════
 class TestArthasCommandsIncrementalFields:
     EXPECTED_COLUMNS = [
@@ -98,9 +98,9 @@ class TestArthasCommandsIncrementalFields:
 
     def test_all_columns_exist(self, fresh_db):
         with fresh_db.connection() as conn:
-            cols = {row[1] for row in conn.execute("PRAGMA table_info(arthas_commands)").fetchall()}
+            cols = {row[1] for row in conn.execute("PRAGMA table_info(arthas_command_logs)").fetchall()}
         for col in self.EXPECTED_COLUMNS:
-            assert col in cols, f"Missing column: arthas_commands.{col}"
+            assert col in cols, f"Missing column: arthas_command_logs.{col}"
 
     def test_risk_level_default_value(self, fresh_db):
         fresh_db.execute(
@@ -108,11 +108,11 @@ class TestArthasCommandsIncrementalFields:
             ("c3", "c1", "ns1", "pod1"),
         )
         fresh_db.execute(
-            "INSERT INTO arthas_commands (connection_id, command) VALUES (?, ?)",
+            "INSERT INTO arthas_command_logs (connection_id, command) VALUES (?, ?)",
             ("c3", "help"),
         )
         row = fresh_db.fetch_one(
-            "SELECT risk_level FROM arthas_commands WHERE connection_id = ?", ("c3",)
+            "SELECT risk_level FROM arthas_command_logs WHERE connection_id = ?", ("c3",)
         )
         assert row["risk_level"] == "low"
 
@@ -122,13 +122,13 @@ class TestArthasCommandsIncrementalFields:
             ("c4", "c1", "ns1", "pod1"),
         )
         fresh_db.execute(
-            """INSERT INTO arthas_commands
+            """INSERT INTO arthas_command_logs
                (connection_id, user_id, command, template_type, risk_level,
                 duration_ms, exit_status, masked_output)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             ("c4", 1, "trace com.example.Service hello", "trace", "low", 150, "SUCCEEDED", "masked..."),
         )
-        row = fresh_db.fetch_one("SELECT * FROM arthas_commands WHERE connection_id = ?", ("c4",))
+        row = fresh_db.fetch_one("SELECT * FROM arthas_command_logs WHERE connection_id = ?", ("c4",))
         assert row is not None
 
 

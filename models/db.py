@@ -435,16 +435,6 @@ class Database:
                     except Exception as e:
                         log.warning("Add column arthas_command_logs.%s failed: %s", col, e)
             
-            # script_templates 扩展 capability_id
-            try:
-                cursor.execute('SELECT capability_id FROM script_templates LIMIT 1')
-            except Exception:
-                try:
-                    cursor.execute('ALTER TABLE script_templates ADD COLUMN capability_id INTEGER REFERENCES diagnosis_capabilities(id)')
-                    log.info("Schema migrated: script_templates.capability_id added")
-                except Exception as e:
-                    log.warning("Add column script_templates.capability_id failed: %s", e)
-            
             # connections 表增加 owner_user_id 字段（如果不存在）
             try:
                 cursor.execute('SELECT owner_user_id FROM connections LIMIT 1')

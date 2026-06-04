@@ -253,7 +253,7 @@ def _start_cleanup_scheduler():
         parts = cleanup_cron.split()
         if len(parts) == 5:
             scheduler.add_job(
-                lambda: asyncio.run(cleanup_service.cleanup_expired_logs()),
+                cleanup_service.cleanup_old_logs,
                 'cron',
                 minute=parts[0],
                 hour=parts[1],
@@ -268,7 +268,7 @@ def _start_cleanup_scheduler():
         parts = archive_cleanup_cron.split()
         if len(parts) == 5:
             scheduler.add_job(
-                lambda: asyncio.run(cleanup_service.cleanup_old_archives()),
+                cleanup_service.cleanup_old_artifacts,
                 'cron',
                 minute=parts[0],
                 hour=parts[1],
