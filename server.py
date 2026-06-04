@@ -17,7 +17,6 @@ REST endpoints:
 import os
 import json
 import re
-import uuid
 import time
 import tempfile
 import shutil
@@ -26,7 +25,7 @@ import threading
 import logging
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Dict
+from typing import List, Dict
 
 log = logging.getLogger(__name__)
 
@@ -1081,8 +1080,8 @@ def arthas_exec():
         now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         try:
             db.update('connections', {'last_active_at': now_ts}, 'id = ?', (conn_id,))
-        except Exception:
-            pass  # 非关键路径，不阻塞命令执行
+        except Exception as e:
+            log.warning("更新连接 last_active_at 失败: %s", e)
         
         # 直接透传 Arthas HTTP API 原始响应，前端 renderRes 依赖 state/body 结构
         return jsonify(result)

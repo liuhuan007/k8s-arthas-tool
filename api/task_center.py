@@ -1150,30 +1150,8 @@ def init_task_tables():
                 cursor.execute(f'SELECT {column} FROM diagnosis_capabilities LIMIT 1')
             except Exception:
                 cursor.execute(ddl)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tool_packages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL UNIQUE,
-                description TEXT,
-                source_type TEXT DEFAULT 'local',
-                source_url TEXT,
-                version TEXT,
-                checksum TEXT,
-                tool_type TEXT DEFAULT 'generic',
-                file_path TEXT,
-                file_name TEXT,
-                file_size INTEGER DEFAULT 0,
-                sha256 TEXT,
-                install_path TEXT,
-                is_builtin INTEGER DEFAULT 0,
-                last_verified_at TIMESTAMP,
-                status TEXT DEFAULT 'active',
-                created_by INTEGER,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
-            )
-        ''')
+        # tool_packages 表由 models/db.py 统一创建，此处不重复
+
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS script_templates (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1217,44 +1195,7 @@ def init_task_tables():
                 FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
             )
         ''')
-        # NOTE: task_runs 表已废弃，统一使用 task_logs。
-        # db.py initialize() 中已包含 task_runs → task_logs 的迁移逻辑，
-        # 此处不再重复创建，避免双写冲突。
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS task_logs (
-                id TEXT PRIMARY KEY,
-                task_id INTEGER,
-                capability_id INTEGER,
-                user_id INTEGER,
-                status TEXT NOT NULL DEFAULT 'pending',
-                execution_mode TEXT NOT NULL DEFAULT 'manual',
-                execution_type TEXT DEFAULT 'script',
-                run_type TEXT DEFAULT 'script',
-                target_json TEXT DEFAULT '{}',
-                params_json TEXT DEFAULT '{}',
-                result_json TEXT,
-                stdout TEXT,
-                stderr TEXT,
-                exit_code INTEGER,
-                duration_ms INTEGER,
-                started_at TIMESTAMP,
-                finished_at TIMESTAMP,
-                error_message TEXT,
-                work_dir TEXT,
-                capability_name TEXT,
-                capability_version INTEGER,
-                rendered_command TEXT,
-                connection_snapshot_json TEXT,
-                capability_snapshot_json TEXT,
-                log_path TEXT,
-                retention_days INTEGER DEFAULT 30,
-                is_archived INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES task_definitions(id) ON DELETE SET NULL,
-                FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE SET NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-            )
-        ''')
+        # task_logs 表由 models/db.py 统一创建，此处只做增量列迁移
         for column, ddl in {
             'capability_id': 'ALTER TABLE task_logs ADD COLUMN capability_id INTEGER REFERENCES diagnosis_capabilities(id)',
             'execution_type': "ALTER TABLE task_logs ADD COLUMN execution_type TEXT DEFAULT 'script'",

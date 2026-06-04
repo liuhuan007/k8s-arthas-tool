@@ -628,12 +628,15 @@ class Database:
             cursor.execute('SELECT COUNT(*) FROM users')
             if cursor.fetchone()[0] == 0:
                 import bcrypt
-                password_hash = bcrypt.hashpw(b'admin123', bcrypt.gensalt()).decode('utf-8')
+                import secrets as _secrets
+                default_pw = os.environ.get('ADMIN_PASSWORD') or _secrets.token_urlsafe(12)
+                password_hash = bcrypt.hashpw(default_pw.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
                 cursor.execute('''
                     INSERT INTO users (username, password_hash, role, status)
                     VALUES (?, ?, ?, ?)
                 ''', ('admin', password_hash, 'admin', 'active'))
-                print("✓ 已创建默认 admin 账户 (用户名: admin, 密码: admin123)")
+                print(f"✓ 已创建默认 admin 账户 (用户名: admin, 密码: {default_pw})")
+                print("⚠ 请登录后立即修改密码！")
 
 
 # 延迟初始化的单例实例 (避免循环导入)

@@ -192,8 +192,8 @@ def _run_diagnosis(conn, target: str, class_pattern: str, method_pattern: str) -
             }, ensure_ascii=False)
         else:
             result["metrics"]["threads"] = json.dumps(thread_resp, ensure_ascii=False)[:5000]
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("Thread 指标采集失败: %s", e)
 
     # ── Step 3: Trace（method_slow / general 场景）────────────────
     if target in ("method_slow", "general") and class_pattern:

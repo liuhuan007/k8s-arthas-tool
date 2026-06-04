@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 """用户管理 API"""
+import logging
 from flask import Blueprint, request, jsonify
 from flask_login import current_user, login_required
 from functools import wraps
 
 from services.user_service import UserService
+
+log = logging.getLogger(__name__)
 
 
 def admin_required(f):
@@ -220,8 +223,8 @@ def assign_namespace():
             f'{user_id}:{cluster_id}:{namespace}',
             f'授权用户 {user_id} 操作 {cluster_id}/{namespace}',
         )
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("审计日志写入失败(namespace_permission_granted): %s", e)
     return jsonify({'ok': True, 'id': assignment_id}), 201
 
 
@@ -242,8 +245,8 @@ def remove_namespace(assignment_id: int):
                 f"{row['user_id']}:{row['cluster_id']}:{row['namespace']}",
                 f"取消用户 {row['user_id']} 对 {row['cluster_id']}/{row['namespace']} 的授权",
             )
-        except Exception:
-            pass
+        except Exception as e:
+            log.warning("审计日志写入失败(namespace_permission_revoked): %s", e)
     return jsonify({'ok': True})
 
 
@@ -271,6 +274,6 @@ def remove_namespace_by_user_cluster_namespace():
             f'{user_id}:{cluster_id}:{namespace}',
             f'取消用户 {user_id} 对 {cluster_id}/{namespace} 的授权',
         )
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("审计日志写入失败(namespace_permission_revoked): %s", e)
     return jsonify({'ok': True})

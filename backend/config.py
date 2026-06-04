@@ -1,26 +1,25 @@
 #!/usr/bin/env python3
 """配置管理模块"""
 import os
+import secrets
 import warnings
-
-_DEFAULT_SECRET = 'dev-secret-key-change-in-production'
 
 
 class Config:
     """应用配置"""
-    
+
     # 基础路径
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    
+
     # 数据库
     DB_FILE = os.environ.get('DB_FILE', os.path.join(BASE_DIR, 'config', 'db', 'arthas.db'))
-    
+
     # 配置文件
     CLUSTERS_FILE = os.environ.get('CLUSTERS_FILE', os.path.join(BASE_DIR, 'config', 'data', 'clusters.json'))
     EXTERNAL_LINKS_FILE = os.environ.get('EXTERNAL_LINKS_FILE', os.path.join(BASE_DIR, 'config', 'data', 'external_links.json'))
-    
-    # Flask
-    SECRET_KEY = os.environ.get('SECRET_KEY', _DEFAULT_SECRET)
+
+    # Flask - 未设置环境变量时自动生成随机密钥
+    SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
     STATIC_FOLDER = 'static'
     STATIC_URL_PATH = ''  # 空字符串：从根路径提供静态文件 (如 /js/core/api.js)
     
