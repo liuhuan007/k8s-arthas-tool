@@ -376,8 +376,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 <div class=”conn-card-title”>连接配置</div>
                 <div class=”conn-card-sub”>按”选择集群 → 选择目标 → 建立 Pod 连接 → 按需升级 Arthas”的顺序操作</div>
               </div>
-              <div style=”display:flex;gap:8px”>
-                <button class=”pt-btn” id=”add-connection-btn” title=”添加新集群连接”>＋ 添加连接</button>
+              <div style=”display:flex;gap:8px;align-items:center”>
+                <button class=”btn btn-p” id=”add-connection-btn” onclick=”openAddCluster()” title=”添加新集群连接” style=”font-size:11px”>＋ 添加连接</button>
                 <button class=”mini-action” onclick=”reconnectCurrentConnection()” title=”一键重连”>🔁</button>
                 <button class=”mini-action” onclick=”viewArthasStartLog()” title=”查看 Arthas 启动日志”>📄</button>
               </div>

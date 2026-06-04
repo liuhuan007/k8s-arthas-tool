@@ -44,10 +44,8 @@ class ConnectionListPage {
     }
 
     bindEvents() {
-        const addBtn = document.getElementById('add-connection-btn');
-        if (addBtn) {
-            addBtn.addEventListener('click', () => this.openAddConnection());
-        }
+        // add-connection-btn 的 onclick 已在 HTML 中直接绑定 openAddCluster()
+        // 这里只处理表格相关的事件
     }
 
     openAddConnection() {
