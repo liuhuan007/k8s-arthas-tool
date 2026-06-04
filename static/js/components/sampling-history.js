@@ -73,6 +73,10 @@ const SamplingHistory = (() => {
   let _expandedId = null;   // currently expanded task id
   let _sortField = 'created_at';
   let _sortDir = 'desc';
+  let _selectedIds = new Set(); // selected task ids for batch operations
+  let _batchMode = false;   // batch mode enabled
+  let _focusedIndex = -1;   // keyboard focused row index
+  let _showShortcuts = false; // show shortcuts panel
 
   // ── Helpers ────────────────────────────────────────────────────────────
   const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -202,6 +206,24 @@ const SamplingHistory = (() => {
     return groups;
   }
 
+  // ── Update batch bar visibility ───────────────────────────────────────
+  function updateBatchBar() {
+    const batchBar = _root.querySelector('.sh-batch-bar');
+    const selectAll = _root.querySelector('#shSelectAll');
+
+    if (_selectedIds.size > 0 && !batchBar) {
+      render(); // Re-render to show batch bar
+    } else if (_selectedIds.size === 0 && batchBar) {
+      render(); // Re-render to hide batch bar
+    }
+
+    // Update select all checkbox state
+    if (selectAll) {
+      selectAll.checked = _selectedIds.size === _filtered.length && _filtered.length > 0;
+      selectAll.indeterminate = _selectedIds.size > 0 && _selectedIds.size < _filtered.length;
+    }
+  }
+
   // ── Render: Toolbar ────────────────────────────────────────────────────
   function renderToolbar() {
     const statusBtns = [
@@ -219,15 +241,24 @@ const SamplingHistory = (() => {
       { val: 'heapdump', label: 'Heap Dump' },
     ];
 
+    const hasSelection = _selectedIds.size > 0;
+
     return `
-      <div class="sh-toolbar">
+      <div class="sh-toolbar" role="toolbar" aria-label="筛选和搜索工具">
         <div class="sh-toolbar-row">
-          <div class="sh-search">
-            <span class="sh-search-icon">${ICON.search}</span>
+          <div class="sh-batch-toggle">
+            <button class="sh-btn-batch ${_batchMode ? 'on' : ''}" id="shBatchToggle" title="批量操作模式" aria-pressed="${_batchMode}">
+              ${ICON.filter}
+              <span>批量</span>
+            </button>
+          </div>
+          <div class="sh-search" role="search">
+            <span class="sh-search-icon" aria-hidden="true">${ICON.search}</span>
             <input type="text" class="sh-search-input" id="shSearchInput"
               placeholder="搜索 Pod / 命名空间 / 集群..." value="${esc(_search)}"
-              spellcheck="false" autocomplete="new-password" name="sh-search-filter" />
-            ${_search ? '<button class="sh-search-clear" id="shSearchClear">&times;</button>' : ''}
+              spellcheck="false" autocomplete="new-password" name="sh-search-filter"
+              aria-label="搜索任务" />
+            ${_search ? '<button class="sh-search-clear" id="shSearchClear" aria-label="清除搜索">&times;</button>' : ''}
           </div>
           <div class="sh-toolbar-actions">
             <select class="sh-select" id="shTypeFilter">
@@ -236,6 +267,26 @@ const SamplingHistory = (() => {
             <button class="sh-btn-icon" id="shRefreshBtn" title="刷新">${ICON.refresh}</button>
           </div>
         </div>
+
+        ${_batchMode && hasSelection ? `
+          <div class="sh-batch-bar">
+            <div class="sh-batch-info">
+              <span class="sh-batch-count">${_selectedIds.size}</span> 个任务已选中
+            </div>
+            <div class="sh-batch-actions">
+              <button class="sh-btn-batch-action sh-btn-batch-export" id="shBatchExport">
+                ${ICON.download} 导出选中
+              </button>
+              <button class="sh-btn-batch-action sh-btn-batch-delete" id="shBatchDelete">
+                ${ICON.x} 删除选中
+              </button>
+              <button class="sh-btn-batch-action sh-btn-batch-clear" id="shBatchClear">
+                取消选择
+              </button>
+            </div>
+          </div>
+        ` : ''}
+
         <div class="sh-toolbar-row">
           <div class="sh-status-tabs" id="shStatusTabs">
             ${statusBtns.map(b => `
@@ -253,6 +304,14 @@ const SamplingHistory = (() => {
               状态 ${_sortField === 'status' ? (_sortDir === 'desc' ? '↓' : '↑') : ''}
             </button>
           </div>
+          ${_batchMode ? `
+            <div class="sh-select-all">
+              <label class="sh-checkbox-label">
+                <input type="checkbox" id="shSelectAll" ${_selectedIds.size === _filtered.length && _filtered.length > 0 ? 'checked' : ''} />
+                <span>全选</span>
+              </label>
+            </div>
+          ` : ''}
         </div>
       </div>
     `;
@@ -271,24 +330,44 @@ const SamplingHistory = (() => {
     const cluster = t.config?.cluster || t.cluster_name || '—';
     const isExpanded = _expandedId === t.id;
     const isRunning = t.status === 'running' || t.status === 'starting';
+    const isFailed = t.status === 'failed';
+    const isSelected = _selectedIds.has(t.id);
+
+    // Determine row classes
+    let rowClasses = 'sh-row';
+    if (isExpanded) rowClasses += ' expanded';
+    if (isRunning) rowClasses += ' sh-row-active sh-row-running';
+    if (isFailed) rowClasses += ' sh-row-failed';
+    if (isSelected) rowClasses += ' sh-row-selected';
+
+    // Status label class
+    const statusLabelClass = t.status === 'completed' ? 'ok' :
+                             t.status === 'failed' ? 'fail' :
+                             isRunning ? 'run' : 'pend';
 
     // Primary row
     let html = `
-      <div class="sh-row ${isExpanded ? 'expanded' : ''} ${isRunning ? 'sh-row-active' : ''}" data-task-id="${esc(t.id)}">
-        <div class="sh-row-main">
-          <span class="sh-chevron ${isExpanded ? 'open' : ''}">${ICON.chevron}</span>
-          <span class="sh-status-dot ${st.cls} ${st.spin ? 'spin' : ''}" title="${st.label}">${st.icon}</span>
-          <span class="sh-type-badge" title="${modeLabel}">
+      <div class="${rowClasses}" data-task-id="${esc(t.id)}" role="listitem" aria-label="${modeLabel} 任务 - ${esc(pod)} - ${st.label}" ${isExpanded ? 'aria-expanded="true"' : ''}>
+        <div class="sh-row-main" role="button" tabindex="0" aria-label="展开任务详情">
+          ${_batchMode ? `
+            <label class="sh-checkbox-wrapper" onclick="event.stopPropagation()">
+              <input type="checkbox" class="sh-checkbox sh-row-checkbox" data-id="${esc(t.id)}" ${isSelected ? 'checked' : ''} aria-label="选择任务" />
+            </label>
+          ` : ''}
+          <span class="sh-chevron ${isExpanded ? 'open' : ''}" aria-hidden="true">${ICON.chevron}</span>
+          <span class="sh-status-dot ${st.cls} ${st.spin ? 'spin' : ''}" title="${st.label}" aria-label="状态: ${st.label}">${st.icon}</span>
+          <span class="sh-type-badge" title="${modeLabel}" aria-label="类型: ${modeLabel}">
             ${typeIcon}
             <span>${modeLabel}</span>
           </span>
           <span class="sh-pod" title="${esc(pod)}">${esc(pod)}</span>
+          <span class="sh-status-label ${statusLabelClass}" aria-label="状态: ${st.label}">${st.label}</span>
           <span class="sh-event-tag">${esc(eventLabel)}</span>
           <span class="sh-duration">${durationDisplay(t)}</span>
           <span class="sh-time">${fmtTsShort(t.created_at)}</span>
           <span class="sh-row-actions">
-            ${t.has_file ? `<button class="sh-btn-dl" data-dl="${esc(t.id)}" data-fn="${esc(t.file_name || 'output')}" title="下载 ${esc(t.file_name || '')}">${ICON.download}</button>` : ''}
-            ${isRunning ? `<button class="sh-btn-stop" data-stop="${esc(t.id)}" title="中断任务">${ICON.stop}</button>` : ''}
+            ${t.has_file ? `<button class="sh-btn-dl" data-dl="${esc(t.id)}" data-fn="${esc(t.file_name || 'output')}" title="下载 ${esc(t.file_name || '')}" aria-label="下载文件">${ICON.download}</button>` : ''}
+            ${isRunning ? `<button class="sh-btn-stop" data-stop="${esc(t.id)}" title="中断任务" aria-label="中断任务">${ICON.stop}</button>` : ''}
           </span>
         </div>`;
 
@@ -296,10 +375,14 @@ const SamplingHistory = (() => {
     if (isExpanded) {
       html += `
         <div class="sh-row-detail">
+          <div class="sh-detail-header">
+            <span class="sh-detail-kicker">任务详情</span>
+            <span class="sh-detail-id">#${esc(t.id.substring(0, 8))}</span>
+          </div>
           <div class="sh-detail-grid">
             <div class="sh-detail-item">
               <span class="sh-detail-label">集群</span>
-              <span class="sh-detail-value">${esc(cluster)}</span>
+              <span class="sh-detail-value sh-cluster">${esc(cluster)}</span>
             </div>
             <div class="sh-detail-item">
               <span class="sh-detail-label">命名空间</span>
@@ -311,7 +394,7 @@ const SamplingHistory = (() => {
             </div>
             <div class="sh-detail-item">
               <span class="sh-detail-label">采样事件</span>
-              <span class="sh-detail-value">${esc(eventLabel)}</span>
+              <span class="sh-detail-value sh-event">${esc(eventLabel)}</span>
             </div>
             <div class="sh-detail-item">
               <span class="sh-detail-label">输出格式</span>
@@ -341,10 +424,6 @@ const SamplingHistory = (() => {
               <span class="sh-detail-label">输出文件</span>
               <span class="sh-detail-value sh-mono sh-file">${esc(t.file_name || t.output_path || '—')}</span>
             </div>` : ''}
-            <div class="sh-detail-item">
-              <span class="sh-detail-label">任务 ID</span>
-              <span class="sh-detail-value sh-mono sh-id">${esc(t.id)}</span>
-            </div>
           </div>
           <div class="sh-detail-actions">
             ${t.has_file ? `<button class="sh-btn-action sh-btn-dl-action" data-dl="${esc(t.id)}" data-fn="${esc(t.file_name || 'output')}">
@@ -426,11 +505,71 @@ const SamplingHistory = (() => {
   // ── Render: Stats Bar ──────────────────────────────────────────────────
   function renderStats() {
     const counts = { all: _allTasks.length, completed: 0, running: 0, failed: 0, stopped: 0, starting: 0, pending: 0 };
+    const typeCounts = { profiler: 0, jfr: 0, threaddump: 0, heapdump: 0 };
+
     for (const t of _allTasks) {
       if (counts[t.status] !== undefined) counts[t.status]++;
+      const mode = t.config?.mode || 'profiler';
+      if (typeCounts[mode] !== undefined) typeCounts[mode]++;
     }
     counts.running += counts.starting; // merge running + starting
-    return counts;
+
+    return { counts, typeCounts };
+  }
+
+  // ── Render: Stats Dashboard ───────────────────────────────────────────
+  function renderStatsDashboard(stats) {
+    if (!stats || _allTasks.length === 0) return '';
+
+    const { counts, typeCounts } = stats;
+    const successRate = counts.all > 0 ? Math.round((counts.completed / counts.all) * 100) : 0;
+
+    return `
+      <div class="sh-stats" role="region" aria-label="任务统计">
+        <div class="sh-stats-row">
+          <div class="sh-stat-card sh-stat-total" role="status" aria-label="总任务数: ${counts.all}">
+            <div class="sh-stat-icon" aria-hidden="true">${ICON.box}</div>
+            <div class="sh-stat-info">
+              <span class="sh-stat-value">${counts.all}</span>
+              <span class="sh-stat-label">总任务</span>
+            </div>
+          </div>
+          <div class="sh-stat-card sh-stat-success" role="status" aria-label="成功任务: ${counts.completed}, 成功率 ${successRate}%">
+            <div class="sh-stat-icon" aria-hidden="true">${ICON.check}</div>
+            <div class="sh-stat-info">
+              <span class="sh-stat-value">${counts.completed}</span>
+              <span class="sh-stat-label">成功</span>
+            </div>
+            <div class="sh-stat-badge">${successRate}%</div>
+          </div>
+          <div class="sh-stat-card sh-stat-running" role="status" aria-label="运行中任务: ${counts.running}">
+            <div class="sh-stat-icon" aria-hidden="true">${ICON.loader}</div>
+            <div class="sh-stat-info">
+              <span class="sh-stat-value">${counts.running}</span>
+              <span class="sh-stat-label">运行中</span>
+            </div>
+          </div>
+          <div class="sh-stat-card sh-stat-failed" role="status" aria-label="失败任务: ${counts.failed}">
+            <div class="sh-stat-icon" aria-hidden="true">${ICON.x}</div>
+            <div class="sh-stat-info">
+              <span class="sh-stat-value">${counts.failed}</span>
+              <span class="sh-stat-label">失败</span>
+            </div>
+          </div>
+        </div>
+        <div class="sh-stats-row">
+          <div class="sh-type-distribution">
+            <span class="sh-type-title">任务类型分布</span>
+            <div class="sh-type-bars">
+              ${typeCounts.profiler > 0 ? `<div class="sh-type-bar" style="width: ${(typeCounts.profiler / counts.all) * 100}%" title="Profiler: ${typeCounts.profiler}"><span>P</span></div>` : ''}
+              ${typeCounts.jfr > 0 ? `<div class="sh-type-bar sh-type-jfr" style="width: ${(typeCounts.jfr / counts.all) * 100}%" title="JFR: ${typeCounts.jfr}"><span>J</span></div>` : ''}
+              ${typeCounts.threaddump > 0 ? `<div class="sh-type-bar sh-type-thread" style="width: ${(typeCounts.threaddump / counts.all) * 100}%" title="Thread: ${typeCounts.threaddump}"><span>T</span></div>` : ''}
+              ${typeCounts.heapdump > 0 ? `<div class="sh-type-bar sh-type-heap" style="width: ${(typeCounts.heapdump / counts.all) * 100}%" title="Heap: ${typeCounts.heapdump}"><span>H</span></div>` : ''}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
   }
 
   // ── Full Render ────────────────────────────────────────────────────────
@@ -438,14 +577,16 @@ const SamplingHistory = (() => {
     if (!_root) return;
     applyFilterSort();
 
-    const counts = renderStats();
+    const stats = renderStats();
 
     _root.innerHTML = `
-      <div class="sh-container">
+      <div class="sh-container" role="region" aria-label="采样历史记录">
         ${renderToolbar()}
-        <div class="sh-body">
+        ${renderStatsDashboard(stats)}
+        <div class="sh-body" role="list" aria-label="任务列表">
           ${renderList()}
         </div>
+        ${renderShortcutsPanel()}
       </div>
     `;
 
@@ -453,7 +594,7 @@ const SamplingHistory = (() => {
     const countEls = _root.querySelectorAll('[data-status-count]');
     countEls.forEach(el => {
       const st = el.dataset.statusCount;
-      el.textContent = counts[st] || 0;
+      el.textContent = stats.counts[st] || 0;
     });
 
     bindEvents();
@@ -465,6 +606,81 @@ const SamplingHistory = (() => {
 
   // ── Event Binding ──────────────────────────────────────────────────────
   function bindEvents() {
+    // Keyboard shortcuts
+    document.addEventListener('keydown', handleKeyboardShortcuts);
+
+    // Batch toggle
+    const batchToggle = _root.querySelector('#shBatchToggle');
+    if (batchToggle) {
+      batchToggle.addEventListener('click', () => {
+        _batchMode = !_batchMode;
+        if (!_batchMode) _selectedIds.clear();
+        render();
+      });
+    }
+
+    // Select all checkbox
+    const selectAll = _root.querySelector('#shSelectAll');
+    if (selectAll) {
+      selectAll.addEventListener('change', () => {
+        if (selectAll.checked) {
+          _filtered.forEach(t => _selectedIds.add(t.id));
+        } else {
+          _selectedIds.clear();
+        }
+        render();
+      });
+    }
+
+    // Row checkboxes
+    _root.querySelectorAll('.sh-row-checkbox').forEach(cb => {
+      cb.addEventListener('change', (e) => {
+        e.stopPropagation();
+        const id = cb.dataset.id;
+        if (cb.checked) {
+          _selectedIds.add(id);
+        } else {
+          _selectedIds.delete(id);
+        }
+        updateBatchBar();
+      });
+    });
+
+    // Batch export
+    const batchExport = _root.querySelector('#shBatchExport');
+    if (batchExport) {
+      batchExport.addEventListener('click', () => {
+        const selectedTasks = _allTasks.filter(t => _selectedIds.has(t.id));
+        if (typeof downloadProfilerTask === 'function') {
+          selectedTasks.forEach(t => {
+            if (t.has_file) downloadProfilerTask(t.id, t.file_name || 'output');
+          });
+        }
+      });
+    }
+
+    // Batch delete
+    const batchDelete = _root.querySelector('#shBatchDelete');
+    if (batchDelete) {
+      batchDelete.addEventListener('click', () => {
+        if (confirm(`确定要删除选中的 ${_selectedIds.size} 个任务吗？`)) {
+          // TODO: Implement batch delete API call
+          console.log('Batch delete:', [..._selectedIds]);
+          _selectedIds.clear();
+          loadAndRender();
+        }
+      });
+    }
+
+    // Batch clear
+    const batchClear = _root.querySelector('#shBatchClear');
+    if (batchClear) {
+      batchClear.addEventListener('click', () => {
+        _selectedIds.clear();
+        render();
+      });
+    }
+
     // Search
     const searchInput = _root.querySelector('#shSearchInput');
     if (searchInput) {
@@ -576,9 +792,159 @@ const SamplingHistory = (() => {
     });
   }
 
+  // ── Keyboard Shortcuts ────────────────────────────────────────────────
+  function handleKeyboardShortcuts(e) {
+    // Ignore if focus is on input elements
+    const tag = e.target.tagName;
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+      // Only handle Escape in input
+      if (e.key === 'Escape') {
+        e.target.blur();
+        _search = '';
+        render();
+      }
+      return;
+    }
+
+    const pageTasks = _filtered.slice(_page * _pageSize, (_page + 1) * _pageSize);
+
+    switch(e.key) {
+      case '/':
+        e.preventDefault();
+        const searchInput = _root.querySelector('#shSearchInput');
+        if (searchInput) searchInput.focus();
+        break;
+
+      case 'ArrowDown':
+      case 'j':
+        e.preventDefault();
+        if (_focusedIndex < pageTasks.length - 1) {
+          _focusedIndex++;
+          updateFocusedRow();
+        }
+        break;
+
+      case 'ArrowUp':
+      case 'k':
+        e.preventDefault();
+        if (_focusedIndex > 0) {
+          _focusedIndex--;
+          updateFocusedRow();
+        }
+        break;
+
+      case 'Enter':
+        e.preventDefault();
+        if (_focusedIndex >= 0 && _focusedIndex < pageTasks.length) {
+          const taskId = pageTasks[_focusedIndex].id;
+          _expandedId = _expandedId === taskId ? null : taskId;
+          render();
+        }
+        break;
+
+      case 'Delete':
+      case 'Backspace':
+        if (_batchMode && _selectedIds.size > 0) {
+          e.preventDefault();
+          if (confirm(`确定要删除选中的 ${_selectedIds.size} 个任务吗？`)) {
+            console.log('Batch delete:', [..._selectedIds]);
+            _selectedIds.clear();
+            loadAndRender();
+          }
+        }
+        break;
+
+      case 'Escape':
+        e.preventDefault();
+        if (_showShortcuts) {
+          _showShortcuts = false;
+          render();
+        } else if (_expandedId) {
+          _expandedId = null;
+          render();
+        } else if (_search || _statusFilter !== 'all' || _typeFilter !== 'all') {
+          _search = '';
+          _statusFilter = 'all';
+          _typeFilter = 'all';
+          render();
+        }
+        break;
+
+      case '?':
+        e.preventDefault();
+        _showShortcuts = !_showShortcuts;
+        render();
+        break;
+    }
+  }
+
+  function updateFocusedRow() {
+    _root.querySelectorAll('.sh-row').forEach((row, i) => {
+      row.classList.toggle('sh-row-focused', i === _focusedIndex);
+    });
+
+    // Scroll focused row into view
+    const focusedRow = _root.querySelector('.sh-row-focused');
+    if (focusedRow) {
+      focusedRow.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    }
+  }
+
+  // ── Render: Shortcuts Panel ──────────────────────────────────────────
+  function renderShortcutsPanel() {
+    if (!_showShortcuts) return '';
+
+    return `
+      <div class="sh-shortcuts-panel" id="shShortcutsPanel">
+        <div class="sh-shortcuts-header">
+          <span class="sh-shortcuts-title">键盘快捷键</span>
+          <button class="sh-shortcuts-close" id="shShortcutsClose">&times;</button>
+        </div>
+        <div class="sh-shortcuts-grid">
+          <div class="sh-shortcut-item">
+            <kbd>/</kbd>
+            <span>聚焦搜索</span>
+          </div>
+          <div class="sh-shortcut-item">
+            <kbd>↑</kbd> <kbd>↓</kbd>
+            <span>导航任务</span>
+          </div>
+          <div class="sh-shortcut-item">
+            <kbd>Enter</kbd>
+            <span>展开详情</span>
+          </div>
+          <div class="sh-shortcut-item">
+            <kbd>Esc</kbd>
+            <span>关闭/清除</span>
+          </div>
+          <div class="sh-shortcut-item">
+            <kbd>?</kbd>
+            <span>显示帮助</span>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   // ── Data Loading ───────────────────────────────────────────────────────
   async function loadAndRender() {
     try {
+      // Show skeleton loading
+      if (_root && _allTasks.length === 0) {
+        _root.innerHTML = `
+          <div class="sh-container">
+            <div class="sh-skeleton sh-skeleton-stat"></div>
+            <div class="sh-body" style="padding:14px">
+              <div class="sh-skeleton sh-skeleton-row"></div>
+              <div class="sh-skeleton sh-skeleton-row"></div>
+              <div class="sh-skeleton sh-skeleton-row"></div>
+              <div class="sh-skeleton sh-skeleton-row"></div>
+              <div class="sh-skeleton sh-skeleton-row"></div>
+            </div>
+          </div>
+        `;
+      }
+
       const r = await fetch(`${API}/profile/tasks`, { credentials: 'include' });
       let tasks = await r.json();
 
