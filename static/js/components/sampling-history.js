@@ -77,9 +77,36 @@ const SamplingHistory = (() => {
   let _batchMode = false;   // batch mode enabled
   let _focusedIndex = -1;   // keyboard focused row index
   let _showShortcuts = false; // show shortcuts panel
+  let _searchInputNonce = 0;
 
   // ── Helpers ────────────────────────────────────────────────────────────
   const esc = s => String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+
+  function getCurrentUsername() {
+    try {
+      if (typeof getCurrentUser === 'function') {
+        const user = getCurrentUser();
+        return user && user.username ? user.username : '';
+      }
+      const userStr = sessionStorage.getItem('arthas_auth_user') || localStorage.getItem('arthas_auth_user');
+      return userStr ? (JSON.parse(userStr).username || '') : '';
+    } catch {
+      return '';
+    }
+  }
+
+  function isLikelyBrowserAutofill(value) {
+    const inputValue = String(value || '').trim().toLowerCase();
+    if (!inputValue) return false;
+    const username = getCurrentUsername().trim().toLowerCase();
+    return inputValue === 'admin' || (username && inputValue === username);
+  }
+
+  function syncSearchInputValue(searchEl) {
+    if (!searchEl) return;
+    const expectedValue = _search || '';
+    if (searchEl.value !== expectedValue) searchEl.value = expectedValue;
+  }
 
   function fmtTsShort(input) {
     if (!input) return '—';
@@ -255,8 +282,10 @@ const SamplingHistory = (() => {
           <div class="sh-search" role="search">
             <span class="sh-search-icon" aria-hidden="true">${ICON.search}</span>
             <input type="text" class="sh-search-input" id="shSearchInput"
-              placeholder="搜索 Pod / 命名空间 / 集群..." value="${esc(_search)}"
-              spellcheck="false" autocomplete="new-password" name="sh-search-filter"
+              placeholder="搜索 Pod / 命名空间 / 集群..." value=""
+              spellcheck="false" autocomplete="new-password" autocorrect="off" autocapitalize="off"
+              name="sh-q-${++_searchInputNonce}"
+              data-lpignore="true" data-1p-ignore="true" data-bwignore="true"
               aria-label="搜索任务" />
             ${_search ? '<button class="sh-search-clear" id="shSearchClear" aria-label="清除搜索">&times;</button>' : ''}
           </div>
@@ -599,9 +628,13 @@ const SamplingHistory = (() => {
 
     bindEvents();
 
-    // Force-sync search input value (browser may preserve old value across innerHTML replacement)
-    const searchEl = _root.querySelector('#shSearchInput');
-    if (searchEl && searchEl.value !== _search) searchEl.value = _search;
+    // Force-sync search input value after DOM update
+    requestAnimationFrame(() => {
+      const searchEl = _root?.querySelector('#shSearchInput');
+      if (searchEl) {
+        searchEl.value = _search || '';
+      }
+    });
   }
 
   // ── Event Binding ──────────────────────────────────────────────────────
@@ -685,12 +718,20 @@ const SamplingHistory = (() => {
     const searchInput = _root.querySelector('#shSearchInput');
     if (searchInput) {
       let debounce = null;
+      // Set initial value after DOM insertion
+      syncSearchInputValue(searchInput);
+
       searchInput.addEventListener('input', () => {
-        _search = searchInput.value.trim(); // Always sync immediately
+        const value = searchInput.value;
+        // Ignore browser autofill
+        if (!_search && isLikelyBrowserAutofill(value)) {
+          syncSearchInputValue(searchInput);
+          return;
+        }
+        _search = value.trim();
         clearTimeout(debounce);
         debounce = setTimeout(() => {
           render();
-          // Restore focus + cursor
           const newInput = _root.querySelector('#shSearchInput');
           if (newInput) { newInput.focus(); newInput.setSelectionRange(newInput.value.length, newInput.value.length); }
         }, 250);
