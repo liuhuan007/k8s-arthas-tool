@@ -1650,8 +1650,8 @@ def get_profiler_logs(connection_id):
 def clear_profiler_logs(connection_id):
     """清除连接的采样日志记录（保留任务记录）"""
     try:
-        # 只删除日志，保留任务记录（profiler_tasks）以便历史查询
-        db.delete('profiler_logs', 'task_id IN (SELECT id FROM profiler_tasks WHERE connection_id = ?)', (connection_id,))
+        # 删除该连接下已失败/已取消的采样任务记录
+        db.delete('profiler_tasks', "connection_id = ? AND status IN ('failed', 'cancelled', 'stopped')", (connection_id,))
         return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"error": str(e)}), 500

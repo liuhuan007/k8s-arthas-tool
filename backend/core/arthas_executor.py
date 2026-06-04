@@ -455,7 +455,7 @@ class ArthasCommandExecutor:
             # 获取 user_id（如果 connection 有该属性）
             user_id = getattr(connection, 'user_id', None)
             
-            db.insert('arthas_commands', {
+            db.insert('arthas_command_logs', {
                 'connection_id': getattr(connection, 'connection_id', None) or f"{connection.target.cluster_name}/{connection.target.namespace}/{connection.target.pod_name}",
                 'user_id': user_id,
                 'command': command,

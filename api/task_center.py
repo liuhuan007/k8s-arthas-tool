@@ -1937,8 +1937,7 @@ def list_runs():
 @task_bp.route('/runs/<run_id>/logs', methods=['GET'])
 @login_required
 def get_run_logs(run_id: str):
-    """查询执行记录详情。优先查 task_logs，再兼容旧 task_runs（已废弃，try/except 保护）。"""
-    # 1. 优先查 task_logs（统一执行记录）
+    """查询执行记录详情。"""
     row = db.fetch_one('''
         SELECT t.*, d.name AS task_name, c.name AS capability_name, c.category AS capability_category
         FROM task_logs t
@@ -1946,31 +1945,18 @@ def get_run_logs(run_id: str):
         LEFT JOIN diagnosis_capabilities c ON c.id = t.capability_id
         WHERE t.id = ? AND t.user_id = ?
     ''', (run_id, current_user.id))
-    if row:
-        item = dict(row)
-        item['task_name'] = item.get('task_name') or item.get('capability_name') or '即时诊断'
-        item['target'] = _json_loads(item.pop('target_json', None), {})
-        item['params'] = _json_loads(item.pop('params_json', None), {})
-        item['result'] = _json_loads(item.pop('result_json', None), None)
-        item['connection_snapshot'] = _json_loads(item.pop('connection_snapshot_json', None), {})
-        item['capability_snapshot'] = _json_loads(item.pop('capability_snapshot_json', None), {})
-        item['run_id'] = item.get('id')
-        item['execution_id'] = item.get('id')
-        return jsonify({'run': item})
-    
-    # 2. 回退查 task_runs（已废弃表，仅兼容未迁移的历史数据）
-    try:
-        row = db.fetch_one('''
-            SELECT r.*, d.name AS task_name
-            FROM task_runs r
-            LEFT JOIN task_definitions d ON d.id = r.task_id
-            WHERE r.id = ? AND r.user_id = ?
-        ''', (run_id, current_user.id))
-    except Exception:
-        row = None
     if not row:
         return _error('执行记录不存在或无权限', 404)
-    return jsonify({'run': _row_to_run(row, include_logs=True)})
+    item = dict(row)
+    item['task_name'] = item.get('task_name') or item.get('capability_name') or '即时诊断'
+    item['target'] = _json_loads(item.pop('target_json', None), {})
+    item['params'] = _json_loads(item.pop('params_json', None), {})
+    item['result'] = _json_loads(item.pop('result_json', None), None)
+    item['connection_snapshot'] = _json_loads(item.pop('connection_snapshot_json', None), {})
+    item['capability_snapshot'] = _json_loads(item.pop('capability_snapshot_json', None), {})
+    item['run_id'] = item.get('id')
+    item['execution_id'] = item.get('id')
+    return jsonify({'run': item})
 
 
 @task_bp.route('/runs/<run_id>/cancel', methods=['POST'])
@@ -1983,14 +1969,7 @@ def cancel_task_run(run_id: str):
     """
     row = db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
     if not row:
-        # task_runs 已废弃，try/except 兼容未迁移的历史数据
-        try:
-            old_row = db.fetch_one('SELECT * FROM task_runs WHERE id = ?', (run_id,))
-        except Exception:
-            old_row = None
-        if not old_row:
-            return _error('执行记录不存在', 404)
-        return _error('旧执行记录不支持取消', 400)
+        return _error('执行记录不存在', 404)
     if row.get('user_id') != current_user.id and not getattr(current_user, 'is_admin', False):
         return _error('无权取消该执行记录', 403)
     if row.get('status') not in ('pending', 'running'):

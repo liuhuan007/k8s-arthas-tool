@@ -184,13 +184,13 @@ class CleanupService:
 
     def cleanup_old_logs(self, retention_days=None):
         """
-        清理过期日志
-        
-        策略: 删除 profiler_logs 表中超过保留天数的记录
-        
+        清理过期任务记录
+
+        策略: 删除 profiler_tasks 表中超过保留天数的已完成/失败记录
+
         Args:
             retention_days: 可选,覆盖默认保留天数
-            
+
         Returns:
             dict: {'cleaned_records': int}
         """
@@ -202,7 +202,7 @@ class CleanupService:
 
         # 先查询数量
         count_result = db.fetch_one(
-            'SELECT COUNT(*) as cnt FROM profiler_logs WHERE created_at < ?',
+            "SELECT COUNT(*) as cnt FROM profiler_tasks WHERE created_at < ? AND status IN ('completed', 'failed', 'stopped', 'cancelled')",
             (cutoff_str,)
         )
         total_to_clean = count_result['cnt'] if count_result else 0
@@ -210,10 +210,10 @@ class CleanupService:
         if total_to_clean == 0:
             return {'cleaned_records': 0}
 
-        # 删除过期日志
-        db.delete('profiler_logs', 'created_at < ?', (cutoff_str,))
+        # 删除过期记录
+        db.delete("profiler_tasks", "created_at < ? AND status IN ('completed', 'failed', 'stopped', 'cancelled')", (cutoff_str,))
 
-        log.info("Cleaned %d old profiler log records (older than %d days)", 
+        log.info("Cleaned %d old profiler task records (older than %d days)",
                  total_to_clean, retention_days)
 
         return {'cleaned_records': total_to_clean}
