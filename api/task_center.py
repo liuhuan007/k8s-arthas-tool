@@ -121,31 +121,10 @@ def load_extension(cap_type: str, capability_id: int) -> dict:
     """加载能力扩展数据。
 
     cap_type is the product category: quick/tool/scenario/ai.
+    arthas_command_templates, diagnosis_scenario_steps, ai_diagnosis_handlers
+    已移除（空壳表），返回空 extension。
     """
-    extension = {}
-
-    if cap_type in ('quick', 'tool'):
-        template = db.fetch_one(
-            'SELECT * FROM arthas_command_templates WHERE capability_id = ?',
-            (capability_id,)
-        )
-        if template:
-            extension['template'] = dict(template)
-
-    elif cap_type == 'scenario':
-        steps = db.fetch_all(
-            'SELECT * FROM diagnosis_scenario_steps WHERE capability_id = ? ORDER BY step_order',
-            (capability_id,)
-        )
-        extension['steps'] = [dict(s) for s in steps]
-
-    elif cap_type == 'ai':
-        handler = db.fetch_one(
-            'SELECT * FROM ai_diagnosis_handlers WHERE capability_id = ?',
-            (capability_id,)
-        )
-        if handler:
-            extension['handler'] = dict(handler)
+    return {}
 
     return extension
 

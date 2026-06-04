@@ -232,59 +232,10 @@ class Database:
             ''')
             
             # ── 任务中心诊断重构：新增表 ──────────────────────────────────
-            # 1. arthas_command_templates 表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS arthas_command_templates (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    capability_id INTEGER NOT NULL UNIQUE,
-                    command_name TEXT NOT NULL,
-                    command_category TEXT,
-                    arthas_command TEXT NOT NULL,
-                    syntax TEXT,
-                    description TEXT,
-                    params_json TEXT DEFAULT '[]',
-                    options_json TEXT DEFAULT '[]',
-                    examples TEXT,
-                    doc_url TEXT,
-                    min_version TEXT,
-                    tags TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE CASCADE
-                )
-            ''')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_arthas_cmd_templates_name ON arthas_command_templates(command_name)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_arthas_cmd_templates_category ON arthas_command_templates(command_category)')
-            
-            # 2. diagnosis_scenario_steps 表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS diagnosis_scenario_steps (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    capability_id INTEGER NOT NULL,
-                    step_order INTEGER NOT NULL,
-                    command TEXT NOT NULL,
-                    desc TEXT,
-                    timeout_ms INTEGER DEFAULT 60000,
-                    fail_fast INTEGER DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE CASCADE,
-                    UNIQUE(capability_id, step_order)
-                )
-            ''')
-            
-            # 3. ai_diagnosis_handlers 表
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS ai_diagnosis_handlers (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    capability_id INTEGER NOT NULL UNIQUE,
-                    handler TEXT NOT NULL,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE CASCADE,
-                    CHECK(handler LIKE 'performance_diagnose.%')
-                )
-            ''')
-            
-            # 4. task_logs_archive 归档表
+            # 1. arthas_command_templates, diagnosis_scenario_steps, ai_diagnosis_handlers
+            #    已移除（空壳表，无 INSERT 操作）
+
+            # 2. task_logs_archive 归档表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS task_logs_archive (
                     id TEXT PRIMARY KEY,
@@ -422,7 +373,7 @@ class Database:
             
             # 扩展 arthas_command_logs 表字段
             for col, ddl in [
-                ('template_id', 'ALTER TABLE arthas_command_logs ADD COLUMN template_id INTEGER REFERENCES arthas_command_templates(id)'),
+                ('template_id', 'ALTER TABLE arthas_command_logs ADD COLUMN template_id INTEGER'),
                 ('step_order', 'ALTER TABLE arthas_command_logs ADD COLUMN step_order INTEGER'),
                 ('command_type', "ALTER TABLE arthas_command_logs ADD COLUMN command_type TEXT"),
             ]:
