@@ -436,8 +436,14 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
               </div>
               <div class="conn-step-action">
-                <button class="pt-btn" id="ptConnBtn" onclick="podConnect()">🔌 Pod 连接</button>
-                <button class="pt-btn ghost" onclick="checkPod()">🔍 检查 Pod / JVM</button>
+                <button class="conn-action-btn conn-action-btn-primary" id="ptConnBtn" onclick="podConnect()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
+                  Pod 连接
+                </button>
+                <button class="conn-action-btn" onclick="checkPod()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/></svg>
+                  检查 Pod / JVM
+                </button>
               </div>
               <div class="conn-step-note">Pod 连接成功后，Pod 监控、终端、文件下载会立即可用；不会自动启动 Arthas。</div>
               <div id="podConnStatus" style="display:none;margin-top:8px"></div>
@@ -450,7 +456,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 </div>
               </div>
               <div class="conn-step-action">
-                <button class="pt-btn success" id="ptUpgradeBtn" onclick="upgradeToArthas()">⚡ 启动 Arthas</button>
+                <button class="conn-action-btn conn-action-btn-success" id="ptUpgradeBtn" onclick="upgradeToArthas()">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>
+                  启动 Arthas
+                </button>
               </div>
               <div class="conn-step-note arthas">非 Java Pod 可保持 Pod 连接；Java Pod 需要深度诊断时再升级。</div>
               <div id="arthasUpgradeStatus" style="display:none;margin-top:8px"></div>
