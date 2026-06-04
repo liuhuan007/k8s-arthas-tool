@@ -17,8 +17,58 @@
     await Promise.all([
       loadTaskDefinitions(),
       loadTaskLogs(),
-      loadTaskSchedules()
+      loadTaskSchedules(),
+      loadTaskStats()
     ]);
+  };
+
+  /**
+   * 加载任务统计
+   */
+  async function loadTaskStats() {
+    try {
+      const data = await safeGet('/tasks/overview');
+      const stats = data.stats || data;
+
+      // 更新统计卡片
+      const total = (stats.running || 0) + (stats.pending || 0) + (stats.success || 0) + (stats.failed || 0) + (stats.cancelled || 0);
+      document.getElementById('tcStatTotal').textContent = total;
+      document.getElementById('tcStatRunning').textContent = stats.running || 0;
+      document.getElementById('tcStatPending').textContent = stats.pending || 0;
+      document.getElementById('tcStatSuccess').textContent = stats.success || 0;
+      document.getElementById('tcStatFailed').textContent = stats.failed || 0;
+
+      // 计算成功率
+      const successRate = total > 0 ? Math.round(((stats.success || 0) / total) * 100) : 0;
+      document.getElementById('tcStatSuccessRate').textContent = `${successRate}%`;
+    } catch (e) {
+      console.error('加载任务统计失败:', e);
+    }
+  }
+
+  /**
+   * 按状态筛选任务
+   */
+  window.filterByStatus = function(status) {
+    // 切换到执行历史 Tab
+    switchTCTab('logs');
+
+    // 筛选日志列表
+    const logItems = document.querySelectorAll('.task-log-item');
+    logItems.forEach(item => {
+      if (status === 'all') {
+        item.style.display = '';
+      } else {
+        const itemStatus = item.dataset.status;
+        item.style.display = itemStatus === status ? '' : 'none';
+      }
+    });
+
+    // 更新 Tab 高亮
+    document.querySelectorAll('.tc-stat-card').forEach(card => {
+      card.classList.remove('active');
+    });
+    event.currentTarget.classList.add('active');
   };
   
   /**
@@ -222,13 +272,15 @@
         success: '成功',
         failed: '失败',
         running: '执行中',
+        pending: '待处理',
+        cancelled: '已取消',
         partial: '部分成功'
       }[log.status] || log.status;
 
       const duration = log.duration_ms ? `${(log.duration_ms / 1000).toFixed(2)}s` : '-';
 
       return `
-        <div class="task-log-item">
+        <div class="task-log-item" data-status="${log.status}">
           <div class="task-log-main">
             <div>
               <div class="task-item-name">${escapeHtml(log.task_name || '即时诊断')}</div>

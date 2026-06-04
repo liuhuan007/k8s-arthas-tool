@@ -2342,3 +2342,31 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 .sh-page-btn:hover:not(:disabled){border-color:var(--a);color:var(--a)}
 .sh-page-btn:disabled{opacity:.3;cursor:not-allowed}
 .sh-page-num{font-family:var(--mono);font-size:10px;color:var(--tx2);min-width:40px;text-align:center}
+
+/* ── 任务中心统计仪表盘 ──────────────────────────────────────────────── */
+.tc-stats-dashboard{padding:12px 14px;background:linear-gradient(180deg,rgba(0,122,255,.04),transparent);border-bottom:1px solid var(--ln)}
+.tc-stats-row{display:flex;gap:10px;flex-wrap:wrap}
+
+.tc-stat-card{flex:1;min-width:120px;display:flex;align-items:center;gap:10px;padding:12px 14px;background:linear-gradient(135deg,var(--bg1),var(--bg2));border:1px solid var(--ln);border-radius:10px;cursor:pointer;transition:all .25s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden}
+.tc-stat-card:hover{border-color:rgba(0,122,255,.3);transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,.15)}
+.tc-stat-card.active{border-color:var(--a);box-shadow:0 0 0 2px rgba(0,122,255,.2)}
+
+.tc-stat-icon{display:flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:8px;flex-shrink:0}
+.tc-stat-total .tc-stat-icon{background:rgba(0,122,255,.1);color:var(--a)}
+.tc-stat-running .tc-stat-icon{background:rgba(0,122,255,.12);color:var(--a);animation:tcStatPulse 2s ease infinite}
+.tc-stat-pending .tc-stat-icon{background:rgba(255,149,0,.12);color:var(--a6)}
+.tc-stat-success .tc-stat-icon{background:rgba(52,199,89,.12);color:var(--a3)}
+.tc-stat-failed .tc-stat-icon{background:rgba(255,59,48,.12);color:var(--a5)}
+
+@keyframes tcStatPulse{0%,100%{opacity:1}50%{opacity:.6}}
+
+.tc-stat-info{display:flex;flex-direction:column;gap:2px}
+.tc-stat-value{font-family:var(--sans);font-size:20px;font-weight:700;color:var(--tx);line-height:1}
+.tc-stat-label{font-size:10px;color:var(--tx3);letter-spacing:.3px}
+
+.tc-stat-badge{position:absolute;right:12px;top:50%;transform:translateY(-50%);padding:3px 8px;background:rgba(52,199,89,.1);border:1px solid rgba(52,199,89,.2);border-radius:10px;font-size:10px;font-weight:600;color:var(--a3)}
+
+@media (max-width: 768px) {
+  .tc-stats-row{flex-direction:column}
+  .tc-stat-card{min-width:100%}
+}

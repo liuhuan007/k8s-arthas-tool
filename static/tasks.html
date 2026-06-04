@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>任务中心 - K8s Arthas Tool</title>
+<script>
+var AUTH_KEY = 'arthas_auth_token';
+var AUTH_USER = 'arthas_auth_user';
+(async function() {
+  try {
+    const resp = await fetch('/api/auth/current', { credentials: 'include' });
+    const data = await resp.json();
+    if (!data || !data.authenticated) { window.location.replace('/login.html'); return; }
+  } catch (e) { window.location.replace('/login.html'); return; }
+})();
+</script>
+<script>
+// 任务页内部 Tab 切换
+function switchTasksTab(tab) {
+  var panels = ['task-center', 'toolchain-center'];
+  panels.forEach(function(t) {
+    var el = document.getElementById('panel-' + t);
+    if (el) el.style.display = (t === tab) ? '' : 'none';
+    var navBtn = document.querySelector('[data-ts-tab="' + t + '"]');
+    if (navBtn) navBtn.classList.toggle('on', t === tab);
+  });
+  if (tab === 'task-center' && typeof initTaskCenterV2 === 'function') initTaskCenterV2();
+  if (tab === 'toolchain-center' && typeof loadToolchainCenter === 'function') loadToolchainCenter();
+  history.replaceState(null, '', '#' + tab);
+}
+</script>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="css/app.css?v=20260411i">
+<!-- Scripts loaded via PageLoader at end of body -->
+</head>
+<body>
+
+<!-- Topbar -->
+<div class="topbar">
+  <div class="tb-logo"><div class="tb-hex"></div><span class="tb-title">Arthas <em>K8s</em></span></div>
+  <div class="tb-links">
+    <div class="tb-context">
+      <span class="tb-page-title">任务中心</span>
+    </div>
+  </div>
+  <div class="tb-right">
+    <div class="tb-srv"><div class="dot" id="svDot"></div><span id="svLbl">连接中...</span></div>
+    <div class="tb-links" style="margin-right:12px;">
+      <a href="https://arthas.aliyun.com/en/doc/" target="_blank" class="tb-lnk" style="font-size:12px;color:var(--tx2);">文档</a>
+    </div>
+    <div class="tb-user tb-dropdown">
+      <a class="tb-lnk tb-user-link" href="javascript:void(0)"><span id="loginUser">--</span> &#9662;</a>
+      <div class="tb-dropdown-menu tb-dropdown-menu-right">
+        <div class="tb-menu-title">账号</div>
+        <a href="javascript:void(0)" onclick="openChangePasswordModal()">修改密码</a>
+        <a href="javascript:void(0)" onclick="doLogout()">退出登录</a>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="layout">
+
+<!-- Sidebar -->
+<div class="sidebar">
+  <div class="side-nav">
+    <div class="side-nav-group side-nav-group-expanded" data-side-group="connection">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
+        <span>连接管理</span><span class="side-nav-arrow">&#9662;</span>
+      </button>
+      <div class="side-nav-items" style="display:block;">
+        <button class="side-nav-item primary" data-nav-tab="connections" onclick="navigateTo('connections')">
+          <span>&#128268;</span><span>连接中心</span>
+        </button>
+      </div>
+    </div>
+    <div class="side-nav-group side-nav-group-expanded" data-side-group="diagnosis">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
+        <span>诊断</span><span class="side-nav-arrow">&#9662;</span>
+      </button>
+      <div class="side-nav-items" style="display:block;">
+        <button class="side-nav-item" data-nav-tab="diagnosis-cap" onclick="navigateTo('diagnosis-cap')">
+          <span>&#129504;</span><span>诊断中心</span>
+        </button>
+      </div>
+    </div>
+    <div class="side-nav-group" data-side-group="task">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
+        <span>任务</span><span class="side-nav-arrow"></span>
+      </button>
+      <div class="side-nav-items">
+        <button class="side-nav-item" data-nav-tab="task-center" onclick="switchTasksTab('task-center')">
+          <span>&#128230;</span><span>任务中心</span>
+        </button>
+      </div>
+    </div>
+    <div class="side-nav-group" data-side-group="tools">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
+        <span>工具</span><span class="side-nav-arrow"></span>
+      </button>
+      <div class="side-nav-items">
+        <button class="side-nav-item" data-nav-tab="hotfix" onclick="navigateTo('hotfix')">
+          <span>&#128295;</span><span>在线修复</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="profiler" onclick="navigateTo('profiler')">
+          <span>&#128293;</span><span>采样工具</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="terminal" onclick="navigateTo('terminal')">
+          <span>&#128421;</span><span>终端</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="monitor" onclick="navigateTo('monitor')">
+          <span>&#128202;</span><span>Pod 监控</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="filebrowser" onclick="navigateTo('filebrowser')">
+          <span>&#128194;</span><span>文件下载</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="toolchain-center" onclick="switchTasksTab('toolchain-center')">
+          <span>&#129683;</span><span>工具箱</span>
+        </button>
+      </div>
+    </div>
+    <div class="side-nav-group admin-only collapsed" data-side-group="system">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
+        <span>系统</span><span class="side-nav-arrow"></span>
+      </button>
+      <div class="side-nav-items">
+        <button class="side-nav-item" data-nav-tab="skill-management" onclick="navigateTo('skill-management')">
+          <span>&#9889;</span><span>Skill 管理</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="user-management" onclick="navigateTo('user-management')">
+          <span>&#128101;</span><span>用户管理</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="audit-logs" onclick="navigateTo('audit-logs')">
+          <span>&#128203;</span><span>审计日志</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="alerts" onclick="navigateTo('alerts')">
+          <span>&#128276;</span><span>告警中心</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="model-config" onclick="navigateTo('model-config')">
+          <span>&#9881;</span><span>模型配置</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="mcp-center" onclick="navigateTo('mcp-center')">
+          <span>&#128268;</span><span>MCP 接入</span>
+        </button>
+      </div>
+    </div>
+    <div class="side-nav-group collapsed" data-side-group="external">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
+        <span>外部系统</span><span class="side-nav-arrow"></span>
+      </button>
+      <div class="side-nav-items" id="externalLinksMenu">
+        <div class="sb-empty">加载中...</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Main -->
+<div class="main">
+  <div class="workspace-head">
+    <div>
+      <div class="workspace-kicker">Task Center</div>
+      <div class="workspace-title">任务中心</div>
+      <div class="workspace-sub">管理任务定义、执行历史、定时调度</div>
+    </div>
+    <div class="workspace-actions" id="workspaceActions">
+      <button class="btn btn-g" onclick="switchTasksTab('task-center')" data-ts-tab="task-center" style="font-size:11px">任务中心</button>
+      <button class="btn" onclick="switchTasksTab('toolchain-center')" data-ts-tab="toolchain-center" style="font-size:11px">工具箱</button>
+    </div>
+  </div>
+
+  <div class="panels">
+
+    <!-- Task Center -->
+    <div class="panel" id="panel-task-center">
+      <div class="ops-page task-center-page">
+        <div class="ops-hero">
+          <div>
+            <div class="ops-kicker">Task Center</div>
+            <h2>任务中心</h2>
+            <p>管理任务定义、执行历史、定时调度，支持脚本/Pod/诊断能力三种任务类型</p>
+          </div>
+          <div class="task-actions">
+            <button class="btn btn-g" onclick="initTaskCenterV2()">刷新</button>
+            <button class="btn btn-p" onclick="openCreateTaskModal()">+ 新建任务</button>
+          </div>
+        </div>
+
+        <div class="task-center-tabs">
+          <button class="tc-tab active" data-tc-tab="definitions" onclick="switchTCTab('definitions')">任务定义</button>
+          <button class="tc-tab" data-tc-tab="logs" onclick="switchTCTab('logs')">执行历史</button>
+          <button class="tc-tab" data-tc-tab="schedules" onclick="switchTCTab('schedules')">定时调度</button>
+        </div>
+
+        <!-- 任务统计仪表盘 -->
+        <div class="tc-stats-dashboard" id="tcStatsDashboard">
+          <div class="tc-stats-row">
+            <div class="tc-stat-card tc-stat-total" onclick="filterByStatus('all')" title="点击查看全部任务">
+              <div class="tc-stat-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg>
+              </div>
+              <div class="tc-stat-info">
+                <span class="tc-stat-value" id="tcStatTotal">-</span>
+                <span class="tc-stat-label">总任务</span>
+              </div>
+            </div>
+            <div class="tc-stat-card tc-stat-running" onclick="filterByStatus('running')" title="点击查看运行中任务">
+              <div class="tc-stat-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-6.219-8.56"/></svg>
+              </div>
+              <div class="tc-stat-info">
+                <span class="tc-stat-value" id="tcStatRunning">-</span>
+                <span class="tc-stat-label">运行中</span>
+              </div>
+            </div>
+            <div class="tc-stat-card tc-stat-pending" onclick="filterByStatus('pending')" title="点击查看待处理任务">
+              <div class="tc-stat-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+              </div>
+              <div class="tc-stat-info">
+                <span class="tc-stat-value" id="tcStatPending">-</span>
+                <span class="tc-stat-label">待处理</span>
+              </div>
+            </div>
+            <div class="tc-stat-card tc-stat-success" onclick="filterByStatus('success')" title="点击查看已完成任务">
+              <div class="tc-stat-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M20 6 9 17l-5-5"/></svg>
+              </div>
+              <div class="tc-stat-info">
+                <span class="tc-stat-value" id="tcStatSuccess">-</span>
+                <span class="tc-stat-label">已完成</span>
+              </div>
+              <span class="tc-stat-badge" id="tcStatSuccessRate">-%</span>
+            </div>
+            <div class="tc-stat-card tc-stat-failed" onclick="filterByStatus('failed')" title="点击查看失败任务">
+              <div class="tc-stat-icon">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+              </div>
+              <div class="tc-stat-info">
+                <span class="tc-stat-value" id="tcStatFailed">-</span>
+                <span class="tc-stat-label">失败</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="tc-panel" id="tcPanel-definitions">
+          <div id="taskDefList" class="task-def-list">
+            <div class="sb-empty">加载中...</div>
+          </div>
+        </div>
+
+        <div class="tc-panel" id="tcPanel-logs" style="display:none">
+          <div id="taskLogList" class="task-log-list">
+            <div class="sb-empty">加载中...</div>
+          </div>
+        </div>
+
+        <div class="tc-panel" id="tcPanel-schedules" style="display:none">
+          <div id="taskScheduleList" class="task-schedule-list">
+            <div class="sb-empty">加载中...</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Toolbox -->
+    <div class="panel" id="panel-toolchain-center" style="display:none">
+      <div class="ops-page toolchain-page">
+        <div class="ops-hero">
+          <div>
+            <div class="ops-kicker">Toolbox</div>
+            <h2>诊断工具箱</h2>
+            <p>管理 Arthas JAR 等离线工具，提供诊断能力快捷入口</p>
+          </div>
+          <div class="toolchain-hero-actions">
+            <button class="btn btn-g" onclick="loadToolchainCenter()">刷新</button>
+            <button class="btn btn-p" onclick="uploadToolPackageFromForm()">上传工具</button>
+          </div>
+        </div>
+
+        <div class="task-summary toolchain-summary" id="toolchainSummary">
+          <div class="task-stat"><span>工具包</span><b>-</b></div>
+          <div class="task-stat"><span>可用</span><b>-</b></div>
+          <div class="task-stat"><span>Arthas</span><b>-</b></div>
+          <div class="task-stat"><span>已上传</span><b>-</b></div>
+        </div>
+
+        <div class="toolchain-dual-layout">
+          <div class="toolchain-left-panel">
+            <section class="task-card">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">工具包管理</div>
+                  <div class="task-card-sub">上传、校验、分发 Arthas 等离线工具</div>
+                </div>
+              </div>
+              <div id="toolPackageList" class="tool-package-list"><div class="sb-empty">加载中...</div></div>
+              <div class="tool-upload-form" style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border-color)">
+                <div class="task-card-title" style="font-size:14px;margin-bottom:12px">上传离线工具</div>
+                <label class="fl">工具名称</label>
+                <input id="toolPackageName" class="inp" placeholder="例如：arthas-boot-3.7.2">
+                <div class="task-row">
+                  <div><label class="fl">工具类型</label><select id="toolPackageType" class="inp"><option value="arthas">Arthas</option><option value="async-profiler">async-profiler</option><option value="jattach">jattach</option><option value="generic">通用工具</option></select></div>
+                  <div><label class="fl">版本</label><input id="toolPackageVersion" class="inp" placeholder="例如：3.7.2"></div>
+                </div>
+                <label class="fl">默认安装路径</label>
+                <input id="toolPackageInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
+                <label class="fl">二进制文件</label>
+                <div class="toolchain-file-picker">
+                  <input id="toolPackageFile" class="inp toolchain-file-input" type="file" onchange="document.getElementById('toolPackageFileName').textContent = this.files?.[0]?.name || '未选择文件'">
+                  <button class="btn btn-g" type="button" onclick="document.getElementById('toolPackageFile')?.click()">选择文件</button>
+                  <span id="toolPackageFileName">未选择文件</span>
+                </div>
+                <label class="fl">描述</label>
+                <textarea id="toolPackageDesc" class="inp" rows="2" placeholder="说明工具来源、用途"></textarea>
+                <div class="task-form-footer">
+                  <button class="btn btn-g" onclick="createToolPackageFromForm()">仅登记</button>
+                  <button class="btn btn-p" onclick="uploadToolPackageFromForm()">上传并登记</button>
+                </div>
+              </div>
+            </section>
+
+            <section class="task-card" style="margin-top:16px">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">Arthas 离线分发</div>
+                  <div class="task-card-sub">将工具包分发到目标 Pod</div>
+                </div>
+                <span class="task-status running">离线 JAR -> Pod</span>
+              </div>
+              <div class="toolchain-distribute-box">
+                <div class="task-row">
+                  <div><label class="fl">集群</label><input id="toolTargetCluster" class="inp" placeholder="cluster name"></div>
+                  <div><label class="fl">命名空间</label><input id="toolTargetNamespace" class="inp" value="default"></div>
+                </div>
+                <div class="task-row">
+                  <div><label class="fl">Pod</label><input id="toolTargetPod" class="inp" placeholder="pod name"></div>
+                  <div><label class="fl">容器</label><input id="toolTargetContainer" class="inp" placeholder="可选"></div>
+                </div>
+                <label class="fl">Pod 安装路径</label>
+                <input id="toolTargetInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
+                <button class="btn btn-g task-fill-btn" type="button" onclick="fillToolchainPodTargetFromCurrent()">从当前 Pod 连接填充</button>
+                <div class="task-help">工具包列表中的"分发到 Pod"会调用 distributeToolPackage(packageId)，使用上方目标信息。</div>
+              </div>
+            </section>
+
+            <section class="task-card" style="margin-top:16px">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">分发历史</div>
+                  <div class="task-card-sub">最近工具包分发记录</div>
+                </div>
+                <button class="btn btn-g" onclick="loadDistributionHistory()">刷新</button>
+              </div>
+              <div id="distributionHistory" class="distribution-history-list">
+                <div class="sb-empty">暂无分发记录</div>
+              </div>
+            </section>
+          </div>
+
+          <div class="toolchain-right-panel">
+            <section class="task-card">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">诊断能力目录</div>
+                  <div class="task-card-sub">快速执行诊断任务</div>
+                </div>
+              </div>
+              <div id="toolchainDiagCaps" class="toolchain-diag-caps">
+                <div class="sb-empty">加载中...</div>
+              </div>
+            </section>
+
+            <section class="task-card" style="margin-top:16px">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">脚本模板</div>
+                  <div class="task-card-sub">创建脚本模板，关联诊断能力</div>
+                </div>
+                <button class="btn btn-p" onclick="openCreateScriptTemplateModal()">+ 新建模板</button>
+              </div>
+              <div id="scriptTemplateList" class="script-template-list">
+                <div class="sb-empty">加载中...</div>
+              </div>
+            </section>
+
+            <section class="task-card" style="margin-top:16px">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">快速工具规划</div>
+                  <div class="task-card-sub">常用一次性工具</div>
+                </div>
+              </div>
+              <div id="toolQuickPlanList" class="tool-quick-plan-list"><div class="sb-empty">加载任务模板后展示</div></div>
+              <div class="toolchain-source-upload">
+                <div class="task-card-title">上传 Java 源码到 Pod</div>
+                <div class="task-card-sub">把修改后的 .java 上传到 /tmp/arthas-sources</div>
+                <div class="task-row">
+                  <div><label class="fl">源码目录</label><input id="arthasSourceDir" class="inp" value="/tmp/arthas-sources"></div>
+                  <div><label class="fl">Java 源码</label><input id="arthasSourceFile" class="inp toolchain-file-input" type="file" accept=".java"></div>
+                </div>
+                <button class="btn btn-p" onclick="uploadArthasSourceFromForm()">上传源码到当前 Pod</button>
+              </div>
+            </section>
+
+            <section class="task-card" style="margin-top:16px">
+              <div class="task-card-hd">
+                <div>
+                  <div class="task-card-title">Arthas 最佳实践</div>
+                  <div class="task-card-sub">来自 GitHub user-case 的诊断能力</div>
+                </div>
+              </div>
+              <div id="arthasUserCaseList" class="arthas-user-case-list"><div class="sb-empty">正在加载</div></div>
+            </section>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div><!-- .panels -->
+</div><!-- .main -->
+</div><!-- .layout -->
+
+<!-- Create Schedule Modal -->
+<div class="modal-bg" id="modalCreateSchedule" style="display:none" onclick="if(event.target===this)closeCreateScheduleModal()">
+  <div class="modal-box" style="max-width:460px">
+    <div class="modal-hd">新建定时调度</div>
+    <label class="fl">绑定任务</label>
+    <select id="scheduleTaskId" class="inp"></select>
+    <label class="fl">调度名称</label>
+    <input id="scheduleName" class="inp" placeholder="例如：每小时巡检">
+    <label class="fl">执行间隔（秒，最小 60，最大 86400）</label>
+    <input id="scheduleInterval" class="inp" type="number" min="60" max="86400" value="3600">
+    <div class="modal-ft">
+      <button class="btn btn-g" onclick="closeCreateScheduleModal()">取消</button>
+      <button class="btn btn-p" onclick="submitCreateSchedule()">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- Change Password Modal -->
+<div class="modal-bg" id="pwdModal">
+  <div class="modal" style="width:420px">
+    <div class="mhd"><span class="m-tt">修改密码</span><button class="m-cl" onclick="closeChangePasswordModal()">X</button></div>
+    <div class="mbd">
+      <div style="padding:8px 10px;background:var(--bg3);border:1px solid var(--ln);border-radius:6px;font-size:11px;color:var(--tx2);line-height:1.6;margin-bottom:12px">修改后请使用新密码重新登录。</div>
+      <div class="fg"><label class="fl">当前密码</label><input class="fi" id="pwdOld" type="password" autocomplete="current-password"></div>
+      <div class="fg"><label class="fl">新密码</label><input class="fi" id="pwdNew" type="password" autocomplete="new-password"></div>
+      <div class="fg"><label class="fl">确认新密码</label><input class="fi" id="pwdConfirm" type="password" autocomplete="new-password"></div>
+      <div id="pwdModalErr" style="color:var(--a5);font-size:11px;margin-top:6px;display:none"></div>
+    </div>
+    <div class="mft">
+      <button class="btn btn-g" onclick="closeChangePasswordModal()">取消</button>
+      <button class="btn btn-p" onclick="submitChangePassword()">保存</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<!-- Page-aware lazy script loading -->
+<script src="js/page-loader.js"></script>
+<script>
+PageLoader.loadScripts([
+  'js/core/api.js',
+  'js/core/auth.js',
+  'js/core/utils.js',
+  'js/core/connection-store.js',
+  'js/core/websocket-client.js',
+  'js/components/conn-status-bar.js',
+  'js/components/error-notification.js',
+  'js/components/broadcast-channel-manager.js',
+  'js/components/external-links.js',
+  'js/components/page-shell.js',
+  'js/components/diagnosis.js',
+  'js/components/toolbox.js',
+  'js/components/task-center.js',
+  'js/layout-loader.js'
+]).then(function() {
+  if (typeof checkServerHealth === 'function') checkServerHealth();
+  if (typeof initUserDisplay === 'function') initUserDisplay();
+  if (typeof highlightActiveNav === 'function') highlightActiveNav('task-center');
+  if (typeof loadExternalLinks === 'function') loadExternalLinks();
+  var hash = location.hash.replace('#', '');
+  if (hash === 'toolbox' || hash === 'toolchain-center') {
+    switchTasksTab('toolchain-center');
+  } else {
+    switchTasksTab('task-center');
+  }
+});
+</script>
+
+</body>
+</html>
