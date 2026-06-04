@@ -2370,3 +2370,82 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
   .tc-stats-row{flex-direction:column}
   .tc-stat-card{min-width:100%}
 }
+
+/* ── 任务中心列表样式 ────────────────────────────────────────────────── */
+.tc-empty-state{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;gap:12px;color:var(--tx3)}
+.tc-empty-title{font-size:14px;font-weight:600;color:var(--tx2)}
+.tc-empty-sub{font-size:12px;color:var(--tx3);text-align:center}
+
+/* 任务定义卡片 */
+.tc-task-card{padding:14px 16px;background:var(--bg1);border:1px solid var(--ln);border-radius:10px;margin-bottom:8px;transition:all .25s cubic-bezier(.4,0,.2,1);cursor:pointer}
+.tc-task-card:hover{border-color:rgba(0,122,255,.3);box-shadow:0 4px 16px rgba(0,0,0,.12);transform:translateY(-1px)}
+
+.tc-task-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.tc-task-title-row{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.tc-task-icon{font-size:16px;flex-shrink:0}
+.tc-task-name{font-size:13px;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.tc-mode-badge{font-size:10px;padding:2px 8px;border-radius:4px;font-weight:500;flex-shrink:0}
+.tc-mode-immediate{background:rgba(0,122,255,.1);color:var(--a);border:1px solid rgba(0,122,255,.2)}
+.tc-mode-manual{background:rgba(52,199,89,.1);color:var(--a3);border:1px solid rgba(52,199,89,.2)}
+.tc-mode-scheduled{background:rgba(255,149,0,.1);color:var(--a6);border:1px solid rgba(255,149,0,.2)}
+
+.tc-task-actions{display:flex;gap:6px;flex-shrink:0}
+
+.tc-task-meta{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;padding-top:10px;border-top:1px solid var(--ln)}
+.tc-meta-item{font-size:11px;color:var(--tx3);display:flex;align-items:center;gap:4px}
+
+.tc-task-desc{margin-top:8px;font-size:11px;color:var(--tx2);line-height:1.5}
+
+/* 执行历史列表 */
+.tc-log-item{display:flex;align-items:center;gap:12px;padding:12px 14px;background:var(--bg1);border:1px solid var(--ln);border-radius:10px;margin-bottom:6px;transition:all .2s;cursor:pointer}
+.tc-log-item:hover{border-color:rgba(0,122,255,.3);background:rgba(0,122,255,.02)}
+
+.tc-log-status{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.tc-status-success{background:rgba(52,199,89,.12);color:var(--a3)}
+.tc-status-failed{background:rgba(255,59,48,.12);color:var(--a5)}
+.tc-status-running{background:rgba(0,122,255,.12);color:var(--a);animation:tcStatusPulse 2s ease infinite}
+.tc-status-pending{background:rgba(255,149,0,.12);color:var(--a6)}
+.tc-status-cancelled{background:var(--bg3);color:var(--tx3)}
+.tc-status-partial{background:rgba(255,149,0,.12);color:var(--a6)}
+
+@keyframes tcStatusPulse{0%,100%{opacity:1}50%{opacity:.6}}
+
+.tc-status-icon{font-size:14px;font-weight:600}
+
+.tc-log-content{flex:1;min-width:0}
+.tc-log-title{font-size:12px;font-weight:600;color:var(--tx);margin-bottom:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tc-log-meta{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--tx3)}
+
+.tc-log-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.tc-status-badge{font-size:10px;padding:3px 8px;border-radius:4px;font-weight:500}
+.tc-log-arrow{color:var(--tx3);transition:transform .2s}
+.tc-log-item:hover .tc-log-arrow{transform:translateX(2px);color:var(--a)}
+
+/* 定时调度列表 */
+.tc-schedule-item{padding:14px 16px;background:var(--bg1);border:1px solid var(--ln);border-radius:10px;margin-bottom:8px;transition:all .2s}
+.tc-schedule-active{border-left:3px solid var(--a3)}
+.tc-schedule-paused{border-left:3px solid var(--tx3)}
+
+.tc-schedule-header{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.tc-schedule-title-row{display:flex;align-items:center;gap:8px;flex:1;min-width:0}
+.tc-schedule-icon{font-size:14px;flex-shrink:0}
+.tc-schedule-name{font-size:13px;font-weight:600;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.tc-schedule-status{font-size:10px;padding:2px 8px;border-radius:4px;font-weight:500;flex-shrink:0}
+.tc-active{background:rgba(52,199,89,.1);color:var(--a3);border:1px solid rgba(52,199,89,.2)}
+.tc-paused{background:var(--bg3);color:var(--tx3);border:1px solid var(--ln)}
+
+.tc-schedule-actions{display:flex;gap:6px;flex-shrink:0}
+
+.tc-schedule-meta{display:flex;flex-wrap:wrap;gap:12px;margin-top:10px;padding-top:10px;border-top:1px solid var(--ln)}
+
+/* 按钮样式 */
+.tc-btn{display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border:1px solid var(--ln);border-radius:6px;font-family:var(--mono);font-size:11px;cursor:pointer;transition:all .2s;background:var(--bg2);color:var(--tx2)}
+.tc-btn:hover{border-color:var(--a);color:var(--a);background:rgba(0,122,255,.06)}
+.tc-btn-primary{background:linear-gradient(135deg,var(--a),var(--a2));color:#fff;border-color:rgba(0,122,255,.5)}
+.tc-btn-primary:hover{filter:brightness(1.1);color:#fff;box-shadow:0 2px 12px rgba(0,122,255,.3)}
+.tc-btn-ghost{background:transparent;border-color:transparent}
+.tc-btn-ghost:hover{background:var(--bg2);border-color:var(--ln)}
+.tc-btn-danger{color:var(--a5)}
+.tc-btn-danger:hover{border-color:var(--a5);background:rgba(255,59,48,.06)}

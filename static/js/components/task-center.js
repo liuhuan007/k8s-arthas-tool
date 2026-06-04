@@ -213,33 +213,85 @@
     if (!container) return;
 
     if (definitions.length === 0) {
-      container.innerHTML = '<div class="sb-empty">暂无任务定义<br>创建任务以开始使用</div>';
+      container.innerHTML = `
+        <div class="tc-empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity=".25">
+            <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>
+          </svg>
+          <div class="tc-empty-title">暂无任务定义</div>
+          <div class="tc-empty-sub">点击「新建任务」创建第一个任务</div>
+        </div>
+      `;
       return;
     }
 
     container.innerHTML = definitions.map(def => {
-      const modeText = {
-        immediate: '即时诊断',
-        manual: '手动任务',
-        scheduled: '定时任务'
-      }[def.execution_mode] || def.execution_mode;
+      const modeConfig = {
+        immediate: { text: '即时诊断', icon: '⚡', cls: 'tc-mode-immediate' },
+        manual: { text: '手动任务', icon: '▶️', cls: 'tc-mode-manual' },
+        scheduled: { text: '定时任务', icon: '⏰', cls: 'tc-mode-scheduled' }
+      };
+      const mode = modeConfig[def.execution_mode] || { text: def.execution_mode, icon: '📋', cls: '' };
+
+      const runtimeIcon = def.runtime === 'python' ? '🐍' : '📜';
+      const execCount = def.execution_count || 0;
+      const lastExec = def.last_executed_at ? formatTimeAgo(def.last_executed_at) : '从未执行';
 
       return `
-        <div class="task-def-item">
-          <div class="task-def-main">
-            <div>
-              <div class="task-item-name">${escapeHtml(def.name)}</div>
-              <div class="task-item-meta">模式：${modeText} · 执行：${def.execution_count || 0} 次</div>
+        <div class="tc-task-card" data-id="${def.id}">
+          <div class="tc-task-header">
+            <div class="tc-task-title-row">
+              <span class="tc-task-icon">${mode.icon}</span>
+              <span class="tc-task-name">${escapeHtml(def.name)}</span>
+              <span class="tc-mode-badge ${mode.cls}">${mode.text}</span>
             </div>
-            <div class="task-item-actions">
-              <button class="btn btn-p" onclick="executeTaskDefinition(${def.id})">执行</button>
-              <button class="btn btn-g" onclick="editTaskDefinition(${def.id})">编辑</button>
-              <button class="btn btn-g danger-text" onclick="deleteTaskDefinition(${def.id})">删除</button>
+            <div class="tc-task-actions">
+              <button class="tc-btn tc-btn-primary" onclick="executeTaskDefinition(${def.id})" title="执行任务">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
+                执行
+              </button>
+              <button class="tc-btn tc-btn-ghost" onclick="editTaskDefinition(${def.id})" title="编辑任务">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+              </button>
+              <button class="tc-btn tc-btn-ghost tc-btn-danger" onclick="deleteTaskDefinition(${def.id})" title="删除任务">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
             </div>
           </div>
+          <div class="tc-task-meta">
+            <span class="tc-meta-item" title="运行时">
+              ${runtimeIcon} ${def.runtime || 'shell'}
+            </span>
+            <span class="tc-meta-item" title="超时时间">
+              ⏱️ ${def.timeout_seconds || 60}s
+            </span>
+            <span class="tc-meta-item" title="执行次数">
+              📊 执行 ${execCount} 次
+            </span>
+            <span class="tc-meta-item" title="最后执行">
+              🕐 ${lastExec}
+            </span>
+          </div>
+          ${def.description ? `<div class="tc-task-desc">${escapeHtml(def.description)}</div>` : ''}
         </div>
       `;
     }).join('');
+  }
+
+  /**
+   * 格式化时间为 "多久前"
+   */
+  function formatTimeAgo(dateStr) {
+    if (!dateStr) return '未知';
+    const date = new Date(dateStr);
+    const now = new Date();
+    const diff = Math.floor((now - date) / 1000);
+
+    if (diff < 60) return '刚刚';
+    if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
+    if (diff < 604800) return `${Math.floor(diff / 86400)} 天前`;
+    return date.toLocaleDateString('zh-CN');
   }
 
   /**
@@ -262,34 +314,50 @@
     if (!container) return;
 
     if (logs.length === 0) {
-      container.innerHTML = '<div class="sb-empty">暂无执行记录</div>';
+      container.innerHTML = `
+        <div class="tc-empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity=".25">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <div class="tc-empty-title">暂无执行记录</div>
+          <div class="tc-empty-sub">执行任务后，记录将显示在这里</div>
+        </div>
+      `;
       return;
     }
 
     container.innerHTML = logs.map(log => {
-      const statusClass = log.status === 'success' ? 'running' : 'stopped';
-      const statusText = {
-        success: '成功',
-        failed: '失败',
-        running: '执行中',
-        pending: '待处理',
-        cancelled: '已取消',
-        partial: '部分成功'
-      }[log.status] || log.status;
+      const statusConfig = {
+        success: { text: '成功', cls: 'tc-status-success', icon: '✓' },
+        failed: { text: '失败', cls: 'tc-status-failed', icon: '✕' },
+        running: { text: '执行中', cls: 'tc-status-running', icon: '⟳' },
+        pending: { text: '待处理', cls: 'tc-status-pending', icon: '⏳' },
+        cancelled: { text: '已取消', cls: 'tc-status-cancelled', icon: '⊘' },
+        partial: { text: '部分成功', cls: 'tc-status-partial', icon: '⚠' }
+      };
+      const status = statusConfig[log.status] || { text: log.status, cls: '', icon: '?' };
 
-      const duration = log.duration_ms ? `${(log.duration_ms / 1000).toFixed(2)}s` : '-';
+      const duration = log.duration_ms ? (log.duration_ms >= 1000 ? `${(log.duration_ms / 1000).toFixed(1)}s` : `${log.duration_ms}ms`) : '-';
+      const timeAgo = formatTimeAgo(log.started_at);
 
       return `
-        <div class="task-log-item" data-status="${log.status}">
-          <div class="task-log-main">
-            <div>
-              <div class="task-item-name">${escapeHtml(log.task_name || '即时诊断')}</div>
-              <div class="task-item-meta">状态：${statusText} · 耗时：${duration} · 时间：${log.started_at || '-'}</div>
+        <div class="tc-log-item" data-status="${log.status}" onclick="viewTaskLogDetail(${log.id})">
+          <div class="tc-log-status ${status.cls}">
+            <span class="tc-status-icon">${status.icon}</span>
+          </div>
+          <div class="tc-log-content">
+            <div class="tc-log-title">${escapeHtml(log.task_name || log.capability_name || '即时诊断')}</div>
+            <div class="tc-log-meta">
+              <span class="tc-log-time" title="${log.started_at}">${timeAgo}</span>
+              <span class="tc-log-duration">耗时 ${duration}</span>
+              ${log.execution_mode ? `<span class="tc-log-mode">${log.execution_mode}</span>` : ''}
             </div>
-            <div class="task-item-actions">
-              <span class="task-status ${statusClass}">${statusText}</span>
-              <button class="btn btn-g" onclick="viewTaskLogDetail(${log.id})">查看详情</button>
-            </div>
+          </div>
+          <div class="tc-log-actions">
+            <span class="tc-status-badge ${status.cls}">${status.text}</span>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tc-log-arrow">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
           </div>
         </div>
       `;
@@ -316,31 +384,52 @@
     if (!container) return;
 
     if (schedules.length === 0) {
-      container.innerHTML = '<div class="sb-empty">暂无定时任务<br>创建定时调度以开始使用</div>';
+      container.innerHTML = `
+        <div class="tc-empty-state">
+          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity=".25">
+            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
+          </svg>
+          <div class="tc-empty-title">暂无定时任务</div>
+          <div class="tc-empty-sub">创建定时调度以开始使用</div>
+        </div>
+      `;
       return;
     }
 
     container.innerHTML = schedules.map(s => {
-      const statusClass = s.status === 'active' ? 'running' : 'stopped';
-      const statusText = s.status === 'active' ? '运行中' : '已暂停';
-      const scheduleText = s.schedule_type === 'cron' 
-        ? `Cron: ${s.cron_expression}` 
-        : `间隔: ${s.interval_seconds}s`;
+      const isActive = s.status === 'active';
+      const scheduleType = s.schedule_type === 'cron' ? 'Cron' : '间隔';
+      const scheduleValue = s.schedule_type === 'cron' ? s.cron_expression : `${s.interval_seconds}s`;
+      const nextRun = s.next_run_at ? formatTimeAgo(s.next_run_at) : '-';
+      const execCount = s.execution_count || 0;
 
       return `
-        <div class="task-schedule-item">
-          <div class="task-schedule-main">
-            <div>
-              <div class="task-item-name">${escapeHtml(s.name)}</div>
-              <div class="task-item-meta">类型：${scheduleText} · 已执行：${s.execution_count || 0} 次 · 下次：${s.next_run_at || '-'}</div>
+        <div class="tc-schedule-item ${isActive ? 'tc-schedule-active' : 'tc-schedule-paused'}">
+          <div class="tc-schedule-header">
+            <div class="tc-schedule-title-row">
+              <span class="tc-schedule-icon">${isActive ? '🟢' : '⏸️'}</span>
+              <span class="tc-schedule-name">${escapeHtml(s.name)}</span>
+              <span class="tc-schedule-status ${isActive ? 'tc-active' : 'tc-paused'}">${isActive ? '运行中' : '已暂停'}</span>
             </div>
-            <div class="task-item-actions">
-              <span class="task-status ${statusClass}">${statusText}</span>
-              <button class="btn btn-g" onclick="toggleSchedule(${s.id}, '${s.status === 'active' ? 'paused' : 'active'}')">
-                ${s.status === 'active' ? '暂停' : '恢复'}
+            <div class="tc-schedule-actions">
+              <button class="tc-btn tc-btn-ghost" onclick="toggleSchedule(${s.id}, '${isActive ? 'paused' : 'active'}')" title="${isActive ? '暂停' : '恢复'}">
+                ${isActive ? '⏸️' : '▶️'}
               </button>
-              <button class="btn btn-g danger-text" onclick="deleteSchedule(${s.id})">删除</button>
+              <button class="tc-btn tc-btn-ghost tc-btn-danger" onclick="deleteSchedule(${s.id})" title="删除">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+              </button>
             </div>
+          </div>
+          <div class="tc-schedule-meta">
+            <span class="tc-meta-item" title="调度类型">
+              📅 ${scheduleType}: ${scheduleValue}
+            </span>
+            <span class="tc-meta-item" title="执行次数">
+              📊 已执行 ${execCount} 次
+            </span>
+            <span class="tc-meta-item" title="下次执行">
+              ⏰ 下次：${nextRun}
+            </span>
           </div>
         </div>
       `;
