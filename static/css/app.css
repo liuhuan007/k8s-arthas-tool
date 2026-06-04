@@ -2588,3 +2588,95 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 .tc-report-meta{display:flex;flex-wrap:wrap;gap:10px;font-size:11px;color:var(--tx3)}
 
 .tc-report-actions{display:flex;gap:6px;flex-shrink:0}
+
+/* ── 任务中心响应式 ──────────────────────────────────────────────────── */
+@media (max-width: 900px) {
+  .tc-filter-row{flex-direction:column}
+  .tc-filter-group{width:100%}
+  .tc-filter-search{min-width:100%}
+
+  .tc-task-header{flex-direction:column}
+  .tc-task-actions{width:100%;justify-content:flex-end}
+
+  .tc-schedule-header{flex-direction:column}
+  .tc-schedule-actions{width:100%;justify-content:flex-end}
+
+  .tc-modal{width:96vw !important}
+  .tc-detail-grid{grid-template-columns:1fr}
+  .tc-detail-status-card{grid-template-columns:repeat(2, 1fr)}
+
+  .tc-reports-header{flex-direction:column;align-items:flex-start}
+  .tc-reports-actions{width:100%}
+
+  .tc-pagination{flex-direction:column;gap:8px}
+  .tc-page-controls{width:100%;justify-content:center}
+}
+
+@media (max-width: 600px) {
+  .tc-stats-row{flex-direction:column}
+  .tc-stat-card{min-width:100%}
+
+  .tc-task-meta{flex-direction:column;gap:6px}
+
+  .tc-log-item{flex-wrap:wrap}
+  .tc-log-content{flex:1 1 100%;order:2}
+  .tc-log-status{order:1}
+  .tc-log-actions{order:3;margin-left:auto}
+
+  .tc-radio-group{flex-direction:column}
+  .tc-form-row{flex-direction:column}
+
+  .tc-steps{flex-wrap:wrap;gap:8px}
+  .tc-step-line{display:none}
+
+  .tc-report-item{flex-wrap:wrap}
+  .tc-report-content{flex:1 1 100%}
+  .tc-report-actions{margin-left:auto}
+
+  .tc-pagination{padding:8px 10px}
+  .tc-page-size{display:none}
+}
+
+/* 打印样式 */
+@media print {
+  .tc-stats-dashboard{display:none}
+  .tc-filter-toolbar{display:none}
+  .tc-pagination{display:none}
+  .tc-modal-overlay{display:none}
+  .tc-task-actions{display:none}
+  .tc-schedule-actions{display:none}
+  .tc-report-actions{display:none}
+  .tc-tab{display:none}
+  .workspace-actions{display:none}
+}
+
+/* ── 可访问性 ──────────────────────────────────────────────────────────── */
+.tc-task-card:focus-visible,
+.tc-log-item:focus-visible,
+.tc-schedule-item:focus-visible,
+.tc-report-item:focus-visible{outline:2px solid var(--a);outline-offset:2px}
+
+.tc-btn:focus-visible,
+.tc-select:focus-visible,
+.tc-input:focus-visible,
+.tc-textarea:focus-visible{outline:2px solid var(--a);outline-offset:2px}
+
+.tc-stat-card:focus-visible{outline:2px solid var(--a);outline-offset:2px}
+
+/* 高对比度模式 */
+@media (forced-colors: active) {
+  .tc-task-card{border:2px solid ButtonBorder}
+  .tc-log-item{border:2px solid ButtonBorder}
+  .tc-btn{border:2px solid ButtonBorder}
+  .tc-status-badge{border:2px solid ButtonText}
+}
+
+/* 减少动画 */
+@media (prefers-reduced-motion: reduce) {
+  .tc-stat-running .tc-stat-icon{animation:none}
+  .tc-status-running{animation:none}
+  .tc-modal-icon.tc-detail-running{animation:none}
+  *{transition-duration:0.01ms !important}
+  @keyframes tcModalFadeIn{from{opacity:1}to{opacity:1}}
+  @keyframes tcModalSlideIn{from{opacity:1;transform:none}to{opacity:1;transform:none}}
+}

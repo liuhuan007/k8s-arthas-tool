@@ -172,7 +172,7 @@ function switchTasksTab(tab) {
   <div class="panels">
 
     <!-- Task Center -->
-    <div class="panel" id="panel-task-center">
+    <div class="panel" id="panel-task-center" role="region" aria-label="任务中心">
       <div class="ops-page task-center-page">
         <div class="ops-hero">
           <div>
@@ -181,16 +181,16 @@ function switchTasksTab(tab) {
             <p>管理任务定义、执行历史、定时调度，支持脚本/Pod/诊断能力三种任务类型</p>
           </div>
           <div class="task-actions">
-            <button class="btn btn-g" onclick="initTaskCenterV2()">刷新</button>
-            <button class="btn btn-p" onclick="openCreateTaskModal()">+ 新建任务</button>
+            <button class="btn btn-g" onclick="initTaskCenterV2()" aria-label="刷新数据">刷新</button>
+            <button class="btn btn-p" onclick="openCreateTaskModal()" aria-label="创建新任务">+ 新建任务</button>
           </div>
         </div>
 
-        <div class="task-center-tabs">
-          <button class="tc-tab active" data-tc-tab="definitions" onclick="switchTCTab('definitions')">任务定义</button>
-          <button class="tc-tab" data-tc-tab="logs" onclick="switchTCTab('logs')">执行历史</button>
-          <button class="tc-tab" data-tc-tab="schedules" onclick="switchTCTab('schedules')">定时调度</button>
-          <button class="tc-tab" data-tc-tab="reports" onclick="switchTCTab('reports')">执行报告</button>
+        <div class="task-center-tabs" role="tablist" aria-label="任务中心导航">
+          <button class="tc-tab active" data-tc-tab="definitions" onclick="switchTCTab('definitions')" role="tab" aria-selected="true" aria-controls="tcPanel-definitions">任务定义</button>
+          <button class="tc-tab" data-tc-tab="logs" onclick="switchTCTab('logs')" role="tab" aria-selected="false" aria-controls="tcPanel-logs">执行历史</button>
+          <button class="tc-tab" data-tc-tab="schedules" onclick="switchTCTab('schedules')" role="tab" aria-selected="false" aria-controls="tcPanel-schedules">定时调度</button>
+          <button class="tc-tab" data-tc-tab="reports" onclick="switchTCTab('reports')" role="tab" aria-selected="false" aria-controls="tcPanel-reports">执行报告</button>
         </div>
 
         <!-- 任务统计仪表盘 -->
