@@ -370,17 +370,16 @@ document.addEventListener('DOMContentLoaded', function() {
         </div>
 
         <div class="conn-center-grid">
-          <section class="conn-card conn-card-builder">
-            <div class="conn-card-hd">
+          <section class=”conn-card conn-card-builder”>
+            <div class=”conn-card-hd”>
               <div>
-                <div class="conn-card-title">连接配置</div>
-                <div class="conn-card-sub">按“选择集群 → 选择目标 → 建立 Pod 连接 → 按需升级 Arthas”的顺序操作</div>
+                <div class=”conn-card-title”>连接配置</div>
+                <div class=”conn-card-sub”>按”选择集群 → 选择目标 → 建立 Pod 连接 → 按需升级 Arthas”的顺序操作</div>
               </div>
-              <div style="display:flex;gap:8px">
-                <!-- ✅ 新增: 一键重连 -->
-                <button class="mini-action" onclick="reconnectCurrentConnection()" title="一键重连">🔁</button>
-                <!-- ✅ 新增: 查看日志 -->
-                <button class="mini-action" onclick="viewArthasStartLog()" title="查看 Arthas 启动日志">📄</button>
+              <div style=”display:flex;gap:8px”>
+                <button class=”pt-btn” id=”add-connection-btn” title=”添加新集群连接”>＋ 添加连接</button>
+                <button class=”mini-action” onclick=”reconnectCurrentConnection()” title=”一键重连”>🔁</button>
+                <button class=”mini-action” onclick=”viewArthasStartLog()” title=”查看 Arthas 启动日志”>📄</button>
               </div>
             </div>
             <div class="conn-builder-body">
@@ -463,7 +462,6 @@ document.addEventListener('DOMContentLoaded', function() {
             <div id="connection-list-container">
               <div class="connection-list-header">
                 <h2>连接管理</h2>
-                <button id="add-connection-btn" class="btn btn-primary">添加连接</button>
               </div>
               <table id="connection-table" class="table">
                 <thead>
