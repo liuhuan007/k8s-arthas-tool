@@ -9,6 +9,7 @@ from pathlib import Path
 
 from models.db import db
 from services.authorization_service import AuthorizationService
+from services.cache_service import query_cache, invalidate_cluster_cache
 
 # 集群配置文件读写锁
 _clusters_lock = threading.Lock()
@@ -72,8 +73,14 @@ def _check_cluster_access(cluster_id: str):
 @login_required
 def list_clusters():
     """获取集群列表"""
+    # Build a user-scoped cache key
+    cache_key = f"list_clusters:admin={current_user.is_admin}:uid={current_user.id}"
+    cached_result = query_cache.get(cache_key)
+    if cached_result is not None:
+        return jsonify(cached_result)
+
     clusters = _load_clusters()
-    
+
     # 非管理员只返回分配的集群
     if not current_user.is_admin:
         user_clusters = db.fetch_all(
@@ -82,8 +89,10 @@ def list_clusters():
         )
         allowed = {r['cluster_id'] for r in user_clusters}
         clusters = [c for c in clusters if c.get('id') in allowed]
-    
-    return jsonify({'clusters': clusters})
+
+    result = {'clusters': clusters}
+    query_cache.set(cache_key, result, ttl=300)
+    return jsonify(result)
 
 
 @clusters_bp.route('/clusters', methods=['POST'])
@@ -117,7 +126,7 @@ def create_cluster():
     })
     
     _save_clusters(clusters)
-    
+
     # 同步到数据库
     db.insert('clusters', {
         'id': cluster_id,
@@ -125,7 +134,8 @@ def create_cluster():
         'kubeconfig': kubeconfig,
         'context': context,
     })
-    
+
+    invalidate_cluster_cache()
     return jsonify({'ok': True, 'id': cluster_id}), 201
 
 
@@ -166,7 +176,8 @@ def update_cluster(cluster_id: str):
         update_data['context'] = context
     if update_data:
         db.update('clusters', update_data, 'id = ?', (target.get('id', cluster_id),))
-    
+
+    invalidate_cluster_cache()
     return jsonify({'ok': True})
 
 
@@ -187,7 +198,8 @@ def delete_cluster(cluster_id: str):
     
     # 从数据库删除集群
     db.delete('clusters', 'id = ? OR name = ?', (cluster_id, cluster_id))
-    
+
+    invalidate_cluster_cache()
     return jsonify({'ok': True})
 
 

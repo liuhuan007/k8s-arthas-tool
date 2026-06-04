@@ -47,6 +47,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <script src="js/app-terminal.js"></script>
 <script src="js/components/monitor.js"></script>
 <script src="js/components/profiler.js"></script>
+<script src="js/components/sampling-history.js"></script>
 <script src="js/components/filebrowser.js"></script>
 <script src="js/components/clusters.js"></script>
 <script src="js/ai-chat.js"></script>
@@ -115,6 +116,9 @@ document.addEventListener('DOMContentLoaded', function() {
 <script src="js/core/diagnosis-context.js?v=20260514a"></script>
 <script src="js/components/diagnosis-execution.js?v=20260514a"></script>
 <script src="js/components/diagnosis-renderer.js?v=20260514a"></script>
+
+<!-- Page-aware script loader (available for future use) -->
+<script src="js/page-loader.js"></script>
 </head>
 <body>
 
@@ -140,7 +144,7 @@ document.addEventListener('DOMContentLoaded', function() {
         📋 命令手册
       </a>
     </div>
-    <button id="ai-drawer-btn" class="btn btn-icon" onclick="toggleAIDrawer()">AI</button>
+    <button id="ai-drawer-btn" class="btn btn-icon" onclick="toggleAIDrawer()">AI 助手</button>
     <div class="tb-user tb-dropdown">
       <a class="tb-lnk tb-user-link" href="javascript:void(0)">👤 <span id="loginUser">—</span> ▾</a>
       <div class="tb-dropdown-menu tb-dropdown-menu-right">
@@ -163,7 +167,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <span>连接管理</span><span class="side-nav-arrow">▾</span>
       </button>
       <div class="side-nav-items" style="display:block;">
-        <button class="side-nav-item primary" data-nav-tab="connections" onclick="openConnectionCenter()">
+        <button class="side-nav-item primary" data-nav-tab="connections" onclick="navigateTo('connections')">
           <span>🔌</span><span>连接中心</span>
         </button>
       </div>
@@ -175,7 +179,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <span>诊断</span><span class="side-nav-arrow">▾</span>
       </button>
       <div class="side-nav-items" style="display:block;">
-        <button class="side-nav-item" data-nav-tab="diagnosis-cap" onclick="switchTab('diagnosis-cap')">
+        <button class="side-nav-item" data-nav-tab="diagnosis-cap" onclick="navigateTo('diagnosis-cap')">
           <span>🧠</span><span>诊断中心</span>
         </button>
       </div>
@@ -187,7 +191,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <span>任务</span><span class="side-nav-arrow"></span>
       </button>
       <div class="side-nav-items">
-        <button class="side-nav-item" data-nav-tab="task-center" onclick="openTaskCenter()">
+        <button class="side-nav-item" data-nav-tab="task-center" onclick="navigateTo('task-center')">
           <span>📦</span><span>任务中心</span>
         </button>
       </div>
@@ -199,23 +203,23 @@ document.addEventListener('DOMContentLoaded', function() {
         <span>工具</span><span class="side-nav-arrow"></span>
       </button>
       <div class="side-nav-items">
-        <button class="side-nav-item" data-nav-tab="hotfix" onclick="switchTab('hotfix')">
+        <button class="side-nav-item" data-nav-tab="hotfix" onclick="navigateTo('hotfix')">
           <span>🔧</span><span>在线修复</span>
         </button>
-        <button class="side-nav-item" data-nav-tab="profiler" onclick="switchTab('profiler')">
+        <button class="side-nav-item" data-nav-tab="profiler" onclick="navigateTo('profiler')">
           <span>🔥</span><span>采样工具</span>
         </button>
-        <button class="side-nav-item" data-nav-tab="terminal" onclick="switchTab('terminal')">
+        <button class="side-nav-item" data-nav-tab="terminal" onclick="navigateTo('terminal')">
           <span>🖥️</span><span>终端</span>
         </button>
-        <button class="side-nav-item" data-nav-tab="monitor" onclick="switchTab('monitor')">
+        <button class="side-nav-item" data-nav-tab="monitor" onclick="navigateTo('monitor')">
           <span>📊</span><span>Pod 监控</span>
         </button>
-        <button class="side-nav-item" data-nav-tab="alerts" onclick="location.href='/alerts'">
-          <span>🔔</span><span>告警中心</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="filebrowser" onclick="switchTab('filebrowser')">
+        <button class="side-nav-item" data-nav-tab="filebrowser" onclick="navigateTo('filebrowser')">
           <span>📂</span><span>文件下载</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="toolchain-center" onclick="navigateTo('toolchain-center')">
+          <span>🧰</span><span>工具箱</span>
         </button>
       </div>
     </div>
@@ -226,19 +230,22 @@ document.addEventListener('DOMContentLoaded', function() {
         <span>系统</span><span class="side-nav-arrow"></span>
       </button>
       <div class="side-nav-items">
-        <button class="side-nav-item" data-nav-tab="toolchain-center" onclick="openToolchainCenter()">
-          <span>🧰</span><span>工具箱</span>
+        <button class="side-nav-item" data-nav-tab="skill-management" onclick="navigateTo('skill-management')">
+          <span>⚡</span><span>Skill 管理</span>
         </button>
-        <button class="side-nav-item" data-nav-tab="user-management" onclick="switchTab('user-management')">
+        <button class="side-nav-item" data-nav-tab="user-management" onclick="navigateTo('user-management')">
           <span>👥</span><span>用户管理</span>
         </button>
-        <button class="side-nav-item" data-nav-tab="audit-logs" onclick="switchTab('audit-logs')">
+        <button class="side-nav-item" data-nav-tab="audit-logs" onclick="navigateTo('audit-logs')">
           <span>📋</span><span>审计日志</span>
         </button>
-        <button class="side-nav-item" data-nav-tab="model-config" onclick="switchTab('model-config')">
+        <button class="side-nav-item" data-nav-tab="alerts" onclick="navigateTo('alerts')">
+          <span>🔔</span><span>告警中心</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="model-config" onclick="navigateTo('model-config')">
           <span>⚙️</span><span>模型配置</span>
         </button>
-        <button class="side-nav-item" data-nav-tab="mcp-center" onclick="switchTab('mcp-center')">
+        <button class="side-nav-item" data-nav-tab="mcp-center" onclick="navigateTo('mcp-center')">
           <span>🔌</span><span>MCP 接入</span>
         </button>
       </div>
@@ -888,12 +895,20 @@ document.addEventListener('DOMContentLoaded', function() {
     </div>
 
     <!-- Embedded Admin Pages -->
+    <div class="panel" id="panel-skill-management">
+      <iframe class="admin-frame" data-src="skill-management.html?embed=1" title="Skill 管理"></iframe>
+    </div>
+
     <div class="panel" id="panel-user-management">
       <iframe class="admin-frame" data-src="user-management.html?embed=1" title="用户管理"></iframe>
     </div>
 
     <div class="panel" id="panel-audit-logs">
       <iframe class="admin-frame" data-src="audit-logs.html?embed=1" title="审计日志"></iframe>
+    </div>
+
+    <div class="panel" id="panel-alerts">
+      <iframe class="admin-frame" data-src="alerts.html?embed=1" title="告警中心"></iframe>
     </div>
 
     <!-- Hot Swap Workbench -->
@@ -1267,33 +1282,9 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="o-dim">等待启动...</div>
           </div>
           <!-- Current connection history panel (hidden by default) -->
-          <div id="pfl-panel-history" style="display:none;height:300px;overflow:hidden;background:var(--bg2)">
-            <div style="display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-bottom:1px solid var(--ln)">
-              <span style="font-size:11px;color:var(--a);font-weight:600">📋 当前连接的历史记录</span>
-              <span style="font-size:10px;color:var(--tx3)">只显示 <span id="pfHistConnName">-</span> 的采样任务</span>
-            </div>
-            <!-- ✅ 历史记录列表 (可滚动) -->
-            <div id="pfl-history-list" style="height:calc(300px - 100px);overflow-y:auto;padding:10px 14px">
-              <div style="color:var(--tx3);text-align:center;padding:20px">暂无历史记录</div>
-            </div>
-            <!-- ✅ 分页组件 -->
-            <div style="padding:8px 14px;border-top:1px solid var(--ln);display:flex;justify-content:center;align-items:center;gap:8px;">
-              <button onclick="pfHistPrevPage()" style="padding:4px 10px;font-size:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:3px;color:var(--tx2);cursor:pointer">← 上一页</button>
-              <span style="font-size:10px;color:var(--tx3)">第</span>
-              <input type="number" id="pfHistPageInput" min="1" value="1" style="width:40px;padding:3px 6px;background:var(--bg1);border:1px solid var(--ln);border-radius:3px;color:var(--tx);font-size:10px;text-align:center" onkeydown="if(event.key==='Enter'){pfHistJumpToPage();}">
-              <span style="font-size:10px;color:var(--tx3)" id="pfHistPageInfo">/ 1 页</span>
-              <button onclick="pfHistJumpToPage()" style="padding:4px 8px;font-size:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:3px;color:var(--tx2);cursor:pointer">跳转</button>
-              <button onclick="pfHistNextPage()" style="padding:4px 10px;font-size:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:3px;color:var(--tx2);cursor:pointer">下一页 →</button>
-              <span style="width:1px;height:16px;background:var(--ln)"></span>
-              <label style="font-size:10px;color:var(--tx3);display:flex;align-items:center;gap:4px">
-                每页
-                <select id="pfHistPageSize" onchange="pfHistChangePageSize()" style="padding:3px 6px;background:var(--bg1);border:1px solid var(--ln);border-radius:3px;color:var(--tx);font-size:10px">
-                  <option value="10">10 条</option>
-                  <option value="20" selected>20 条</option>
-                  <option value="50">50 条</option>
-                </select>
-              </label>
-              <span style="font-size:10px;color:var(--tx3)" id="pfHistTotalInfo">(共 0 条)</span>
+          <div id="pfl-panel-history" style="display:none;flex:1;overflow:hidden;background:var(--bg2)">
+            <div id="pfl-history-list" style="height:100%;overflow:hidden">
+              <!-- SamplingHistory component mounts here (inline mode) -->
             </div>
           </div>
         </div>
@@ -1390,10 +1381,10 @@ document.addEventListener('DOMContentLoaded', function() {
         <!-- Sub-tabs -->
         <div style="display:flex;gap:0;border-bottom:1px solid var(--ln);flex-shrink:0;background:var(--bg2)">
           <div class="pm-st on" id="hist-profiler" onclick="switchHistTab('profiler')" style="font-size:11px">
-            🔥 JProfiler 任务 <span id="cntPfTasks" style="background:var(--bg3);border-radius:10px;padding:1px 6px;font-size:10px">0</span>
+            JProfiler 任务 <span id="cntPfTasks" style="background:var(--bg3);border-radius:10px;padding:1px 6px;font-size:10px">0</span>
           </div>
           <div class="pm-st" id="hist-files" onclick="switchHistTab('files')" style="font-size:11px">
-            💾 下载文件 <span id="cntDlFiles" style="background:var(--bg3);border-radius:10px;padding:1px 6px;font-size:10px">0</span>
+            下载文件 <span id="cntDlFiles" style="background:var(--bg3);border-radius:10px;padding:1px 6px;font-size:10px">0</span>
           </div>
           <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding:0 10px">
             <button class="ib" style="font-size:11px" onclick="loadHistory()">↻ 刷新</button>
@@ -1401,8 +1392,8 @@ document.addEventListener('DOMContentLoaded', function() {
         </div>
         <!-- Sub-panels -->
         <div style="flex:1;overflow:hidden">
-          <div id="hist-panel-profiler" style="height:100%;overflow-y:auto;padding:14px">
-            <div style="color:var(--tx3);text-align:center;padding:40px">暂无采样任务</div>
+          <div id="hist-panel-profiler" style="height:100%;overflow:hidden">
+            <!-- SamplingHistory component mounts here -->
           </div>
           <div id="hist-panel-files" style="height:100%;overflow-y:auto;padding:14px;display:none">
             <div style="color:var(--tx3);text-align:center;padding:40px">暂无下载记录</div>
@@ -1637,6 +1628,9 @@ document.addEventListener('DOMContentLoaded', function() {
         
         <!-- 筛选器 -->
         <div class="capability-filters">
+          <input id="diagCapSearchInput" class="inp" style="max-width:240px;padding:6px 10px;font-size:12px" placeholder="搜索能力名称..." onkeyup="if(event.key==='Enter')diagCapSearch()">
+          <button class="btn btn-g" style="padding:6px 10px;font-size:11px" onclick="diagCapSearch()">搜索</button>
+          <span style="width:1px;height:20px;background:var(--ln);margin:0 4px"></span>
           <button class="capability-filter-btn active" data-level="1">L1 快速工具</button>
           <button class="capability-filter-btn" data-level="2">L2 诊断工具</button>
           <button class="capability-filter-btn" data-level="3">L3 场景方案</button>

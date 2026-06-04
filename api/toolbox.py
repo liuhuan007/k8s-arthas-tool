@@ -9,6 +9,7 @@
 import json
 import logging
 import re
+import sys
 import time
 from datetime import datetime
 from typing import Any, Dict, Optional
@@ -78,12 +79,16 @@ def _build_command(command_template: str, params: dict) -> str:
 
 
 def _get_connection(conn_id: str):
-    """获取 Arthas 连接"""
-    try:
-        from server import _connections, _connections_lock
-    except ImportError:
+    """获取 Arthas 连接（通过 sys.modules 松耦合访问 server 运行态）"""
+    server_mod = sys.modules.get('server')
+    if server_mod is None:
         return None, "服务未初始化"
-    
+
+    _connections = getattr(server_mod, '_connections', None)
+    _connections_lock = getattr(server_mod, '_connections_lock', None)
+    if _connections is None or _connections_lock is None:
+        return None, "连接运行态不可用"
+
     with _connections_lock:
         entry = _connections.get(conn_id)
         if not entry:
@@ -92,18 +97,18 @@ def _get_connection(conn_id: str):
                 if conn_id in cid or cid in conn_id:
                     entry = _connections[cid]
                     break
-        
+
         if not entry:
             return None, "连接不存在"
-        
+
         # 权限检查
         if not current_user.is_admin and entry.get('user_id') != current_user.id:
             return None, "无权操作此连接"
-        
+
         conn = entry.get('conn')
         if not conn:
             return None, "连接对象为空"
-        
+
         return conn, None
 
 

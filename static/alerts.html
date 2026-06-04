@@ -521,9 +521,19 @@
             gap: 8px;
             margin-top: 16px;
         }
+        /* ── Embed 模式（嵌入 iframe 时隐藏顶栏和返回按钮） ── */
+        body.embed { overflow: hidden; }
+        body.embed .topbar { display: none; }
+        body.embed .alerts-hero-actions .btn-alert:last-child { display: none; }
+        body.embed .alerts-page { padding: 12px; }
     </style>
 </head>
 <body>
+<script>
+if (new URLSearchParams(window.location.search).get('embed') === '1') {
+    document.body.classList.add('embed');
+}
+</script>
 <!-- 顶部导航栏 -->
 <div class="topbar">
     <div class="tb-logo">

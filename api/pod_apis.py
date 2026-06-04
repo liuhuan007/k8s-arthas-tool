@@ -16,6 +16,7 @@ from typing import Dict
 from flask import request, jsonify
 from flask_login import login_required, current_user
 from services.authorization_service import AuthorizationService
+from services.cache_service import query_cache, invalidate_connection_cache
 
 log = logging.getLogger(__name__)
 
@@ -229,6 +230,9 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             'updated_at': now_ts,
         }, 'id = ?', (conn_id,))
 
+        # ✅ 缓存失效：断开连接后清除相关缓存
+        invalidate_connection_cache(conn_id)
+
         # 4. 审计日志
         parts = conn_id.split('/')
         pod = parts[2] if len(parts) >= 3 else conn_id
@@ -241,6 +245,12 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
     @login_required
     def list_pod_connections():
         """列出当前用户的所有连接 (Pod + Arthas)"""
+        # ✅ Cache: user-scoped key
+        cache_key = f"list_pod_connections:uid={current_user.id}:admin={current_user.is_admin}"
+        cached_result = query_cache.get(cache_key)
+        if cached_result is not None:
+            return jsonify(cached_result)
+
         # ✅ 修复: 从数据库获取历史连接,不仅返回内存中的活跃连接
         if current_user.is_admin:
             rows = db.fetch_all(
@@ -251,17 +261,17 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                 "SELECT * FROM connections WHERE user_id = ? ORDER BY last_ping_at DESC LIMIT 50",
                 (current_user.id,)
             )
-        
+
         connections = []
         for row in rows:
             conn_id = row['id']
-            
+
             # 检查内存中是否有活跃连接
             with _connections_lock:
                 entry = _connections.get(conn_id)
-            
+
             conn = entry.get('conn') if entry else None
-            
+
             connections.append({
                 "id": conn_id,
                 "connection_id": conn_id,
@@ -284,14 +294,16 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                 "mcp_available": row.get('mcp_available', False) or (entry.get('mcp_available', False) if entry else False),
                 "status": row.get('status', 'disconnected'),
             })
-            
+
             # 如果有活跃连接,补充运行时信息
             if conn and hasattr(conn, 'runtime_info') and conn.runtime_info:
                 connections[-1]['runtime'] = conn.runtime_info.runtime_type
                 connections[-1]['runtime_version'] = conn.runtime_info.version
                 connections[-1]['pod_phase'] = getattr(conn, 'pod_phase', 'Running')
-        
-        return jsonify({"ok": True, "connections": connections, "count": len(connections)})
+
+        result = {"ok": True, "connections": connections, "count": len(connections)}
+        query_cache.set(cache_key, result, ttl=30)  # Short TTL -- connection state changes frequently
+        return jsonify(result)
     
     @app.route('/api/pod/upgrade-to-arthas', methods=['POST'])
     @login_required
@@ -318,13 +330,24 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             return jsonify({"error": "无权操作此连接"}), 403
         
         pod_conn = entry.get('conn')
-        
+
         if not pod_conn:
             return jsonify({"error": "Pod 连接已失效，请重新连接"}), 400
-        
-        # 检查连接是否健康
+
+        # ✅ 修复: 主动检查 Pod 连接健康状态，不健康的连接直接拒绝
         if hasattr(pod_conn, '_healthy') and not pod_conn._healthy:
+            log.warning("[Upgrade Arthas] Pod 连接不健康，清理后要求重连: %s", pod_conn_id)
+            with _connections_lock:
+                _connections.pop(pod_conn_id, None)
             return jsonify({"error": "Pod 连接已失效，请重新连接"}), 400
+
+        # ✅ 修复: 检查 port-forward 进程是否存活
+        if hasattr(pod_conn, '_pf_proc') and pod_conn._pf_proc is not None:
+            if pod_conn._pf_proc.poll() is not None:
+                log.warning("[Upgrade Arthas] port-forward 进程已退出，清理连接: %s", pod_conn_id)
+                with _connections_lock:
+                    _connections.pop(pod_conn_id, None)
+                return jsonify({"error": "port-forward 已断开，请重新连接 Pod"}), 400
         auth_err, auth_code = AuthorizationService.require_namespace_access(
             current_user, pod_conn.target.cluster_name, pod_conn.target.namespace)
         if auth_err:

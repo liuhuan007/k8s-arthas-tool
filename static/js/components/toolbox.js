@@ -269,7 +269,7 @@
     const script = document.getElementById('newTemplateScript').value.trim();
     
     if (!name || !script) {
-      alert('请填写模板名称和脚本内容');
+      toast('请填写模板名称和脚本内容', 'warn');
       return;
     }
     
@@ -300,7 +300,81 @@
    * 编辑脚本模板
    */
   window.editScriptTemplate = async function(templateId) {
-    toast('编辑功能开发中...', 'info');
+    try {
+      const data = await safeGet(`/tasks/script-templates/${templateId}`);
+      const t = data.template || data;
+
+      const modal = document.createElement('div');
+      modal.className = 'capability-modal-overlay';
+      modal.innerHTML = `
+        <div class="capability-modal">
+          <div class="modal-header">
+            <h3>编辑脚本模板</h3>
+            <button class="btn-close" onclick="this.closest('.capability-modal-overlay').remove()">✕</button>
+          </div>
+          <div class="modal-body" style="padding:20px">
+            <div class="form-group">
+              <label class="form-label">模板名称 <span class="required">*</span></label>
+              <input id="editTemplateName" class="form-input" value="${escapeHtml(t.name || '')}">
+            </div>
+            <div class="form-group">
+              <label class="form-label">运行时</label>
+              <select id="editTemplateRuntime" class="form-input">
+                <option value="python" ${t.runtime === 'python' ? 'selected' : ''}>Python</option>
+                <option value="shell" ${t.runtime === 'shell' ? 'selected' : ''}>Shell</option>
+                <option value="node" ${t.runtime === 'node' ? 'selected' : ''}>Node.js</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label class="form-label">脚本内容 <span class="required">*</span></label>
+              <textarea id="editTemplateScript" class="form-input" rows="8">${escapeHtml(t.script_body || '')}</textarea>
+            </div>
+            <div class="form-group">
+              <label class="form-label">描述</label>
+              <textarea id="editTemplateDesc" class="form-input" rows="2">${escapeHtml(t.description || '')}</textarea>
+            </div>
+          </div>
+          <div class="modal-footer" style="padding:16px 20px;border-top:1px solid var(--border-color);display:flex;justify-content:flex-end;gap:8px">
+            <button class="btn btn-g" onclick="this.closest('.capability-modal-overlay').remove()">取消</button>
+            <button class="btn btn-p" onclick="submitEditScriptTemplate(${templateId})">保存</button>
+          </div>
+        </div>
+      `;
+      document.body.appendChild(modal);
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    } catch (e) {
+      toast(`加载模板失败：${e.message}`, 'err');
+    }
+  };
+
+  /**
+   * 提交编辑脚本模板
+   */
+  window.submitEditScriptTemplate = async function(templateId) {
+    const name = document.getElementById('editTemplateName').value.trim();
+    const script = document.getElementById('editTemplateScript').value.trim();
+
+    if (!name || !script) {
+      toast('请填写模板名称和脚本内容', 'warn');
+      return;
+    }
+
+    try {
+      const payload = {
+        name: name,
+        runtime: document.getElementById('editTemplateRuntime').value,
+        script_body: script,
+        description: document.getElementById('editTemplateDesc').value
+      };
+
+      await safePut(`/tasks/script-templates/${templateId}`, payload);
+
+      toast('脚本模板已更新', 'ok');
+      document.querySelector('.capability-modal-overlay')?.remove();
+      loadScriptTemplates();
+    } catch (e) {
+      toast(`更新失败：${e.message}`, 'err');
+    }
   };
   
   /**

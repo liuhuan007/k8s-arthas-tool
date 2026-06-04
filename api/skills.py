@@ -141,7 +141,7 @@ def publish_skill(skill_id):
     """发布 Skill"""
     try:
         registry = get_skill_registry()
-        capability_id = registry.publish_skill(skill_id)
+        capability_id = registry.publish_skill(skill_id, current_user.id)
 
         return jsonify({
             'ok': True,

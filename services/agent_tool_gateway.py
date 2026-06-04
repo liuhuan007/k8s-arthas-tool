@@ -29,6 +29,21 @@ class AgentToolGateway:
         self.tools: Dict[str, Dict[str, Any]] = {}
         self._register_default_tools()
 
+    def _get_connection(self, connection_id: str):
+        """获取活跃的 Arthas 连接"""
+        try:
+            from server import _connections, _connections_lock
+            with _connections_lock:
+                entry = _connections.get(connection_id)
+            if entry and entry.get('conn'):
+                conn = entry['conn']
+                # 验证连接是否存活
+                if hasattr(conn, 'http_client') and conn.http_client:
+                    return conn
+            return None
+        except Exception:
+            return None
+
     def _register_default_tools(self):
         """注册默认工具"""
         # 执行诊断能力
@@ -55,10 +70,10 @@ class AgentToolGateway:
             parameters={
                 "type": "object",
                 "properties": {
-                    "pod_name": {"type": "string", "description": "Pod名称"},
-                    "namespace": {"type": "string", "description": "命名空间"}
+                    "connection_id": {"type": "string", "description": "连接ID (格式: cluster/namespace/pod)"},
+                    "detail": {"type": "string", "enum": ["basic", "processes", "network"], "default": "basic"}
                 },
-                "required": ["pod_name", "namespace"]
+                "required": ["connection_id"]
             },
             risk_level="low"
         )
@@ -71,10 +86,9 @@ class AgentToolGateway:
             parameters={
                 "type": "object",
                 "properties": {
-                    "pod_name": {"type": "string", "description": "Pod名称"},
-                    "namespace": {"type": "string", "description": "命名空间"}
+                    "connection_id": {"type": "string", "description": "连接ID (格式: cluster/namespace/pod)"}
                 },
-                "required": ["pod_name", "namespace"]
+                "required": ["connection_id"]
             },
             risk_level="low"
         )
@@ -336,30 +350,56 @@ class AgentToolGateway:
 
     def _get_pod_status(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         """获取Pod状态"""
-        # TODO: 集成实际的 kubectl 执行器
-        pod_name = params.get('pod_name')
-        namespace = params.get('namespace')
+        connection_id = params.get('connection_id')
+        detail = params.get('detail', 'basic')
+        if not connection_id:
+            raise ValueError("connection_id is required")
 
-        return {
-            "pod_name": pod_name,
-            "namespace": namespace,
-            "status": "running",
-            "message": "[Simulated pod status]"
-        }
+        conn = self._get_connection(connection_id)
+        if not conn:
+            return {"error": f"连接 {connection_id} 不可用"}
+
+        try:
+            if detail == 'processes':
+                rc, out, err = conn.agent_mgr._exec('ps aux --sort=-%cpu | head -20', timeout=10)
+                return {"processes": out[:3000] if rc == 0 else err}
+            elif detail == 'network':
+                rc, out, err = conn.agent_mgr._exec('cat /proc/net/tcp /proc/net/tcp6 2>/dev/null | wc -l; ss -tlnp 2>/dev/null | head -20', timeout=10)
+                return {"network": out[:3000] if rc == 0 else err}
+            else:
+                rc, out, err = conn.agent_mgr._exec(
+                    'echo "=== Pod Status ==="; '
+                    'cat /proc/1/status 2>/dev/null | grep -E "^(Name|State|VmRSS|Threads)"; '
+                    'echo "=== CPU ==="; '
+                    'top -bn1 | head -5; '
+                    'echo "=== Memory ==="; '
+                    'free -h 2>/dev/null || cat /proc/meminfo | head -5',
+                    timeout=10
+                )
+                return {"status": out[:3000] if rc == 0 else err}
+        except Exception as e:
+            return {"error": str(e)}
 
     def _get_pod_metrics(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         """获取Pod指标"""
-        # TODO: 集成实际的指标采集
-        pod_name = params.get('pod_name')
-        namespace = params.get('namespace')
+        connection_id = params.get('connection_id')
+        if not connection_id:
+            raise ValueError("connection_id is required")
 
-        return {
-            "pod_name": pod_name,
-            "namespace": namespace,
-            "cpu_usage": "10%",
-            "memory_usage": "256Mi",
-            "message": "[Simulated pod metrics]"
-        }
+        conn = self._get_connection(connection_id)
+        if not conn:
+            return {"error": f"连接 {connection_id} 不可用"}
+
+        try:
+            rc, out, err = conn.agent_mgr._exec(
+                'echo "=== CPU ==="; top -bn1 | head -5; '
+                'echo "=== Memory ==="; free -b 2>/dev/null; '
+                'echo "=== Disk ==="; df -h / 2>/dev/null | tail -1',
+                timeout=10
+            )
+            return {"metrics": out[:3000] if rc == 0 else err}
+        except Exception as e:
+            return {"error": str(e)}
 
     def _list_capabilities(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
         """列出可用能力"""
@@ -463,61 +503,97 @@ class AgentToolGateway:
         if not connection_id:
             raise ValueError("connection_id is required")
 
-        # 简单的命令验证
+        # 命令安全校验
         forbidden = ["redefine", "retransform", "ognl", "reset", "shutdown"]
         cmd_name = command.split()[0].lower()
         if cmd_name in forbidden:
             return {"error": f"Forbidden command: {cmd_name}"}
 
-        # 模拟执行
-        log.info(f"Executing Arthas command: {command} on {connection_id}")
-        return {
-            "command": command,
-            "connection_id": connection_id,
-            "output": f"[Simulated output for: {command}]",
-            "status": "success"
-        }
+        conn = self._get_connection(connection_id)
+        if not conn:
+            return {"error": f"连接 {connection_id} 不可用"}
+
+        try:
+            from backend.core.arthas_executor import ArthasCommandExecutor
+            result = ArthasCommandExecutor.execute(conn, command, timeout_ms=60000)
+
+            state = result.get('state', '')
+            body = result.get('body', [])
+
+            if isinstance(body, list):
+                output = '\n'.join(str(line) for line in body)
+            else:
+                output = str(body)
+
+            # 截断过长输出
+            if len(output) > 8000:
+                output = output[:8000] + f'\n... (输出已截断，共 {len(output)} 字符)'
+
+            return {"state": state, "output": output, "command": command}
+        except Exception as e:
+            return {"error": str(e)}
 
     def _get_jvm_status(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
-        """获取 JVM 状态"""
+        """获取 JVM 状态（通过 Arthas dashboard 命令）"""
         connection_id = params.get('connection_id')
         if not connection_id:
             raise ValueError("connection_id is required")
 
-        log.info(f"Getting JVM status for connection: {connection_id}")
-        return {
-            "connection_id": connection_id,
-            "uptime": "2d 5h 30m",
-            "heap_memory": {"used": "512MB", "max": "1024MB"},
-            "non_heap_memory": {"used": "128MB", "max": "256MB"},
-            "gc": {"count": 15, "time": "1.2s"},
-            "threads": {"total": 45, "daemon": 10, "blocked": 2},
-            "cpu_usage": "15.5%"
-        }
+        conn = self._get_connection(connection_id)
+        if not conn:
+            return {"error": f"连接 {connection_id} 不可用"}
+
+        try:
+            from backend.core.arthas_executor import ArthasCommandExecutor
+            resp = ArthasCommandExecutor.execute(conn, "dashboard -n 1", timeout_ms=15000)
+            body = resp.get('body', resp)
+            results = body.get('results', []) if isinstance(body, dict) else []
+
+            if not results:
+                return {"error": "无法获取 JVM 状态", "raw": str(body)[:2000]}
+
+            data = results[0] if isinstance(results, list) and results else {}
+            return {
+                "connection_id": connection_id,
+                "threads": data.get('threads', []),
+                "memory": data.get('memoryInfo', []),
+                "gc": data.get('gcInfos', []),
+                "runtime": data.get('runtimeInfo', {}),
+            }
+        except Exception as e:
+            return {"error": str(e)}
 
     def _get_thread_status(self, params: Dict[str, Any], context: Dict[str, Any]) -> Any:
-        """获取线程状态"""
+        """获取线程状态（通过 Arthas thread 命令）"""
         connection_id = params.get('connection_id')
-        thread_name = params.get('thread_name')
+        top_n = params.get('top_n', 10)
 
         if not connection_id:
             raise ValueError("connection_id is required")
 
-        log.info(f"Getting thread status for connection: {connection_id}")
-        threads = [
-            {"name": "main", "state": "RUNNABLE", "cpu_time": "1.5s"},
-            {"name": "pool-1-thread-1", "state": "WAITING", "cpu_time": "0.1s"},
-            {"name": "pool-1-thread-2", "state": "BLOCKED", "cpu_time": "0.3s"}
-        ]
+        conn = self._get_connection(connection_id)
+        if not conn:
+            return {"error": f"连接 {connection_id} 不可用"}
 
-        if thread_name:
-            threads = [t for t in threads if thread_name in t["name"]]
+        try:
+            from backend.core.arthas_executor import ArthasCommandExecutor
+            resp = ArthasCommandExecutor.execute(conn, f"thread -n {top_n}", timeout_ms=20000)
+            body = resp.get('body', resp)
+            results = body.get('results', []) if isinstance(body, dict) else []
 
-        return {
-            "connection_id": connection_id,
-            "thread_count": len(threads),
-            "threads": threads
-        }
+            if not results:
+                return {"error": "无法获取线程状态", "raw": str(body)[:2000]}
+
+            data = results[0] if isinstance(results, list) and results else {}
+            busy_threads = data.get('busyThreads', [])
+
+            return {
+                "connection_id": connection_id,
+                "thread_count": len(busy_threads),
+                "threads": busy_threads,
+            }
+        except Exception as e:
+            return {"error": str(e)}
 
     # ── Profiler 工具处理（Phase 7 新增）─────────────────────────
 

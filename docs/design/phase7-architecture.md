@@ -692,17 +692,17 @@ function onProfilerTaskComplete(taskId) {
 | # | 问题 | 当前状态 | 建议方案 |
 |---|------|---------|----------|
 | 1 | `backend/core/profiler.py` 是否已实现 jfr/threaddump/heapdump？ | ✅ **已验证：已实现** | `ProfilerWorkflow` 类已完整实现 4 种模式，无需补充 |
-| 2 | `profiler_backend.py` 是否继续保留？ | PRD 建议保留 | 保留作为兼容性层，实际逻辑在 `services/profiler_service.py` |
-| 3 | MCP 转发模块当前在哪里？ | 待确认 | `services/agent_tool_gateway.py` 已存在，只需注册工具 |
-| 4 | 采样工具是否指 `profiler.js` 的 jfr/threaddump/heapdump？ | 是 | 已在本文档中覆盖 |
+| 2 | `profiler_backend.py` 是否继续保留？ | ✅ **已确认：保留** | 保留作为兼容性层，实际逻辑在 `services/profiler_service.py` |
+| 3 | MCP 转发模块当前在哪里？ | ✅ **已确认** | `services/agent_tool_gateway.py` 已存在，只需注册工具 |
+| 4 | 采样工具是否指 `profiler.js` 的 jfr/threaddump/heapdump？ | ✅ **已确认：是** | 已在本文档中覆盖 |
 
 ### 7.2 产品问题
 
 | # | 问题 | 建议方案 |
 |---|------|----------|
-| 1 | 旧 API `/api/profile/*` 是否需要保留转发到新接口？ | 需要保留，转发到 `/api/profiler/*` |
-| 2 | 「发送到诊断中心」按钮的具体交互设计？ | 弹窗选择诊断类型，或自动创建「性能采样」类型记录 |
-| 3 | AI Agent 调用 Profiler 工具后的结果展示方式？ | 在 Agent Chat 中显示任务状态 + 进度条，完成后显示下载链接 |
+| 1 | 旧 API `/api/profile/*` 是否需要保留转发到新接口？ | ✅ **已确认：保留**，`server.py` 中旧路由继续工作，转发到 `/api/profiler/*` |
+| 2 | 「发送到诊断中心」按钮的具体交互设计？ | 【待产品确认】弹窗选择诊断类型，或自动创建「性能采样」类型记录 |
+| 3 | AI Agent 调用 Profiler 工具后的结果展示方式？ | 【待产品确认】建议在 Agent Chat 中显示任务状态 + 进度条，完成后显示下载链接 |
 
 ### 7.3 依赖和阻塞
 

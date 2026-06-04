@@ -53,9 +53,56 @@ function initUserDisplay() {
   });
 }
 
+// ── 统一导航路由 ─────────────────────────────────────────────────────────────
+// 从独立页面和 index.html 统一调用；index.html 内使用 switchTab，其他页面跳转 URL
+var NAV_ROUTES = {
+  'connections':      '/connections',
+  'diagnosis-cap':    '/diagnosis-center',
+  'task-center':      '/tasks',
+  'toolchain-center': '/tasks#toolbox',
+  'hotfix':           '/workspace#hotfix',
+  'profiler':         '/workspace#profiler',
+  'terminal':         '/workspace#terminal',
+  'monitor':          '/workspace#monitor',
+  'filebrowser':      '/workspace#filebrowser',
+  'model-config':     '/workspace#model-config',
+  'mcp-center':       '/mcp-config.html',
+  'skill-management': '/skill-management.html',
+  'user-management':  '/user-management.html',
+  'audit-logs':       '/audit-logs.html',
+  'alerts':           '/alerts',
+};
+
+function navigateTo(tabId) {
+  // 在 index.html 上使用 switchTab（原地切换面板）
+  var isIndexPage = (window.location.pathname === '/' || window.location.pathname === '/index.html');
+  if (isIndexPage && typeof switchTab === 'function') {
+    switchTab(tabId);
+  } else {
+    var route = NAV_ROUTES[tabId];
+    if (route) {
+      window.location.href = route;
+    }
+  }
+}
+
+// ── 侧边栏激活高亮（独立页面也用到） ────────────────────────────────────────
+function highlightActiveNav(activeNavTab) {
+  document.querySelectorAll('[data-nav-tab]').forEach(function(el) {
+    el.classList.toggle('on', el.getAttribute('data-nav-tab') === activeNavTab);
+  });
+  var activeItem = document.querySelector('[data-nav-tab="' + activeNavTab + '"]');
+  if (activeItem) {
+    var group = activeItem.closest('.side-nav-group');
+    if (group && group.classList.contains('collapsed')) {
+      group.classList.remove('collapsed');
+    }
+  }
+}
+
 // ── Topbar Global Menu ────────────────────────────────────────────────────────
 function openConnectionCenter() {
-  switchTab('connections');
+  navigateTo('connections');
 }
 
 const PAGE_SCENE_META = {
@@ -75,6 +122,8 @@ const PAGE_SCENE_META = {
   'external-system': { required: 'none', showConnBar: false },
   'user-management': { required: 'none', showConnBar: false },
   'audit-logs': { required: 'none', showConnBar: false },
+  'skill-management': { required: 'none', showConnBar: false },
+  'alerts': { required: 'none', showConnBar: false },
   'hotfix': { required: 'arthas', showConnBar: true },
   'diagnosis-cap': { required: 'none', showConnBar: true },
 };
@@ -104,7 +153,7 @@ function openMcpCenter() {
 }
 
 function loadAdminFrameIfNeeded(tab) {
-  if (!['user-management', 'audit-logs'].includes(tab)) return;
+  if (!['user-management', 'audit-logs', 'skill-management', 'alerts'].includes(tab)) return;
   if (!(typeof isAdmin === 'function' && isAdmin())) return;
   const frame = document.querySelector(`#panel-${tab} iframe[data-src]`);
   if (frame && !frame.getAttribute('src')) {
@@ -1029,6 +1078,36 @@ let _pfTasksByConn = {}; // { connId: { taskId, startTime, duration, logLines, s
 let _metricsPolling = false, _metricsTimer = null;
 let _metricsCache = new Map();
 
+// ✅ 修复: Profiler 任务持久化（切换页签后不丢失）
+function _persistPfTask(connId, taskId, meta) {
+  if (!connId || !taskId) return;
+  try {
+    const key = 'pf_tasks_by_conn';
+    const store = JSON.parse(localStorage.getItem(key) || '{}');
+    store[connId] = { taskId, startTime: Date.now(), ...meta, status: 'running' };
+    localStorage.setItem(key, JSON.stringify(store));
+  } catch(e) { console.warn('[pf] persist failed:', e); }
+}
+function _loadPersistedPfTasks() {
+  try {
+    const key = 'pf_tasks_by_conn';
+    const store = JSON.parse(localStorage.getItem(key) || '{}');
+    for (const [connId, task] of Object.entries(store)) {
+      if (task && task.taskId && !_pfTasksByConn[connId]) {
+        _pfTasksByConn[connId] = task;
+      }
+    }
+  } catch(e) { console.warn('[pf] load persisted failed:', e); }
+}
+function _clearPersistedPfTask(connId) {
+  try {
+    const key = 'pf_tasks_by_conn';
+    const store = JSON.parse(localStorage.getItem(key) || '{}');
+    delete store[connId];
+    localStorage.setItem(key, JSON.stringify(store));
+  } catch(e) {}
+}
+
 // ── Server Health Check ──────────────────────────────────────────────────
 async function checkServerHealth() {
   const dot = document.getElementById('svDot');
@@ -1093,6 +1172,7 @@ const WORKSPACE_META = {
   'toolchain-center': { kicker: 'Toolchain', title: '工具链', sub: '管理 Arthas、async-profiler、jattach 与离线缓存' },
   'external-system': { kicker: 'External System', title: '外部系统', sub: '在右侧工作区嵌入展示外部系统页面' },
   'user-management': { kicker: 'System Management', title: '用户管理', sub: '管理账号、角色、状态与集群授权' },
+  'skill-management': { kicker: 'Skill Management', title: 'Skill 管理', sub: '管理诊断 Skill 的导入、校验、发布与归档' },
   'audit-logs': { kicker: 'Audit Logs', title: '审计日志', sub: '查看登录、连接、诊断与资源变更操作记录' },
 };
 
@@ -2134,12 +2214,10 @@ function saveConnections() {
   
   if (_currentConnId) {
     localStorage.setItem(activeKey, _currentConnId);
-    // ✅ 保存连接层级 (arthas 或 pod)
-    const currentConn = _connections.find(c => c.id === _currentConnId);
-    if (currentConn) {
-      const level = _inferLevel(currentConn);
-      localStorage.setItem(levelKey, level);
-    }
+    // ✅ 修复: 直接用 _connState 推断 level，不依赖连接对象字段完整性
+    // _connState 是连接成功时显式设置的，比 _inferLevel() 更可靠
+    const level = _connState === 'arthas_ready' ? 'arthas' : 'pod';
+    localStorage.setItem(levelKey, level);
   } else {
     localStorage.removeItem(activeKey);
     localStorage.removeItem(levelKey);
@@ -2181,17 +2259,18 @@ function loadConnections() {
     if (savedConnId && _connections.find(c => c.id === savedConnId)) {
       const conn = _connections.find(c => c.id === savedConnId);
       if (conn) {
-        setTimeout(() => {
-          _restoreActiveConnection(conn, savedLevel).catch(e => {
-            console.warn('自动恢复连接失败:', e);
-            // 恢复失败不影响页面功能，仅清除无效的活跃连接标记
-            _currentConnId = null;
-            _syncState();
-            renderConnList();
-            localStorage.removeItem(activeKey);
-            localStorage.removeItem(levelKey);
-          });
-        }, 800);
+        // ✅ 修复: 去掉 800ms 延迟，立即开始恢复
+        _restoreActiveConnection(conn, savedLevel).catch(e => {
+          console.warn('自动恢复连接失败:', e);
+          _currentConnId = null;
+          _syncState();
+          renderConnList();
+          localStorage.removeItem(activeKey);
+          localStorage.removeItem(levelKey);
+          if (typeof ConnectionStore !== 'undefined') {
+            ConnectionStore.setState({ isRestoring: false, connState: 'disconnected' });
+          }
+        });
       }
     }
   } catch(e) {
@@ -2277,7 +2356,14 @@ async function _restoreActiveConnection(conn, savedLevel) {
       // 信任 localStorage 中保存的层级：如果之前是 Arthas 连接，直接尝试升级
       // 运行时检测可能因 kubectl 超时返回 unknown，不能依赖它来决定是否升级
       const shouldUpgradeToArthas = savedLevel === 'arthas';
-      
+
+      if (!shouldUpgradeToArthas) {
+        // 不需要升级 Arthas，清除恢复标志
+        if (typeof ConnectionStore !== 'undefined') {
+          ConnectionStore.setState({ isRestoring: false });
+        }
+      }
+
       if (shouldUpgradeToArthas) {
         console.log('[恢复] 检测到之前是 Arthas 连接, 开始自动升级');
         setConnStatus('dim', `正在恢复 Arthas 诊断环境...`);
@@ -2310,6 +2396,7 @@ async function _restoreActiveConnection(conn, savedLevel) {
               ConnectionStore.setState({
                 connState: 'arthas_ready',
                 currentConnId: conn.id,
+                isRestoring: false,
               });
               ConnectionStore.setCurrentConnection(conn.id);
               ConnectionStore.updateConnection(conn.id, {
@@ -2336,6 +2423,13 @@ async function _restoreActiveConnection(conn, savedLevel) {
           }
         } catch (e) {
           console.warn('Arthas 恢复失败，保持 Pod 连接:', e.message);
+          // ✅ 修复: 用户可见的错误提示 + 重试入口
+          toast(`Arthas 自动恢复失败: ${e.message}（当前为 Pod 连接，可在连接中心重试升级）`, 'warning', 6000);
+          setConnStatus('fail', `⚠ Arthas 恢复失败 — ${e.message} <a href="#" onclick="upgradeToArthas();return false" style="color:var(--a);text-decoration:underline">重试</a>`);
+          // 清除 isRestoring 标志
+          if (typeof ConnectionStore !== 'undefined') {
+            ConnectionStore.setState({ isRestoring: false });
+          }
         }
       } else {
         console.log(`[恢复] savedLevel=${savedLevel}, runtime=${podD.runtime?.runtime_type}, 不需要升级`);
@@ -2378,6 +2472,7 @@ async function _restoreActiveConnection(conn, savedLevel) {
     ConnectionStore.setState({
       connState: 'arthas_ready',
       currentConnId: conn.id,
+      isRestoring: false,
     });
     ConnectionStore.setCurrentConnection(conn.id);
     ConnectionStore.updateConnection(conn.id, {
@@ -2426,17 +2521,17 @@ async function _restoreActiveConnection(conn, savedLevel) {
 
 function switchTab(n) {
   // 支持数字索引和字符串索引
-  // 新 tab 顺序: connections, profiler, console, hotfix, terminal, monitor, filebrowser, ai, model-config, mcp-center, task-center, toolchain-center, history, diag, user-management, audit-logs
-  const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'hotfix', 4:'terminal', 5:'monitor', 6:'filebrowser', 7:'ai', 8:'model-config', 9:'mcp-center', 10:'task-center', 11:'toolchain-center', 12:'history', 13:'diag', 14:'user-management', 15:'audit-logs'};
+  // 新 tab 顺序: connections, profiler, console, hotfix, terminal, monitor, filebrowser, ai, model-config, mcp-center, task-center, toolchain-center, history, diag, skill-management, user-management, audit-logs
+  const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'hotfix', 4:'terminal', 5:'monitor', 6:'filebrowser', 7:'ai', 8:'model-config', 9:'mcp-center', 10:'task-center', 11:'toolchain-center', 12:'history', 13:'diag', 14:'skill-management', 15:'user-management', 16:'audit-logs', 17:'alerts'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
 
-  if (['user-management', 'audit-logs'].includes(tab) && !(typeof isAdmin === 'function' && isAdmin())) {
+  if (['user-management', 'audit-logs', 'skill-management', 'alerts'].includes(tab) && !(typeof isAdmin === 'function' && isAdmin())) {
     toast('只有管理员可以访问此页面', 'warn');
     return;
   }
 
   // 先切 Tab（允许切换到任何 Tab）
-  const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','external-system','history','diag','diagnosis-cap','user-management','audit-logs'];
+  const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','external-system','history','diag','diagnosis-cap','skill-management','user-management','audit-logs','alerts'];
   allTabs.forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
     document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
@@ -4245,6 +4340,8 @@ async function pfStart() {
     _pfTaskInfo.taskId = d.task_id;
     _pfTaskInfo.status = 'running';
     updatePfTaskInfo();
+    // ✅ 修复: 持久化任务到 localStorage，切换页签后不丢失
+    _persistPfTask(_currentConnId, d.task_id, { type: 'async-profiler', event, duration: _pfDur });
     pfLog(`任务已创建: ${d.task_id}`, 'ok');
     _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
     _pfPollTimer = setInterval(pfPoll, 2000);
@@ -4610,6 +4707,33 @@ async function downloadProfilerTask(taskId, filename) {
   await safeDownload(`/profile/${taskId}/download`, filename || `profiler-${taskId}.html`);
 }
 
+// ✅ 中断运行中的 Profiler 任务
+async function cancelProfilerTask(taskId) {
+  if (!taskId) return;
+  if (!confirm('确定要中断此任务吗？')) return;
+  try {
+    const r = await fetch(`${API}/profile/${taskId}/cancel`, { method: 'POST', credentials: 'include' });
+    const d = await r.json();
+    if (d.ok) {
+      toast('任务已中断', 'success');
+      // 如果是当前正在轮询的任务，也停止轮询
+      if (_pfTaskId === taskId) {
+        if (_pfPollTimer) { clearInterval(_pfPollTimer); _pfPollTimer = null; }
+        _pfTaskId = null;
+        _pfPollingForConn = null;
+        document.getElementById('pfBtn').disabled = false;
+        hidePfTaskInfo();
+      }
+      // 刷新历史列表
+      loadPfHistoryForCurrentConn();
+    } else {
+      toast(d.msg || '中断失败', 'error');
+    }
+  } catch (e) {
+    toast('中断失败: ' + e.message, 'error');
+  }
+}
+
 // 下载本地输出文件
 async function downloadOutputFile(filename) {
   await safeDownload(`/files/${encodeURIComponent(filename)}`, filename);
@@ -4677,6 +4801,10 @@ async function pfPoll() {
         if (_currentConnId && _pfTasksByConn[_currentConnId]) {
           delete _pfTasksByConn[_currentConnId];
         }
+        // ✅ 清除持久化的任务
+        if (typeof _clearPersistedPfTask === 'function' && _currentConnId) {
+          _clearPersistedPfTask(_currentConnId);
+        }
         _pfTaskId = null;
       }
     } else {
@@ -4732,228 +4860,45 @@ function pfClearLog() {
   }
 }
 
-// ── Profiler History Pagination ───────────────────────────────────────────────
-
-let pfHistCurrentPage = 0;
-let pfHistPageSize = 20;
-let pfHistAllTasks = [];
-
-function pfHistPrevPage() {
-  if (pfHistCurrentPage > 0) {
-    pfHistCurrentPage--;
-    renderPfHistoryPage();
-  }
-}
-
-function pfHistNextPage() {
-  const totalPages = Math.ceil(pfHistAllTasks.length / pfHistPageSize) || 1;
-  if (pfHistCurrentPage < totalPages - 1) {
-    pfHistCurrentPage++;
-    renderPfHistoryPage();
-  }
-}
-
-function pfHistJumpToPage() {
-  const input = document.getElementById('pfHistPageInput');
-  const pageNum = parseInt(input.value);
-  const totalPages = Math.ceil(pfHistAllTasks.length / pfHistPageSize) || 1;
-  
-  if (isNaN(pageNum) || pageNum < 1) {
-    input.value = 1;
-    return;
-  }
-  
-  if (pageNum > totalPages) {
-    input.value = totalPages;
-    return;
-  }
-  
-  pfHistCurrentPage = pageNum - 1;
-  renderPfHistoryPage();
-}
-
-function pfHistChangePageSize() {
-  const select = document.getElementById('pfHistPageSize');
-  pfHistPageSize = parseInt(select.value);
-  pfHistCurrentPage = 0;
-  renderPfHistoryPage();
-}
-
-function renderPfHistoryPage() {
-  const el = document.getElementById('pfl-history-list');
-  if (!el) return;
-  
-  const totalPages = Math.ceil(pfHistAllTasks.length / pfHistPageSize) || 1;
-  const start = pfHistCurrentPage * pfHistPageSize;
-  const end = Math.min(start + pfHistPageSize, pfHistAllTasks.length);
-  const pageTasks = pfHistAllTasks.slice(start, end);
-  
-  // 更新分页信息
-  document.getElementById('pfHistPageInput').value = pfHistCurrentPage + 1;
-  document.getElementById('pfHistPageInput').max = totalPages;
-  document.getElementById('pfHistPageInfo').textContent = `/ ${totalPages} 页`;
-  document.getElementById('pfHistTotalInfo').textContent = `(共 ${pfHistAllTasks.length} 条)`;
-  
-  // 渲染当前页数据
-  if (pageTasks.length === 0) {
-    el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:20px">暂无历史记录</div>';
-    return;
-  }
-  
-  const icons = {completed:'',failed:'',running:'⏳',starting:'⏳'};
-  const labels = {completed:'完成',failed:'失败',running:'运行中',starting:'启动中'};
-  const bcls = {completed:'st-ok',failed:'st-fail',running:'st-run',starting:'st-run'};
-  const showUser = typeof isAdmin === 'function' && isAdmin();
-  
-  el.innerHTML = pageTasks.map(t => {
-    const mode = t.config.mode || 'profiler';
-    const event = t.config.event || '-';
-    const duration = t.config.duration || 0;
-    const format = t.config.format || 'html';
-    
-    const eventLabels = {
-      'threaddump': '线程转储',
-      'heapdump': '堆转储',
-      'cpu': 'CPU 采样',
-      'alloc': '内存分配',
-      'lock': '锁竞争',
-      'wall': 'Wall 时间',
-      'default': 'JFR 默认',
-      'profile': 'JFR Profile'
-    };
-    const eventDisplay = eventLabels[event] || event;
-    const durationDisplay = (mode === 'threaddump' || mode === 'heapdump' || duration === 0) ? '-' : `${duration}s`;
-    const formatDisplay = mode === 'threaddump' ? 'HTML' : mode === 'heapdump' ? 'HPROF' : format;
-    
-    const metaParts = [`事件: ${eventDisplay}`, `时长: ${durationDisplay} · 格式: ${formatDisplay}`];
-    if (showUser && t.username) metaParts.push(`<span style="color:var(--a)">@${esc(t.username)}</span>`);
-    
-    return `
-      <div style="padding:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:6px;margin-bottom:8px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <span style="font-size:14px">${icons[t.status]||'❓'}</span>
-          <span style="font-size:11px;color:var(--tx2)">${mode}</span>
-          <span class="st-badge ${bcls[t.status]||''}" style="font-size:10px">${labels[t.status]||t.status}</span>
-          <span style="margin-left:auto;font-size:10px;color:var(--tx3)">${fmtTs(t.created_at)}</span>
-        </div>
-        <div style="font-size:10px;color:var(--tx2);line-height:1.5">
-          ${metaParts.map(p => `<div>${p}</div>`).join('')}
-        </div>
-        ${t.has_file?`<div style="margin-top:6px;padding:6px 8px;background:rgba(122,162,247,.08);border-radius:4px;font-size:10px;font-family:monospace;color:var(--a)">
-           ${t.file_name||'output'}
-        </div><button class="btn btn-dl" style="display:inline-block;margin-top:6px;padding:4px 10px;font-size:10px;cursor:pointer" onclick="downloadProfilerTask('${t.id}', '${t.file_name||'output'}')">↓ 下载</button>`:''}
-      </div>
-    `;
-  }).join('');
-}
+// ── Profiler History (handled by SamplingHistory component) ──────────────
+// Legacy pagination functions kept as no-ops for backwards compatibility
+function pfHistPrevPage() {}
+function pfHistNextPage() {}
+function pfHistJumpToPage() {}
+function pfHistChangePageSize() {}
+function renderPfHistoryPage() {}
 
 function togglePfHistory() {
-  const logPanel = document.getElementById('pfl-panel-log');
   const historyPanel = document.getElementById('pfl-panel-history');
   const btn = document.querySelector('#pfl-panel-history').closest('.pf-log').querySelector('button[onclick*="togglePfHistory"]');
 
   if (historyPanel.style.display === 'none') {
-    // 显示历史记录面板
-    historyPanel.style.display = 'block';
+    historyPanel.style.display = 'flex';
     if (btn) {
-      btn.textContent = '📋 返回日志';
+      btn.textContent = '返回日志';
       btn.title = '返回采样日志';
     }
     loadPfHistoryForCurrentConn();
   } else {
-    // 显示日志面板
     historyPanel.style.display = 'none';
     if (btn) {
-      btn.textContent = '📋 本地历史';
+      btn.textContent = '本地历史';
       btn.title = '查看当前连接的历史记录';
+    }
+    // Destroy inline component to avoid stale state
+    if (typeof SamplingHistory !== 'undefined') {
+      const el = document.getElementById('pfl-history-list');
+      if (el) SamplingHistory.destroy();
     }
   }
 }
 
 async function loadPfHistoryForCurrentConn() {
-  try {
-    const r = await fetch(`${API}/profile/tasks`); const allTasks = await r.json();
+  const container = document.getElementById('pfl-history-list');
+  if (!container) return;
 
-    // 过滤出当前连接的采样任务
-    let currentTasks = allTasks;
-    if (_currentConnId) {
-      const currentConn = _connections.find(c => c.id === _currentConnId);
-      if (currentConn) {
-        currentTasks = allTasks.filter(t =>
-          t.config.cluster === currentConn.cluster_name &&
-          t.config.namespace === currentConn.namespace &&
-          t.config.pod === currentConn.pod_name
-        );
-      }
-    }
-
-    // 更新连接名称显示
-    const connNameEl = document.getElementById('pfHistConnName');
-    if (connNameEl && _currentConnId) {
-      const currentConn = _connections.find(c => c.id === _currentConnId);
-      if (currentConn) {
-        connNameEl.textContent = `${currentConn.cluster_name}/${currentConn.namespace}/${currentConn.pod_name}`;
-      }
-    }
-
-    // 渲染历史记录
-    const el = document.getElementById('pfl-history-list');
-    if (!currentTasks.length) {
-      el.innerHTML = '<div style="color:var(--tx3);text-align:center;padding:20px">暂无历史记录</div>';
-      return;
-    }
-
-    const icons = {completed:'✅',failed:'❌',running:'⏳',starting:'⏳'};
-    const labels = {completed:'完成',failed:'失败',running:'运行中',starting:'启动中'};
-    const bcls = {completed:'st-ok',failed:'st-fail',running:'st-run',starting:'st-run'};
-    const showUser = typeof isAdmin === 'function' && isAdmin();
-
-    el.innerHTML = currentTasks.map(t => {
-      const mode = t.config.mode || 'profiler';
-      const event = t.config.event || '-';
-      const duration = t.config.duration || 0;
-      const format = t.config.format || 'html';
-
-      // 友好的事件类型名称
-      const eventLabels = {
-        'threaddump': '线程转储',
-        'heapdump': '堆转储',
-        'cpu': 'CPU 采样',
-        'alloc': '内存分配',
-        'lock': '锁竞争',
-        'wall': 'Wall 时间',
-        'default': 'JFR 默认',
-        'profile': 'JFR Profile'
-      };
-      const eventDisplay = eventLabels[event] || event;
-
-      // 时长显示：dump 类型显示 "-"，其他显示秒数
-      const durationDisplay = (mode === 'threaddump' || mode === 'heapdump' || duration === 0) ? '-' : `${duration}s`;
-
-      // 格式显示
-      const formatDisplay = mode === 'threaddump' ? 'HTML' : mode === 'heapdump' ? 'HPROF' : format;
-
-      const metaParts = [`事件: ${eventDisplay}`, `时长: ${durationDisplay} · 格式: ${formatDisplay}`];
-      if (showUser && t.username) metaParts.push(`<span style="color:var(--a)">@${esc(t.username)}</span>`);
-      return `
-      <div style="padding:10px;background:var(--bg1);border:1px solid var(--ln);border-radius:6px;margin-bottom:8px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <span style="font-size:14px">${icons[t.status]||'❓'}</span>
-          <span style="font-size:11px;color:var(--tx2)">${mode}</span>
-          <span class="st-badge ${bcls[t.status]||''}" style="font-size:10px">${labels[t.status]||t.status}</span>
-          <span style="margin-left:auto;font-size:10px;color:var(--tx3)">${fmtTs(t.created_at)}</span>
-        </div>
-        <div style="font-size:10px;color:var(--tx2);line-height:1.5">
-          ${metaParts.map(p => `<div>${p}</div>`).join('')}
-        </div>
-        ${t.has_file?`<div style="margin-top:6px;padding:6px 8px;background:rgba(122,162,247,.08);border-radius:4px;font-size:10px;font-family:monospace;color:var(--a)">
-          📄 ${t.file_name||'output'}
-        </div><button class="btn btn-dl" style="display:inline-block;margin-top:6px;padding:4px 10px;font-size:10px;cursor:pointer" onclick="downloadProfilerTask('${t.id}', '${t.file_name||'output'}')">↓ 下载</button>`:''}
-      </div>
-    `;
-    }).join('');
-  } catch(e) {
-    console.error('Failed to load current connection history:', e);
+  if (typeof SamplingHistory !== 'undefined') {
+    SamplingHistory.mount(container, { mode: 'inline', connectionId: _currentConnId });
   }
 }
 
@@ -5791,72 +5736,44 @@ async function saveCluster() {
 async function loadHistory() {
   await loadPfHistory(false); // 显示所有连接的历史
   await loadLocalFiles();
-  const t = (window._pfTasksCount||0) + (window._dlFilesCount||0);
+  // Read counts from badges (SamplingHistory component updates cntPfTasks async)
+  const pfCnt = parseInt(document.getElementById('cntPfTasks')?.textContent) || 0;
+  const t = pfCnt + (window._dlFilesCount||0);
   const el = document.getElementById('cntHistory');
   if(el) el.textContent = t;
 }
 
 async function loadPfHistory(filterByCurrentConn = false) {
   try {
-    const r = await fetch(`${API}/profile/tasks`); const tasks = await r.json();
+    // Use the new SamplingHistory component for the global profiler tab
+    const container = document.getElementById('hist-panel-profiler');
+    if (!container) return;
 
-    // 如果指定只显示当前连接的历史，则过滤任务
-    let filteredTasks = tasks;
-    if (filterByCurrentConn && _currentConnId) {
-      const currentConn = _connections.find(c => c.id === _currentConnId);
-      if (currentConn) {
-        filteredTasks = tasks.filter(t =>
-          t.config.cluster === currentConn.cluster_name &&
-          t.config.namespace === currentConn.namespace &&
-          t.config.pod === currentConn.pod_name
-        );
+    if (typeof SamplingHistory !== 'undefined') {
+      SamplingHistory.mount(container, { mode: 'global' });
+      // Count is updated internally by the component
+      window._pfTasksCount = 0; // Will be updated by component
+    } else {
+      // Fallback to legacy rendering if component not loaded
+      const r = await fetch(`${API}/profile/tasks`); const tasks = await r.json();
+      let filteredTasks = tasks;
+      if (filterByCurrentConn && _currentConnId) {
+        const currentConn = _connections.find(c => c.id === _currentConnId);
+        if (currentConn) {
+          filteredTasks = tasks.filter(t =>
+            t.config.cluster === currentConn.cluster_name &&
+            t.config.namespace === currentConn.namespace &&
+            t.config.pod === currentConn.pod_name
+          );
+        }
       }
+      window._pfTasksCount = filteredTasks.length;
+      document.getElementById('cntPfTasks').textContent = filteredTasks.length;
+      // Legacy rendering omitted — component should be available
     }
-
-    window._pfTasksCount = filteredTasks.length;
-    document.getElementById('cntPfTasks').textContent = filteredTasks.length;
-
-    // Update history panel only
-    const el = document.getElementById('hist-panel-profiler');
-    if(!el) return;
-    if(!filteredTasks.length) {
-      el.innerHTML='<div style="color:var(--tx3);text-align:center;padding:40px">暂无任务</div>';
-      return;
-    }
-    const icons = {completed:'✅',failed:'❌',running:'⏳',starting:'⏳'};
-    const labels = {completed:'完成',failed:'失败',running:'运行中',starting:'启动中'};
-    const bcls = {completed:'st-ok',failed:'st-fail',running:'st-run',starting:'st-run'};
-    const showUser = typeof isAdmin === 'function' && isAdmin();  // admin 显示用户名
-    const eventLabels = {
-      'threaddump': '线程转储',
-      'heapdump': '堆转储',
-      'cpu': 'CPU',
-      'alloc': '内存分配',
-      'lock': '锁竞争',
-      'wall': 'Wall',
-      'default': 'JFR默认',
-      'profile': 'JFR Profile'
-    };
-    el.innerHTML = filteredTasks.map(t => {
-      const mode = t.config.mode || 'profiler';
-      const event = t.config.event || '';
-      const duration = t.config.duration || 0;
-      const eventDisplay = eventLabels[event] || event;
-      const durationDisplay = (mode === 'threaddump' || mode === 'heapdump' || duration === 0) ? '-' : `${duration}s`;
-      const metaParts = [`${esc(t.config.cluster)}/${esc(t.config.namespace)}`, mode, eventDisplay, durationDisplay, t.config.format, fmtTs(t.created_at)];
-      if (showUser && t.username) metaParts.push(`<span style="color:var(--a)">@${esc(t.username)}</span>`);
-      return `<div class="tc">
-      <div class="tc-inner">
-        <div style="font-size:18px;flex-shrink:0">${icons[t.status]||'❓'}</div>
-        <div class="tc-info">
-          <div class="tc-title">${esc(t.config.pod)} <span class="st-badge ${bcls[t.status]||''}">${labels[t.status]||t.status}</span></div>
-          <div class="tc-meta">${metaParts.join(' · ')}</div>
-        </div>
-        ${t.has_file?`<button class="btn btn-dl" style="padding:5px 10px;font-size:11px;cursor:pointer" onclick="downloadProfilerTask('${t.id}', '${t.file_name||'output'}')">↓ 下载</button>`:''}
-      </div>
-    </div>`;
-    }).join('');
-  } catch {}
+  } catch (e) {
+    console.error('loadPfHistory error:', e);
+  }
 }
 
 async function loadLocalFiles() {
@@ -5902,6 +5819,9 @@ async function loadLocalFiles() {
 // 等待 DOM 加载完成后初始化
 document.addEventListener('DOMContentLoaded', async function() {
   initUserDisplay();
+
+  // ✅ 恢复持久化的 Profiler 任务（切换页签后不丢失）
+  if (typeof _loadPersistedPfTasks === 'function') _loadPersistedPfTasks();
   
   // ✅ P0修复: 先从数据库 API 加载最新连接,再恢复活跃连接
   try {
@@ -5934,16 +5854,20 @@ document.addEventListener('DOMContentLoaded', async function() {
         const conn = _connections.find(c => c.id === savedConnId);
         if (conn) {
           console.log('[初始化] 恢复活跃连接:', savedConnId, '层级:', savedLevel);
-          setTimeout(() => {
-            _restoreActiveConnection(conn, savedLevel).catch(e => {
-              console.warn('[初始化] 自动恢复连接失败:', e);
-              _currentConnId = null;
-              _syncState();
-              renderConnList();
-              localStorage.removeItem(activeKey);
-              localStorage.removeItem(levelKey);
-            });
-          }, 800);
+          // ✅ 修复: 去掉 800ms 延迟，立即开始恢复，减少 UI 闪烁
+          _restoreActiveConnection(conn, savedLevel).catch(e => {
+            console.warn('[初始化] 自动恢复连接失败:', e);
+            _currentConnId = null;
+            _syncState();
+            renderConnList();
+            localStorage.removeItem(activeKey);
+            localStorage.removeItem(levelKey);
+            // ✅ 修复: 清除恢复标志 + 用户可见提示
+            if (typeof ConnectionStore !== 'undefined') {
+              ConnectionStore.setState({ isRestoring: false, connState: 'disconnected' });
+            }
+            toast(`连接恢复失败: ${e.message}`, 'warning');
+          });
         }
       }
     } else {

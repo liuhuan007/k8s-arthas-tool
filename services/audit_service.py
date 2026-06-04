@@ -307,7 +307,7 @@ class AuditService:
         """通用审计日志记录（内部方法，供特殊场景使用）"""
         client = AuditService._get_client_info()
         db.insert('audit_logs', {
-            'user_id': user_id,  # ✅ 修复: 允许 None,外键约束 ON DELETE SET NULL
+            'user_id': user_id or 0,
             'action': action,
             'resource_type': resource_type,
             'resource_id': resource_id,

@@ -16,9 +16,10 @@ const ConnStatusBar = (function () {
 
   // ── 层级配置 ──────────────────────────────────────────────────────────
   const LEVEL_CONFIG = {
-    none:    { label: '未连接',     dot: 'dim',    bg: 'dim',    icon: '🔌' },
-    pod:     { label: 'Pod连接',    dot: 'pod',    bg: 'pod',    icon: '🔵' },
-    arthas:  { label: 'Arthas连接', dot: 'arthas', bg: 'arthas', icon: '⚡' },
+    none:      { label: '未连接',     dot: 'dim',      bg: 'dim',      icon: '🔌' },
+    restoring: { label: '恢复连接中…', dot: 'restoring', bg: 'restoring', icon: '🔄' },
+    pod:       { label: 'Pod连接',    dot: 'pod',      bg: 'pod',      icon: '🔵' },
+    arthas:    { label: 'Arthas连接', dot: 'arthas',   bg: 'arthas',   icon: '⚡' },
   };
 
   // ── DOM 缓存 ──────────────────────────────────────────────────────────
@@ -42,6 +43,8 @@ const ConnStatusBar = (function () {
 
   function _getLevel() {
     if (window.ConnectionGuard) return ConnectionGuard.getCurrentLevel();
+    // 正在恢复连接时，显示 restoring 状态
+    if (window._isRestoring) return 'restoring';
     const cs = window._connState;
     if (cs === 'arthas_ready') return 'arthas';
     if (cs === 'pod_connected') return 'pod';
@@ -116,10 +119,17 @@ const ConnStatusBar = (function () {
     // 快捷操作按钮：根据状态显示不同文本和样式
     if (_action) {
       _action.classList.remove('csb-action-connect', 'csb-action-connected');
-      if (level === 'none') {
+      if (level === 'restoring') {
+        _action.textContent = '⏳ 恢复中…';
+        _action.style.display = '';
+        _action.style.pointerEvents = 'none';
+        _action.style.opacity = '0.5';
+      } else if (level === 'none') {
         _action.textContent = '🔌 连接';
         _action.classList.add('csb-action-connect');
         _action.style.display = '';
+        _action.style.pointerEvents = '';
+        _action.style.opacity = '';
       } else if (level === 'pod') {
         // Pod 连接状态：显示查看详情按钮（升级操作在连接中心处理）
         _action.textContent = '📋 查看详情';

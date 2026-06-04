@@ -83,13 +83,110 @@ Tunnel Server作为Arthas连接的**注册中心**，统一管理所有Pod的Art
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 3.2 部署模式
+### 3.2 部署模式（备选方案，暂不落地）
 
-| 模式 | 说明 | 适用场景 |
-|------|------|---------|
-| 本地模式 | 单机启动Tunnel Server | 开发测试、单节点部署 |
-| 集群模式 | 多实例部署，共享注册信息 | 生产环境、高可用 |
-| 嵌入模式 | 集成到平台后端 | 轻量部署、统一管理 |
+> ⚠️ **本节为对比方案，不在当前架构中实施**。当前 P0 使用 Port-Forward 模式（见 §3.7）。
+
+| 模式 | 说明 | 适用场景 | 状态 |
+|------|------|---------|------|
+| 本地模式 | 单机启动 Tunnel Server | 开发测试 | 备选 |
+| 共部署模式 | 与 k8s-arthas-tool 共部署，Python 后端管理进程 | 复杂网络环境 | **备选（未落地）** |
+| K8s 集群内部署 | 部署到 K8s 内，通过 K8s API | 生产环境 | 备选 |
+
+**对比报告**：（方案 D）
+
+**当前架构使用**：Port-Forward 模式（简单直接，无额外依赖）
+
+> **官方安全警告**：Arthas 官方明确建议 **"不要将 Tunnel Server 直接暴露到公网"**。共部署模式通过 Python 后端统一鉴权，解决官方 Tunnel Server 无内置权限管理的问题。
+
+#### 共部署模式架构
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│  k8s-arthas-tool 机器（同一台）                           │
+│  ┌────────────────────┐  ┌──────────────────────────┐   │
+│  │  k8s-arthas-tool (Python)                        │   │
+│  │  - 管理 Tunnel Server 启停                │   │
+│  │  - 鉴权网关 (用户只能访问自己的 Pod)          │   │
+│  │  - 代理转发到 Tunnel Server (localhost:8080) │   │
+│  └────────────────────┘  │
+│               │ localhost:8080 (HTTP)             │
+│               ▼                                  │
+│  ┌────────────────────┐  │
+│  │  官方 Arthas Tunnel Server (Java)                  │   │
+│  │  - 8080: Web Console                       │   │
+│  │  - 7777: Agent WebSocket                  │   │
+│  │  - Actuator: /actuator/health            │   │
+│  └────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### Python 后端管理 Tunnel Server 进程
+
+```python
+# services/tunnel_manager.py
+import subprocess
+import requests
+import time
+
+class TunnelManager:
+    """管理 Arthas Tunnel Server 生命周期（官方 Jar 包）"""
+    
+    TUNNEL_JAR = "/opt/arthas/arthas-tunnel-server.jar"
+    DEFAULT_WEB_PORT = 8080
+    DEFAULT_AGENT_PORT = 7777
+    
+    def __init__(self):
+        self.process = None
+        self.web_port = self.DEFAULT_WEB_PORT
+        self.agent_port = self.DEFAULT_AGENT_PORT
+    
+    def start(self, web_port: int = None, agent_port: int = None) -> bool:
+        """启动 Tunnel Server"""
+        self.web_port = web_port or self.DEFAULT_WEB_PORT
+        self.agent_port = agent_port or self.DEFAULT_AGENT_PORT
+        
+        cmd = [
+            'java', '-jar', self.TUNNEL_JAR,
+            f'--server.port={self.web_port}',
+            f'--arthas.agent-port={self.agent_port}',
+            '--arthas.enable-detail-pages=false'  # 安全：关闭管理页面
+        ]
+        
+        try:
+            self.process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            # 等待启动完成（检查 Actuator 端点）
+            return self._wait_for_ready(timeout=30)
+        except Exception as e:
+            print(f"启动 Tunnel Server 失败: {e}")
+            return False
+    
+    def stop(self) -> bool:
+        """停止 Tunnel Server"""
+        if not self.process:
+            return True
+        
+        try:
+            self.process.terminate()
+            self.process.wait(timeout=10)
+            return True
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            return True
+    
+    def get_status(self) -> dict:
+        """获取 Tunnel Server 状态"""
+        try:
+            resp = requests.get(f'http://127.0.0.1:{self.web_port}/actuator/health', timeout=3)
+            return {'running': True, 'health': resp.json()}
+        except:
+            return {'running': False}
+```
 
 ### 3.3 启动方式
 

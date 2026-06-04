@@ -51,11 +51,12 @@ def list_capabilities():
     type_filter = request.args.get('type')
     category_filter = request.args.get('category')
     level_filter = request.args.get('level')
+    keyword = request.args.get('keyword', '').strip()
     include_disabled = request.args.get('include_disabled') == '1'
-    
+
     where_clauses = []
     params = []
-    
+
     if type_filter:
         where_clauses.append('category = ?')
         params.append(type_filter)
@@ -65,6 +66,9 @@ def list_capabilities():
     if level_filter:
         where_clauses.append('level = ?')
         params.append(int(level_filter))
+    if keyword:
+        where_clauses.append('(name LIKE ? OR description LIKE ?)')
+        params.extend([f'%{keyword}%', f'%{keyword}%'])
 
     if not include_disabled:
         where_clauses.append("COALESCE(status, 'active') = 'active'")
@@ -146,7 +150,7 @@ def load_extension(cap_type: str, capability_id: int) -> dict:
     return extension
 
 
-_CAPABILITY_CATEGORIES = {'quick', 'tool', 'scenario', 'ai'}
+_CAPABILITY_CATEGORIES = {'quick', 'tool', 'scenario', 'ai', 'mcp'}
 _CAPABILITY_STATUSES = {'active', 'disabled'}
 _CAPABILITY_VISIBILITIES = {'public', 'private'}
 
@@ -189,7 +193,7 @@ def _validate_capability_payload(data: Dict[str, Any], partial: bool = False) ->
     if not partial or 'category' in data:
         category = (data.get('category') or '').strip().lower()
         if category not in _CAPABILITY_CATEGORIES:
-            raise ValueError('category 只能是 quick/tool/scenario/ai')
+            raise ValueError('category 只能是 quick/tool/scenario/ai/mcp')
         fields['category'] = category
 
     if 'level' in data:
@@ -1131,9 +1135,11 @@ def init_task_tables():
     """初始化通用任务平台表结构。"""
     with db.connection() as conn:
         cursor = conn.cursor()
-        from backend.core.diagnosis_capabilities import init_capabilities_table
+        from backend.core.diagnosis_capabilities import init_capabilities_table, init_skill_registry
 
         init_capabilities_table(conn)
+        # Phase 7 T01: 初始化 skill_registry 内置 Skill（含 Profiler skills）
+        init_skill_registry(conn)
         for column, ddl in {
             'status': "ALTER TABLE diagnosis_capabilities ADD COLUMN status TEXT DEFAULT 'active'",
             'is_builtin': 'ALTER TABLE diagnosis_capabilities ADD COLUMN is_builtin INTEGER DEFAULT 1',
@@ -1204,27 +1210,9 @@ def init_task_tables():
                 FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
             )
         ''')
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS task_runs (
-                id TEXT PRIMARY KEY,
-                task_id INTEGER,
-                user_id INTEGER,
-                status TEXT NOT NULL DEFAULT 'pending',
-                execution_mode TEXT NOT NULL,
-                target_json TEXT DEFAULT '{}',
-                stdout TEXT,
-                stderr TEXT,
-                exit_code INTEGER,
-                duration_ms INTEGER,
-                started_at TIMESTAMP,
-                finished_at TIMESTAMP,
-                error_message TEXT,
-                work_dir TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (task_id) REFERENCES task_definitions(id) ON DELETE SET NULL,
-                FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
-            )
-        ''')
+        # NOTE: task_runs 表已废弃，统一使用 task_logs。
+        # db.py initialize() 中已包含 task_runs → task_logs 的迁移逻辑，
+        # 此处不再重复创建，避免双写冲突。
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS task_logs (
                 id TEXT PRIMARY KEY,
@@ -1949,7 +1937,7 @@ def list_runs():
 @task_bp.route('/runs/<run_id>/logs', methods=['GET'])
 @login_required
 def get_run_logs(run_id: str):
-    """查询执行记录详情。优先查 task_logs，再兼容旧 task_runs。"""
+    """查询执行记录详情。优先查 task_logs，再兼容旧 task_runs（已废弃，try/except 保护）。"""
     # 1. 优先查 task_logs（统一执行记录）
     row = db.fetch_one('''
         SELECT t.*, d.name AS task_name, c.name AS capability_name, c.category AS capability_category
@@ -1970,13 +1958,16 @@ def get_run_logs(run_id: str):
         item['execution_id'] = item.get('id')
         return jsonify({'run': item})
     
-    # 2. 回退查 task_runs（脚本任务记录）
-    row = db.fetch_one('''
-        SELECT r.*, d.name AS task_name
-        FROM task_runs r
-        LEFT JOIN task_definitions d ON d.id = r.task_id
-        WHERE r.id = ? AND r.user_id = ?
-    ''', (run_id, current_user.id))
+    # 2. 回退查 task_runs（已废弃表，仅兼容未迁移的历史数据）
+    try:
+        row = db.fetch_one('''
+            SELECT r.*, d.name AS task_name
+            FROM task_runs r
+            LEFT JOIN task_definitions d ON d.id = r.task_id
+            WHERE r.id = ? AND r.user_id = ?
+        ''', (run_id, current_user.id))
+    except Exception:
+        row = None
     if not row:
         return _error('执行记录不存在或无权限', 404)
     return jsonify({'run': _row_to_run(row, include_logs=True)})
@@ -1992,7 +1983,11 @@ def cancel_task_run(run_id: str):
     """
     row = db.fetch_one('SELECT * FROM task_logs WHERE id = ?', (run_id,))
     if not row:
-        old_row = db.fetch_one('SELECT * FROM task_runs WHERE id = ?', (run_id,))
+        # task_runs 已废弃，try/except 兼容未迁移的历史数据
+        try:
+            old_row = db.fetch_one('SELECT * FROM task_runs WHERE id = ?', (run_id,))
+        except Exception:
+            old_row = None
         if not old_row:
             return _error('执行记录不存在', 404)
         return _error('旧执行记录不支持取消', 400)
@@ -2405,6 +2400,8 @@ def _run_diagnosis_execution(
             return _execute_scenario(capability, extension, params, active_conn, run_id=run_id)
         if capability['category'] == 'ai':
             return _execute_ai_diagnosis(capability, extension, params, connection)
+        if capability['category'] == 'mcp':
+            return _execute_mcp_skill(capability, params, active_conn)
         raise ValueError(f'不支持的能力类型: {capability["category"]}')
 
     try:
@@ -2650,13 +2647,35 @@ def _execute_scenario(capability, extension, params, connection, run_id=None):
 
 
 def _execute_ai_diagnosis(capability, extension, params, connection):
-    """执行 AI 诊断"""
+    """执行 AI 诊断
+
+    Dispatch order (Phase 7 T02):
+    1. handler_key-based routing via AISkillHandler (new AI skills)
+    2. Legacy extension['handler'] routing via performance_diagnose (backward compat)
+    """
+    # Phase 7 T02: handler_key-based dispatch for new AI skills
+    handler_key = (capability.get('handler_key') or '').strip()
+    if handler_key:
+        from services.ai_skill_handler import execute_ai_skill
+        skill_params = dict(params)
+        skill_params['handler_key'] = handler_key
+        skill_params['user_id'] = connection.get('user_id')
+        result = execute_ai_skill(skill_params, connection['id'])
+        if not result.get('ok'):
+            raise ValueError(result.get('error', 'AI 技能执行失败'))
+        return {
+            'status': 'success',
+            'result': result,
+            'duration_ms': 0,
+        }
+
+    # Legacy: extension-based handler dispatch (backward compatibility)
     handler = extension.get('handler', {})
     handler_name = handler.get('handler', '')
-    
+
     if not handler_name:
         raise ValueError('AI 诊断未配置处理器')
-    
+
     # 调用 performance_diagnose 模块
     if handler_name.startswith('performance_diagnose.'):
         from api.performance_diagnose import run_diagnosis
@@ -2668,6 +2687,30 @@ def _execute_ai_diagnosis(capability, extension, params, connection):
         }
     
     raise ValueError(f'不支持的 AI 诊断处理器: {handler_name}')
+
+
+def _execute_mcp_skill(capability, params, active_conn):
+    """Execute an MCP-category skill via MCPSkillHandler bridge.
+
+    Dispatches based on capability['handler_key'] to the appropriate
+    handler in services/mcp_skill_handler.py.
+    """
+    from services.mcp_skill_handler import get_mcp_skill_handler
+
+    handler_key = capability.get('handler_key', '')
+    if not handler_key:
+        raise ValueError(f'MCP 能力未配置 handler_key: {capability["name"]}')
+
+    handler = get_mcp_skill_handler()
+    result = handler.execute(handler_key, params, connection=active_conn)
+
+    if not result.get('ok'):
+        raise ValueError(result.get('error', 'MCP skill execution failed'))
+
+    return {
+        'status': 'success',
+        'result': result.get('result', {}),
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

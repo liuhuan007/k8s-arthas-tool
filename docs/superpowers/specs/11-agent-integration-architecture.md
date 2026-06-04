@@ -760,11 +760,11 @@ class ResourceMonitor:
 
 ## 3. 配置管理方案
 
-### 2.1 设计原则
+### 3.1 设计原则
 
 **复用数据库已有配置，不创建新的配置文件！**
 
-### 2.2 现有数据库配置
+### 3.2 现有数据库配置
 
 **表名**：`ai_config`（已有）
 
@@ -774,10 +774,42 @@ class ResourceMonitor:
 | `api_key` | TEXT | API密钥 |
 | `base_url` | TEXT | API地址 |
 | `model` | TEXT | 模型名称 |
-| `provider` | TEXT | 提供商（openai/codebuddy/ollama） |
+| `provider` | TEXT | 提供商（openai/codebuddy/ollama/custom） |
 | `system_prompt` | TEXT | 系统提示词 |
 
-### 2.3 配置复用方案
+### 3.3 自定义模型接入（参考 OpenVibeCoding models.json 方案）
+
+> **新增设计**：支持接入本地部署LLM、私有网关等自定义模型。
+
+**新增文件**：`services/agent/models.json`
+
+```json
+{
+  "models": [
+    {
+      "id": "codebuddy:deepseek-v3.1",
+      "name": "DeepSeek V3.1",
+      "vendor": "codebuddy",
+      "supportsToolCall": true,
+      "supportsImages": false
+    },
+    {
+      "id": "custom:local-llama3",
+      "name": "Local LLAMA 3",
+      "vendor": "custom",
+      "apiKey": "${LOCAL_LLM_API_KEY}",
+      "baseURL": "http://localhost:11434/v1/chat/completions",
+      "supportsToolCall": true,
+      "supportsImages": false
+    }
+  ],
+  "defaultAgent": "codebuddy"
+}
+```
+
+**注意**：`vendor` 不要写 `codebuddy`，避免被同步覆盖。自定义模型使用 `vendor: "custom"`。
+
+### 3.4 配置复用方案
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -788,7 +820,7 @@ class ResourceMonitor:
 │                              │                                  │
 │                              ▼ 复用                             │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  AgentSDKConfig.get_config(user_id)                      │   │
+│  │               AgentSDKConfig.get_config(user_id)                      │   │
 │  │  ├── 读取ai_config表                                     │   │
 │  │  ├── 添加Agent SDK默认配置                               │   │
 │  │  └── 返回统一配置                                        │   │
@@ -796,12 +828,12 @@ class ResourceMonitor:
 │                              │                                  │
 │                              ▼                                  │
 │  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Agent SDK / 直接LLM调用                                  │   │
+│  │                    Agent SDK / 直接LLM调用                                  │   │
 │  └─────────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 2.4 配置管理器
+### 3.5 配置管理器
 
 **文件位置**：`services/agent_sdk_config.py`
 
@@ -815,15 +847,96 @@ options = agent_sdk_config.get_agent_sdk_options(user_id=current_user.id)
 available = agent_sdk_config.is_agent_sdk_available(user_id=current_user.id)
 ```
 
-### 2.5 使用场景
+### 3.6 使用场景
 
 | 场景 | provider配置 | 说明 |
 |------|-------------|------|
 | **Agent SDK模式** | `provider="codebuddy"` | 使用Agent SDK |
 | **直接LLM模式** | `provider="openai"` | 使用直接LLM调用（备用） |
 | **Ollama模式** | `provider="ollama"` | 使用本地模型 |
+| **自定义模型** | `provider="custom"` | 使用自定义模型（如本地LLaMA） |
 
-### 2.6 用户配置流程
+### 3.7 前端Agent切换入口
+
+> **新增设计**：在诊断中心页面添加Agent类型和模型选择。
+
+**UI设计**：
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  🧠 诊断配置                                                 │
+│  Agent类型: [CodeBuddy ▼]  模型: [deepseek-v3.1 ▼]          │
+│  诊断模式: (●) 自主诊断  (○) 手动诊断                       │
+│  [测试连接]  [保存配置]                                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**前端实现**：
+
+```javascript
+// static/js/components/agent-config.js
+
+class AgentConfig {
+    constructor() {
+        this.agentType = 'codebuddy';
+        this.model = 'deepseek-v3.1';
+        this.diagnosisMode = 'autonomous'; // autonomous / manual
+    }
+
+    async loadAvailableAgents() {
+        const response = await fetch('/api/diagnosis/agent/types');
+        const data = await response.json();
+        this.renderAgentTypes(data.types);
+    }
+
+    async loadAvailableModels(agentType) {
+        const response = await fetch(`/api/diagnosis/agent/models?type=${agentType}`);
+        const data = await response.json();
+        this.renderModels(data.models);
+    }
+
+    async saveConfig() {
+        await fetch('/api/diagnosis/agent/config', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                agent_type: this.agentType,
+                model: this.model,
+                diagnosis_mode: this.diagnosisMode
+            })
+        });
+    }
+
+    render() {
+        return `
+        <div class="agent-config">
+            <div class="form-group">
+                <label>Agent类型:</label>
+                <select id="agent-type" onchange="agentConfig.onAgentTypeChange()">
+                    <option value="codebuddy">CodeBuddy</option>
+                    <option value="claude">Claude</option>
+                    <option value="custom">自定义</option>
+                </select>
+            </div>
+            <div class="form-group">
+                <label>模型:</label>
+                <select id="model">
+                    <!-- 动态加载 -->
+                </select>
+            </div>
+            <div class="form-group">
+                <label>诊断模式:</label>
+                <label><input type="radio" name="mode" value="autonomous" checked> 自主诊断</label>
+                <label><input type="radio" name="mode" value="manual"> 手动诊断</label>
+            </div>
+            <button onclick="agentConfig.saveConfig()">保存配置</button>
+        </div>
+        `;
+    }
+}
+```
+
+### 3.8 用户配置流程
 
 ```
 用户在"模型配置"页面设置：
@@ -839,7 +952,7 @@ available = agent_sdk_config.is_agent_sdk_available(user_id=current_user.id)
 └─────────────────────────────────────────────────────────────────┘
                               │
                               ▼ 保存到数据库
-                    ai_config表（已有）
+                       ai_config表（已有）
                               │
                               ▼ 复用
                     Agent SDK配置

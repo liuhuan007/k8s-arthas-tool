@@ -11,7 +11,7 @@
   'use strict';
 
   let _capabilities = [];
-  let _currentFilter = { type: null, category: null, level: null };
+  let _currentFilter = { type: null, category: null, level: null, keyword: '' };
 
   /**
    * 初始化诊断能力模块
@@ -23,6 +23,15 @@
   };
 
   /**
+   * 搜索诊断能力
+   */
+  window.diagCapSearch = function() {
+    const input = document.getElementById('diagCapSearchInput');
+    _currentFilter.keyword = input ? input.value.trim() : '';
+    loadCapabilities().then(renderCapabilityCards);
+  };
+
+  /**
    * 加载能力目录
    */
   async function loadCapabilities() {
@@ -31,6 +40,7 @@
       if (_currentFilter.type) params.type = _currentFilter.type;
       if (_currentFilter.category) params.category = _currentFilter.category;
       if (_currentFilter.level) params.level = _currentFilter.level;
+      if (_currentFilter.keyword) params.keyword = _currentFilter.keyword;
       if (typeof isAdmin === 'function' && isAdmin()) params.include_disabled = '1';
 
       const data = await safeGet('/tasks/capabilities', params);
@@ -647,7 +657,7 @@
         const category = btn.dataset.category;
         const level = btn.dataset.level;
 
-        _currentFilter = { type, category, level };
+        _currentFilter = { ..._currentFilter, type, category, level };
         
         // 更新按钮激活状态
         filterBtns.forEach(b => b.classList.remove('active'));

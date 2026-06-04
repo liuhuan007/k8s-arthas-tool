@@ -63,7 +63,7 @@ class SkillRegistry:
         skill_id = self._store_skill(validated, created_by)
 
         # 4. 记录审计日志
-        self._log_audit("import_skill", skill_id, skill_data)
+        self._log_audit("import_skill", skill_id, skill_data, created_by)
 
         return skill_id
 
@@ -280,7 +280,7 @@ class SkillRegistry:
         except json.JSONDecodeError as e:
             return False, f"DSL格式错误: {e}"
 
-    def publish_skill(self, skill_id: int) -> int:
+    def publish_skill(self, skill_id: int, user_id: int = None) -> int:
         """发布 Skill 到 diagnosis_capabilities"""
         skill = self._get_skill(skill_id)
         if not skill:
@@ -297,7 +297,7 @@ class SkillRegistry:
         self._update_skill_status(skill_id, "published")
 
         # 4. 记录审计日志
-        self._log_audit("publish_skill", skill_id, {"capability_id": capability_id})
+        self._log_audit("publish_skill", skill_id, {"capability_id": capability_id}, user_id)
 
         return capability_id
 
@@ -483,11 +483,11 @@ class SkillRegistry:
             'created_by': skill.get('created_by'),
         })
 
-    def _log_audit(self, action: str, skill_id: int, details: Any):
+    def _log_audit(self, action: str, skill_id: int, details: Any, user_id: int = None):
         """记录审计日志"""
         from services.audit_service import AuditService
         AuditService.log_event(
-            user_id=None,
+            user_id=user_id or 0,
             action=action,
             resource_type="skill_registry",
             resource_id=str(skill_id),
@@ -524,7 +524,7 @@ class SkillRegistry:
 
         return stats
 
-    def archive_skill(self, skill_id: int) -> bool:
+    def archive_skill(self, skill_id: int, user_id: int = None) -> bool:
         """归档 Skill"""
         skill = self._get_skill(skill_id)
         if not skill:
@@ -534,10 +534,10 @@ class SkillRegistry:
             raise ValueError("只能归档已发布的Skill")
 
         self._update_skill_status(skill_id, "archived")
-        self._log_audit("archive_skill", skill_id, {})
+        self._log_audit("archive_skill", skill_id, {}, user_id)
         return True
 
-    def restore_skill(self, skill_id: int) -> bool:
+    def restore_skill(self, skill_id: int, user_id: int = None) -> bool:
         """恢复归档的 Skill"""
         skill = self._get_skill(skill_id)
         if not skill:
@@ -547,7 +547,7 @@ class SkillRegistry:
             raise ValueError("只能恢复已归档的Skill")
 
         self._update_skill_status(skill_id, "published")
-        self._log_audit("restore_skill", skill_id, {})
+        self._log_audit("restore_skill", skill_id, {}, user_id)
         return True
 
     def search_skills(self, keyword: str) -> List[Dict[str, Any]]:

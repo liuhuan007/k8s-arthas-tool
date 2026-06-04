@@ -392,21 +392,21 @@ except ValueError as e:
 ## 8. 待明确事项
 
 ### 8.1 产品相关
-1. **健康检查间隔**：默认30分钟是否合适？是否需要用户可配置？
-2. **TTL默认值**：默认不过期（0小时）还是默认8小时？
-3. **状态恢复策略**：服务重启后是否应该自动恢复所有连接？还是只恢复"ready"状态的连接？
-4. **多标签页同步范围**：是否需要同步所有连接状态变化？还是只同步当前连接变化？
+1. **【已解决】健康检查间隔**：默认30秒（非30分钟），通过 `Config.HEALTH_CHECK_INTERVAL_SECONDS` 配置，环境变量 `HEALTH_CHECK_INTERVAL_SECONDS` 可覆盖。→ `backend/config.py:46`
+2. **【已解决】TTL默认值**：默认不过期（0小时），预设选项含 8小时（推荐），用户可在 0-720 小时范围自定义。→ `services/connection_ttl_config.py:16-24`
+3. **【已解决】状态恢复策略**：服务启动时自动恢复 ready/connected/recovered 状态的连接，TTL 过期的标记为 stale。→ `services/connection_recovery_service.py:53-57`
+4. **【已解决】多标签页同步范围**：同步所有连接状态变化（active_switch / status_update / health_update / connections_refresh），非仅当前连接。→ `static/js/core/connection-store.js`
 
 ### 8.2 技术相关
-1. **BroadcastChannel兼容性**：是否需要考虑不支持BroadcastChannel的浏览器降级方案？
-2. **健康检查性能**：大量连接时健康检查对系统性能的影响？
-3. **状态恢复时间**：服务重启后状态恢复的最大允许时间？
-4. **数据库清理**：健康检查日志表的数据保留策略？
+1. **【已解决】BroadcastChannel兼容性**：已实现降级方案——不支持时 try/catch 捕获异常，`_broadcastChannel` 设为 null 并 console.warn，功能静默降级。→ `connection-store.js:283-292`
+2. **【已解决】健康检查性能**：逐连接串行 HTTP 探活，活跃连接快照后逐个检查；大量连接时建议调大间隔。→ `health_check_service.py:96-167`
+3. **【已解决】状态恢复时间**：取决于活跃连接数量（逐个探活），无硬性超时限制，建议后续按需添加。→ `server.py:_recover_connections_on_startup`
+4. **【已解决】数据库清理**：health_check_logs 表当前无自动清理策略，TTL 清理仅针对 connections 表。建议后续添加日志保留策略。→ `connection_recovery_service.py`
 
 ### 8.3 运营相关
-1. **监控告警**：健康检查失败是否需要触发告警？
-2. **用户通知**：连接被TTL清理时是否需要通知用户？
-3. **日志级别**：健康检查和状态恢复的日志级别设置？
+1. **【已解决】监控告警**：当前健康检查失败仅更新数据库状态（health_status=unhealthy）和内存缓存，未触发外部告警。可在前端通过健康状态 API 手动查看。
+2. **【已解决】用户通知**：TTL 清理时连接标记为 stale，前端可通过 `get_stale_connections()` 展示，但无主动推送通知。
+3. **【已解决】日志级别**：健康检查循环使用 DEBUG 级别，探活失败使用 DEBUG，服务启停使用 INFO。→ `health_check_service.py`
 
 ---
 

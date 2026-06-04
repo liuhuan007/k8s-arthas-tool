@@ -27,6 +27,7 @@ const ConnectionStore = {
     podPhase: null,
     podConnId: null,
     connHealth: {},
+    isRestoring: false,  // 页面刷新后正在恢复连接的标志
   },
 
   // 监听器列表
@@ -193,7 +194,8 @@ const ConnectionStore = {
         runtimeInfo: this._state.runtimeInfo,
         podPhase: this._state.podPhase,
         podConnId: this._state.podConnId,
-        connHealth: this._state.connHealth
+        connHealth: this._state.connHealth,
+        isRestoring: this._state.isRestoring,
       };
       
       localStorage.setItem('arthas_connection_store', JSON.stringify(persistData));
@@ -212,14 +214,22 @@ const ConnectionStore = {
         const data = JSON.parse(stored);
         // 不加载 connections (由数据库 API 提供)
         this._state.currentConnId = data.currentConnId || null;
-        // ✅ 修复: 不加载旧的 connState 和 runtimeInfo,避免覆盖当前状态
-        this._state.connState = ConnectionState.DISCONNECTED;  // 强制重置,等待连接后更新
-        this._state.runtimeInfo = null;  // 强制清空,等待后端返回
+        // ✅ 修复: 恢复缓存的 connState 和 runtimeInfo，避免 UI 闪烁"未连接"
+        // 实际连接状态会在 _restoreActiveConnection 完成后更新
+        if (data.currentConnId && data.connState && data.connState !== ConnectionState.DISCONNECTED) {
+          this._state.connState = data.connState;
+          this._state.runtimeInfo = data.runtimeInfo || null;
+          this._state.isRestoring = true;  // 标记正在恢复，状态栏显示"恢复中..."
+          console.log('[ConnectionStore] Restoring cached state:', data.connState);
+        } else {
+          this._state.connState = ConnectionState.DISCONNECTED;
+          this._state.runtimeInfo = null;
+        }
         this._state.podPhase = data.podPhase || '';
         this._state.podConnId = data.podConnId || null;
         this._state.connHealth = data.connHealth || {};
 
-        console.log('[ConnectionStore] Loaded (connState & runtimeInfo cleared, currentConnId=', this._state.currentConnId, ')');
+        console.log('[ConnectionStore] Loaded (currentConnId=', this._state.currentConnId, ', cachedState=', this._state.connState, ')');
       } else {
         console.log('[ConnectionStore] No stored data found');
       }
@@ -245,6 +255,7 @@ const ConnectionStore = {
     window._podPhase = this._state.podPhase;
     window._podConnId = this._state.podConnId;
     window._connHealth = this._state.connHealth;
+    window._isRestoring = this._state.isRestoring;
   },
   
   /**
@@ -258,6 +269,7 @@ const ConnectionStore = {
     if (window._podPhase) this._state.podPhase = window._podPhase;
     if (window._podConnId) this._state.podConnId = window._podConnId;
     if (window._connHealth) this._state.connHealth = window._connHealth;
+    if (window._isRestoring !== undefined) this._state.isRestoring = window._isRestoring;
   },
 
   // ── Phase 5: 多标签页 BroadcastChannel 同步 ────────────────────────────
@@ -411,14 +423,20 @@ document.addEventListener('DOMContentLoaded', () => {
     if (stored) {
       const data = JSON.parse(stored);
       // 不加载 connections,保持为空数组,等待数据库 API 填充
-      // ✅ 修复: 不加载旧的 connState 和 runtimeInfo,避免覆盖当前状态
       ConnectionStore._state.currentConnId = data.currentConnId || null;
-      ConnectionStore._state.connState = ConnectionState.DISCONNECTED;  // 强制重置,等待连接后更新
-      ConnectionStore._state.runtimeInfo = null;  // 强制清空,等待后端返回
+      // ✅ 修复: 恢复缓存的 connState，避免 UI 闪烁"未连接"
+      if (data.currentConnId && data.connState && data.connState !== ConnectionState.DISCONNECTED) {
+        ConnectionStore._state.connState = data.connState;
+        ConnectionStore._state.runtimeInfo = data.runtimeInfo || null;
+        ConnectionStore._state.isRestoring = true;
+      } else {
+        ConnectionStore._state.connState = ConnectionState.DISCONNECTED;
+        ConnectionStore._state.runtimeInfo = null;
+      }
       ConnectionStore._state.podPhase = data.podPhase || '';
       ConnectionStore._state.podConnId = data.podConnId || null;
       ConnectionStore._state.connHealth = data.connHealth || {};
-      console.log('[ConnectionStore] Initialized (connState & runtimeInfo cleared)');
+      console.log('[ConnectionStore] Initialized (cachedState=', ConnectionStore._state.connState, ', isRestoring=', ConnectionStore._state.isRestoring, ')');
     } else {
       console.log('[ConnectionStore] Ready (no cached state)');
     }

@@ -16,6 +16,7 @@ Created: 2026-05-26
 
 import json
 import logging
+import threading
 from datetime import datetime
 from flask import Blueprint, request, jsonify, Response, stream_with_context
 from flask_login import login_required, current_user
@@ -28,6 +29,7 @@ agent_bp = Blueprint('agent', __name__)
 
 # 会话消息缓存（内存中，重启丢失，符合会话语义）
 _sessions: dict = {}  # session_id -> {'messages': [...], 'user_id': int, 'created_at': str}
+_sessions_lock = threading.Lock()
 
 
 @agent_bp.route('/api/agent/send_message', methods=['POST'])
@@ -52,30 +54,29 @@ def send_message():
     stream = d.get('stream', True)
 
     if not message:
-        return jsonify({"error": "消息不能为空"}), 400
+        return jsonify({"success": False, "error": "消息不能为空"}), 400
 
     # 获取或创建会话
     if not session_id:
         import secrets
         session_id = secrets.token_hex(8)
 
-    session = _get_or_create_session(session_id, current_user.id)
+    with _sessions_lock:
+        session = _get_or_create_session(session_id, current_user.id)
 
     # 获取异常事件上下文
     anomaly_context = _fetch_anomaly_context(connection_id)
 
     # 将用户消息加入会话历史
-    session['messages'].append({
-        'role': 'user',
-        'content': message,
-    })
+    with _sessions_lock:
+        session['messages'].append({
+            'role': 'user',
+            'content': message,
+        })
 
-    # 限制历史长度（保留最近 20 条消息）
-    if len(session['messages']) > 20:
-        session['messages'] = session['messages'][-20:]
-
-    # 构建带异常上下文的消息列表
-    full_messages = _build_messages_with_anomaly(session['messages'], anomaly_context)
+        # 限制历史长度（保留最近 20 条消息）
+        if len(session['messages']) > 20:
+            session['messages'] = session['messages'][-20:]
 
     # 复用 ai_chat 的核心逻辑
     from api.ai_chat import _get_connection_info, _stream_chat, _sync_chat, DEFAULT_SYSTEM_PROMPT
@@ -83,11 +84,11 @@ def send_message():
     # 获取 AI 配置
     config = db.fetch_one('SELECT * FROM ai_config WHERE user_id = ?', (current_user.id,))
     if not config:
-        return jsonify({"error": "请先配置 AI 模型（点击设置图标）"}), 400
+        return jsonify({"success": False, "error": "请先配置 AI 模型（点击设置图标）"}), 400
 
     is_ollama = config.get('provider') == 'ollama' or 'ollama' in (config.get('base_url') or '').lower() or 'localhost:11434' in (config.get('base_url') or '')
     if not config.get('api_key') and not is_ollama:
-        return jsonify({"error": "请先配置 AI 模型 API Key（点击设置图标）"}), 400
+        return jsonify({"success": False, "error": "请先配置 AI 模型 API Key（点击设置图标）"}), 400
 
     # 构建系统提示词
     conn_info = _get_connection_info(connection_id)
@@ -98,7 +99,7 @@ def send_message():
         system_msg += f"\n\n{anomaly_context}"
 
     # 插入系统提示词
-    messages_for_llm = [{"role": "system", "content": system_msg}] + full_messages
+    messages_for_llm = [{"role": "system", "content": system_msg}] + list(session['messages'])
 
     # 调用流式对话
     if stream:
@@ -116,17 +117,18 @@ def send_message():
         try:
             data = result.get_json() if hasattr(result, 'get_json') else None
             if data and data.get('message'):
-                session['messages'].append({
-                    'role': 'assistant',
-                    'content': data['message'].get('content', ''),
-                })
+                with _sessions_lock:
+                    session['messages'].append({
+                        'role': 'assistant',
+                        'content': data['message'].get('content', ''),
+                    })
         except Exception:
             pass
         return result
 
 
 def _get_or_create_session(session_id: str, user_id: int) -> dict:
-    """获取或创建会话"""
+    """获取或创建会话（调用方需持有 _sessions_lock）"""
     if session_id not in _sessions:
         _sessions[session_id] = {
             'messages': [],
@@ -227,29 +229,6 @@ def _fetch_anomaly_events_list(connection_id: str) -> list:
         return []
 
 
-def _build_messages_with_anomaly(messages: list, anomaly_context: str) -> list:
-    """构建带异常上下文的消息列表
-
-    如果有异常上下文，在最后一条用户消息中附加上下文信息。
-    这样 AI 在回复时会参考异常事件。
-    """
-    if not anomaly_context:
-        return list(messages)
-
-    # 在最后一条用户消息前附加异常上下文
-    result = []
-    for i, msg in enumerate(messages):
-        if msg['role'] == 'user' and i == len(messages) - 1:
-            result.append({
-                'role': 'user',
-                'content': f"{anomaly_context}\n\n用户问题: {msg['content']}",
-            })
-        else:
-            result.append(msg)
-
-    return result
-
-
 def _wrap_stream_response(resp, session: dict, session_id: str, anomaly_events: list = None):
     """包装流式响应，捕获 AI 回复并存入会话历史
 
@@ -287,10 +266,11 @@ def _wrap_stream_response(resp, session: dict, session_id: str, anomaly_events: 
                         elif data.get('type') == 'done':
                             # 流结束，保存 AI 回复到会话
                             if full_content:
-                                session['messages'].append({
-                                    'role': 'assistant',
-                                    'content': full_content,
-                                })
+                                with _sessions_lock:
+                                    session['messages'].append({
+                                        'role': 'assistant',
+                                        'content': full_content,
+                                    })
                     except (json.JSONDecodeError, Exception):
                         pass
 
@@ -307,21 +287,24 @@ def _wrap_stream_response(resp, session: dict, session_id: str, anomaly_events: 
 @login_required
 def clear_session(session_id: str):
     """清空会话历史"""
-    if session_id in _sessions:
-        del _sessions[session_id]
-    return jsonify({"ok": True})
+    with _sessions_lock:
+        if session_id in _sessions:
+            del _sessions[session_id]
+    return jsonify({"success": True})
 
 
 @agent_bp.route('/api/agent/sessions', methods=['GET'])
 @login_required
 def list_sessions():
     """列出当前用户的会话"""
-    sessions = []
-    for sid, session in _sessions.items():
-        if session.get('user_id') == current_user.id:
-            sessions.append({
+    with _sessions_lock:
+        sessions = [
+            {
                 'session_id': sid,
                 'message_count': len(session.get('messages', [])),
                 'created_at': session.get('created_at', ''),
-            })
-    return jsonify({"sessions": sessions})
+            }
+            for sid, session in _sessions.items()
+            if session.get('user_id') == current_user.id
+        ]
+    return jsonify({"success": True, "sessions": sessions})

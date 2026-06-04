@@ -32,12 +32,14 @@ class Database:
     
     @contextmanager
     def connection(self):
-        """上下文管理器 - 自动提交/回滚，启用 WAL / busy_timeout / foreign_keys"""
+        """上下文管理器 - 自动提交/回滚，启用 WAL / busy_timeout / foreign_keys / synchronous / cache_size"""
         conn = sqlite3.connect(self._db_file, timeout=10)
         conn.row_factory = sqlite3.Row
         conn.execute("PRAGMA journal_mode = WAL;")
         conn.execute("PRAGMA busy_timeout = 5000;")
         conn.execute("PRAGMA foreign_keys = ON;")
+        conn.execute("PRAGMA synchronous = NORMAL;")   # 比 FULL 更快，WAL 下仍安全
+        conn.execute("PRAGMA cache_size = -64000;")    # 64 MB 页缓存
         try:
             yield conn
             conn.commit()
@@ -100,7 +102,15 @@ class Database:
         """初始化数据库表结构"""
         with self.connection() as conn:
             cursor = conn.cursor()
-            
+
+            # WAL 模式验证
+            cursor.execute("PRAGMA journal_mode")
+            result = cursor.fetchone()
+            if result and result[0].lower() == 'wal':
+                log.info("SQLite WAL mode confirmed active")
+            else:
+                log.warning("SQLite WAL mode not active, current mode: %s", result)
+
             # users 表
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS users (
@@ -578,7 +588,52 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_packages_type ON tool_packages(tool_type)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_packages_status ON tool_packages(status)")
             log.info("Schema initialized: tool_packages table created")
-            
+
+            # ── Knowledge Base: 诊断案例 & 案例匹配 ─────────────────────────
+            # diagnosis_cases 表（诊断案例库）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS diagnosis_cases (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    title TEXT NOT NULL,
+                    description TEXT,
+                    symptoms TEXT,
+                    root_cause TEXT,
+                    solution TEXT,
+                    capability_id TEXT,
+                    tags TEXT,
+                    severity TEXT DEFAULT 'medium',
+                    status TEXT DEFAULT 'draft',
+                    match_count INTEGER DEFAULT 0,
+                    created_by INTEGER,
+                    created_at TEXT,
+                    updated_at TEXT,
+                    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+                )
+            ''')
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_diagnosis_cases_status ON diagnosis_cases(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_diagnosis_cases_severity ON diagnosis_cases(severity)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_diagnosis_cases_capability ON diagnosis_cases(capability_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_diagnosis_cases_created_by ON diagnosis_cases(created_by)")
+            log.info("Schema initialized: diagnosis_cases table created")
+
+            # case_matches 表（案例匹配记录）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS case_matches (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    case_id INTEGER NOT NULL,
+                    execution_id TEXT,
+                    match_score REAL,
+                    matched_at TEXT,
+                    FOREIGN KEY (case_id) REFERENCES diagnosis_cases(id) ON DELETE CASCADE
+                )
+            ''')
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_case_matches_case_id ON case_matches(case_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_case_matches_execution_id ON case_matches(execution_id)")
+            log.info("Schema initialized: case_matches table created")
+
+            # ── Phase 7 T02: Seed AI Skills into skill_registry ────────────────
+            _seed_ai_skills(cursor)
+
             # 创建默认 admin 账户
             cursor.execute('SELECT COUNT(*) FROM users')
             if cursor.fetchone()[0] == 0:
@@ -593,6 +648,51 @@ class Database:
 
 # 延迟初始化的单例实例 (避免循环导入)
 _db_instance: Optional['Database'] = None
+
+
+def _seed_ai_skills(cursor):
+    """将 AI 技能种子数据插入 skill_registry 表。
+
+    与 data/profiler_skills.py 的模式一致：
+    通过 INSERT OR IGNORE 保证幂等，仅在首次初始化时插入。
+    """
+    try:
+        from data.ai_skills import AI_SKILLS
+    except ImportError:
+        log.debug("data.ai_skills not available, skipping AI skill seeding")
+        return
+
+    inserted = 0
+    for skill in AI_SKILLS:
+        cursor.execute(
+            '''INSERT OR IGNORE INTO skill_registry (
+                name, version, description, category, level,
+                risk_level, estimated_duration, source, status,
+                parameters_schema, handler, created_by
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
+            (
+                skill['name'],
+                skill['version'],
+                skill.get('description', ''),
+                skill['category'],
+                skill['level'],
+                skill.get('risk_level', 'low'),
+                skill.get('estimated_duration', 30),
+                skill.get('source', 'builtin'),
+                'draft',
+                skill.get('parameters_schema', '{}'),
+                skill.get('handler', ''),
+                None,
+            )
+        )
+        if cursor.rowcount > 0:
+            inserted += 1
+
+    if inserted > 0:
+        log.info("AI skills seeded into skill_registry: %d new entries", inserted)
+    else:
+        log.debug("AI skills already present in skill_registry, skipped")
+
 
 def get_db() -> 'Database':
     """获取 Database 单例 (延迟初始化避免循环导入)"""
