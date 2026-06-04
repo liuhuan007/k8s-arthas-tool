@@ -460,15 +460,158 @@
     try {
       const data = await safeGet(`/tasks/runs/${logId}/logs`);
       const log = data.run;
-      
+
       const result = log.result || (log.result_json ? JSON.parse(log.result_json) : null);
-      if (result || log.stdout || log.stderr || log.error_message) {
-        alert(`执行记录 ${log.id}\n状态：${log.status}\n耗时：${log.duration_ms || 0}ms\n\nstdout：\n${log.stdout || result?.stdout || ''}\n\nstderr：\n${log.stderr || result?.stderr || ''}\n\n错误：${log.error_message || ''}`);
-      } else {
-        alert('暂无执行结果');
-      }
+      const stdout = log.stdout || result?.stdout || '';
+      const stderr = log.stderr || result?.stderr || '';
+      const errorMsg = log.error_message || result?.error || '';
+
+      const statusConfig = {
+        success: { text: '成功', cls: 'tc-detail-success', icon: '✓' },
+        failed: { text: '失败', cls: 'tc-detail-failed', icon: '✕' },
+        running: { text: '执行中', cls: 'tc-detail-running', icon: '⟳' },
+        pending: { text: '待处理', cls: 'tc-detail-pending', icon: '⏳' },
+        cancelled: { text: '已取消', cls: 'tc-detail-cancelled', icon: '⊘' }
+      };
+      const status = statusConfig[log.status] || { text: log.status, cls: '', icon: '?' };
+      const duration = log.duration_ms ? (log.duration_ms >= 1000 ? `${(log.duration_ms / 1000).toFixed(2)}s` : `${log.duration_ms}ms`) : '-';
+
+      // 创建详情模态框
+      const modal = document.createElement('div');
+      modal.className = 'tc-modal-overlay';
+      modal.innerHTML = `
+        <div class="tc-modal">
+          <div class="tc-modal-header">
+            <div class="tc-modal-title-row">
+              <span class="tc-modal-icon ${status.cls}">${status.icon}</span>
+              <div>
+                <h3 class="tc-modal-title">${escapeHtml(log.task_name || log.capability_name || '执行详情')}</h3>
+                <span class="tc-modal-subtitle">ID: ${log.id}</span>
+              </div>
+            </div>
+            <button class="tc-modal-close" onclick="this.closest('.tc-modal-overlay').remove()">&times;</button>
+          </div>
+
+          <div class="tc-modal-body">
+            <!-- 状态卡片 -->
+            <div class="tc-detail-status-card ${status.cls}">
+              <div class="tc-detail-stat">
+                <span class="tc-detail-stat-label">状态</span>
+                <span class="tc-detail-stat-value">${status.text}</span>
+              </div>
+              <div class="tc-detail-stat">
+                <span class="tc-detail-stat-label">耗时</span>
+                <span class="tc-detail-stat-value">${duration}</span>
+              </div>
+              <div class="tc-detail-stat">
+                <span class="tc-detail-stat-label">开始时间</span>
+                <span class="tc-detail-stat-value">${log.started_at || '-'}</span>
+              </div>
+              <div class="tc-detail-stat">
+                <span class="tc-detail-stat-label">执行模式</span>
+                <span class="tc-detail-stat-value">${log.execution_mode || '-'}</span>
+              </div>
+            </div>
+
+            <!-- 基本信息 -->
+            <div class="tc-detail-section">
+              <h4 class="tc-detail-section-title">基本信息</h4>
+              <div class="tc-detail-grid">
+                <div class="tc-detail-item">
+                  <span class="tc-detail-label">能力名称</span>
+                  <span class="tc-detail-value">${escapeHtml(log.capability_name || '-')}</span>
+                </div>
+                <div class="tc-detail-item">
+                  <span class="tc-detail-label">能力版本</span>
+                  <span class="tc-detail-value">${log.capability_version || '-'}</span>
+                </div>
+                <div class="tc-detail-item">
+                  <span class="tc-detail-label">执行类型</span>
+                  <span class="tc-detail-value">${log.execution_type || '-'}</span>
+                </div>
+                <div class="tc-detail-item">
+                  <span class="tc-detail-label">退出码</span>
+                  <span class="tc-detail-value">${log.exit_code ?? '-'}</span>
+                </div>
+              </div>
+            </div>
+
+            ${errorMsg ? `
+            <!-- 错误信息 -->
+            <div class="tc-detail-section">
+              <h4 class="tc-detail-section-title tc-text-danger">错误信息</h4>
+              <div class="tc-detail-error">${escapeHtml(errorMsg)}</div>
+            </div>
+            ` : ''}
+
+            ${stdout ? `
+            <!-- 标准输出 -->
+            <div class="tc-detail-section">
+              <h4 class="tc-detail-section-title">标准输出</h4>
+              <pre class="tc-detail-output tc-detail-stdout">${escapeHtml(stdout)}</pre>
+            </div>
+            ` : ''}
+
+            ${stderr ? `
+            <!-- 标准错误 -->
+            <div class="tc-detail-section">
+              <h4 class="tc-detail-section-title tc-text-warning">标准错误</h4>
+              <pre class="tc-detail-output tc-detail-stderr">${escapeHtml(stderr)}</pre>
+            </div>
+            ` : ''}
+
+            ${log.rendered_command ? `
+            <!-- 执行命令 -->
+            <div class="tc-detail-section">
+              <h4 class="tc-detail-section-title">执行命令</h4>
+              <pre class="tc-detail-output tc-detail-command">${escapeHtml(log.rendered_command)}</pre>
+            </div>
+            ` : ''}
+          </div>
+
+          <div class="tc-modal-footer">
+            ${log.status === 'running' ? `<button class="tc-btn tc-btn-danger" onclick="cancelTaskRun(${log.id})">取消执行</button>` : ''}
+            ${log.status === 'failed' ? `<button class="tc-btn tc-btn-primary" onclick="retryTaskRun(${log.id})">重试</button>` : ''}
+            <button class="tc-btn" onclick="this.closest('.tc-modal-overlay').remove()">关闭</button>
+          </div>
+        </div>
+      `;
+
+      document.body.appendChild(modal);
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.remove();
+      });
     } catch (e) {
       toast(`加载详情失败：${e.message}`, 'err');
+    }
+  };
+
+  /**
+   * 取消任务执行
+   */
+  window.cancelTaskRun = async function(runId) {
+    if (!confirm('确认取消此任务执行？')) return;
+    try {
+      await safePost(`/tasks/runs/${runId}/cancel`);
+      toast('任务已取消', 'ok');
+      document.querySelector('.tc-modal-overlay')?.remove();
+      loadTaskLogs();
+    } catch (e) {
+      toast(`取消失败：${e.message}`, 'err');
+    }
+  };
+
+  /**
+   * 重试任务执行
+   */
+  window.retryTaskRun = async function(runId) {
+    if (!confirm('确认重试此任务？')) return;
+    try {
+      toast('正在重试任务...', 'info');
+      document.querySelector('.tc-modal-overlay')?.remove();
+      loadTaskLogs();
+    } catch (e) {
+      toast(`重试失败：${e.message}`, 'err');
     }
   };
 
