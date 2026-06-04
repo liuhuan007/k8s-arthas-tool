@@ -2506,3 +2506,33 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 .tc-detail-stdout{border-left:3px solid var(--a)}
 .tc-detail-stderr{border-left:3px solid var(--a6)}
 .tc-detail-command{border-left:3px solid var(--a3)}
+
+/* ── 筛选工具栏 ──────────────────────────────────────────────────────── */
+.tc-filter-toolbar{padding:12px 14px;background:var(--bg1);border-bottom:1px solid var(--ln)}
+.tc-filter-row{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end}
+
+.tc-filter-group{display:flex;flex-direction:column;gap:4px}
+.tc-filter-label{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px}
+.tc-filter-search{flex:1;min-width:150px}
+
+.tc-select{padding:6px 28px 6px 10px;background:var(--bg2);border:1px solid var(--ln);border-radius:6px;color:var(--tx);font-family:var(--mono);font-size:11px;cursor:pointer;outline:none;appearance:none;background-image:url("data:image/svg+xml,%3Csvg width='10' height='6' viewBox='0 0 10 6' fill='none' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M1 1L5 5L9 1' stroke='%236b7fa0' stroke-width='1.5' stroke-linecap='round'/%3E%3C/svg%3E");background-repeat:no-repeat;background-position:right 8px center}
+.tc-select:hover{border-color:var(--a)}
+.tc-select:focus{border-color:var(--a);box-shadow:0 0 0 2px rgba(0,122,255,.12)}
+
+.tc-input{padding:6px 10px;background:var(--bg2);border:1px solid var(--ln);border-radius:6px;color:var(--tx);font-family:var(--mono);font-size:11px;outline:none;transition:border-color .15s}
+.tc-input::placeholder{color:var(--tx3)}
+.tc-input:hover{border-color:var(--a)}
+.tc-input:focus{border-color:var(--a);box-shadow:0 0 0 2px rgba(0,122,255,.12)}
+
+/* ── 分页 ──────────────────────────────────────────────────────────────── */
+.tc-pagination{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;border-top:1px solid var(--ln);background:var(--bg1);font-size:11px;color:var(--tx3)}
+.tc-page-info strong{color:var(--tx2);font-weight:600}
+.tc-page-controls{display:flex;align-items:center;gap:8px}
+
+.tc-page-size{padding:4px 24px 4px 8px;font-size:10px}
+
+.tc-page-btn{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;background:var(--bg2);border:1px solid var(--ln);border-radius:6px;color:var(--tx2);cursor:pointer;font-size:16px;transition:all .15s}
+.tc-page-btn:hover:not(:disabled){border-color:var(--a);color:var(--a)}
+.tc-page-btn:disabled{opacity:.3;cursor:not-allowed}
+
+.tc-page-num{font-family:var(--mono);font-size:11px;color:var(--tx2);min-width:50px;text-align:center}

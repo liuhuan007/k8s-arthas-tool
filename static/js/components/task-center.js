@@ -10,6 +10,16 @@
   'use strict';
   console.log('[TaskCenter] loaded version 20260514b');
 
+  // ── State ──────────────────────────────────────────────────────────────
+  let _allLogs = [];           // 所有日志数据
+  let _filteredLogs = [];      // 筛选后的日志
+  let _currentPage = 1;
+  let _pageSize = 20;
+  let _statusFilter = 'all';
+  let _modeFilter = 'all';
+  let _timeFilter = 'all';
+  let _searchQuery = '';
+
   /**
    * 初始化任务中心
    */
@@ -299,12 +309,132 @@
    */
   async function loadTaskLogs() {
     try {
-      const data = await safeGet('/tasks/runs', { limit: 20 });
-      renderTaskLogs(data.runs || []);
+      const data = await safeGet('/tasks/runs', { limit: 100 });
+      _allLogs = data.runs || [];
+      _currentPage = 1;
+      applyLogFilters();
     } catch (e) {
       console.error('加载执行历史失败:', e);
     }
   }
+
+  /**
+   * 应用筛选条件
+   */
+  window.applyLogFilters = function() {
+    _statusFilter = document.getElementById('tcLogStatusFilter')?.value || 'all';
+    _modeFilter = document.getElementById('tcLogModeFilter')?.value || 'all';
+    _timeFilter = document.getElementById('tcLogTimeFilter')?.value || 'all';
+    _searchQuery = document.getElementById('tcLogSearchFilter')?.value?.trim().toLowerCase() || '';
+
+    _filteredLogs = _allLogs.filter(log => {
+      // 状态筛选
+      if (_statusFilter !== 'all' && log.status !== _statusFilter) return false;
+
+      // 模式筛选
+      if (_modeFilter !== 'all' && log.execution_mode !== _modeFilter) return false;
+
+      // 时间筛选
+      if (_timeFilter !== 'all') {
+        const logDate = new Date(log.started_at);
+        const now = new Date();
+        const diffDays = (now - logDate) / (1000 * 60 * 60 * 24);
+
+        if (_timeFilter === 'today' && diffDays > 1) return false;
+        if (_timeFilter === 'week' && diffDays > 7) return false;
+        if (_timeFilter === 'month' && diffDays > 30) return false;
+      }
+
+      // 搜索筛选
+      if (_searchQuery) {
+        const taskName = (log.task_name || log.capability_name || '').toLowerCase();
+        if (!taskName.includes(_searchQuery)) return false;
+      }
+
+      return true;
+    });
+
+    renderFilteredLogs();
+    updatePagination();
+  };
+
+  /**
+   * 渲染筛选后的日志
+   */
+  function renderFilteredLogs() {
+    const start = (_currentPage - 1) * _pageSize;
+    const end = start + _pageSize;
+    const pageLogs = _filteredLogs.slice(start, end);
+
+    renderTaskLogs(pageLogs);
+  }
+
+  /**
+   * 更新分页信息
+   */
+  function updatePagination() {
+    const total = _filteredLogs.length;
+    const totalPages = Math.ceil(total / _pageSize) || 1;
+    const start = total > 0 ? (_currentPage - 1) * _pageSize + 1 : 0;
+    const end = Math.min(_currentPage * _pageSize, total);
+
+    document.getElementById('tcPageStart').textContent = start;
+    document.getElementById('tcPageEnd').textContent = end;
+    document.getElementById('tcPageTotal').textContent = total;
+    document.getElementById('tcPageNum').textContent = `${_currentPage} / ${totalPages}`;
+
+    document.getElementById('tcPagePrev').disabled = _currentPage <= 1;
+    document.getElementById('tcPageNext').disabled = _currentPage >= totalPages;
+  }
+
+  /**
+   * 上一页
+   */
+  window.prevPage = function() {
+    if (_currentPage > 1) {
+      _currentPage--;
+      renderFilteredLogs();
+      updatePagination();
+    }
+  };
+
+  /**
+   * 下一页
+   */
+  window.nextPage = function() {
+    const totalPages = Math.ceil(_filteredLogs.length / _pageSize) || 1;
+    if (_currentPage < totalPages) {
+      _currentPage++;
+      renderFilteredLogs();
+      updatePagination();
+    }
+  };
+
+  /**
+   * 切换每页条数
+   */
+  window.changePageSize = function() {
+    _pageSize = parseInt(document.getElementById('tcPageSize').value) || 20;
+    _currentPage = 1;
+    renderFilteredLogs();
+    updatePagination();
+  };
+
+  /**
+   * 重置筛选条件
+   */
+  window.resetLogFilters = function() {
+    document.getElementById('tcLogStatusFilter').value = 'all';
+    document.getElementById('tcLogModeFilter').value = 'all';
+    document.getElementById('tcLogTimeFilter').value = 'all';
+    document.getElementById('tcLogSearchFilter').value = '';
+    _statusFilter = 'all';
+    _modeFilter = 'all';
+    _timeFilter = 'all';
+    _searchQuery = '';
+    _currentPage = 1;
+    applyLogFilters();
+  };
 
   /**
    * 渲染执行历史

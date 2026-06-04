@@ -251,8 +251,68 @@ function switchTasksTab(tab) {
         </div>
 
         <div class="tc-panel" id="tcPanel-logs" style="display:none">
+          <!-- 筛选工具栏 -->
+          <div class="tc-filter-toolbar">
+            <div class="tc-filter-row">
+              <div class="tc-filter-group">
+                <label class="tc-filter-label">状态</label>
+                <select id="tcLogStatusFilter" class="tc-select" onchange="applyLogFilters()">
+                  <option value="all">全部状态</option>
+                  <option value="success">成功</option>
+                  <option value="failed">失败</option>
+                  <option value="running">执行中</option>
+                  <option value="pending">待处理</option>
+                  <option value="cancelled">已取消</option>
+                </select>
+              </div>
+              <div class="tc-filter-group">
+                <label class="tc-filter-label">执行模式</label>
+                <select id="tcLogModeFilter" class="tc-select" onchange="applyLogFilters()">
+                  <option value="all">全部模式</option>
+                  <option value="immediate">即时诊断</option>
+                  <option value="manual">手动任务</option>
+                  <option value="scheduled">定时任务</option>
+                </select>
+              </div>
+              <div class="tc-filter-group">
+                <label class="tc-filter-label">时间范围</label>
+                <select id="tcLogTimeFilter" class="tc-select" onchange="applyLogFilters()">
+                  <option value="all">全部时间</option>
+                  <option value="today">今天</option>
+                  <option value="week">最近7天</option>
+                  <option value="month">最近30天</option>
+                </select>
+              </div>
+              <div class="tc-filter-group tc-filter-search">
+                <label class="tc-filter-label">搜索</label>
+                <input id="tcLogSearchFilter" type="text" class="tc-input" placeholder="搜索任务名称..." oninput="applyLogFilters()">
+              </div>
+              <button class="tc-btn tc-btn-ghost" onclick="resetLogFilters()" title="重置筛选">
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+                重置
+              </button>
+            </div>
+          </div>
+
           <div id="taskLogList" class="task-log-list">
             <div class="sb-empty">加载中...</div>
+          </div>
+
+          <!-- 分页 -->
+          <div class="tc-pagination" id="tcLogPagination">
+            <div class="tc-page-info">
+              显示 <strong id="tcPageStart">0</strong>-<strong id="tcPageEnd">0</strong> / 共 <strong id="tcPageTotal">0</strong> 条
+            </div>
+            <div class="tc-page-controls">
+              <select id="tcPageSize" class="tc-select tc-page-size" onchange="changePageSize()">
+                <option value="10">10 条/页</option>
+                <option value="20" selected>20 条/页</option>
+                <option value="50">50 条/页</option>
+              </select>
+              <button class="tc-page-btn" id="tcPagePrev" onclick="prevPage()" disabled>&lsaquo;</button>
+              <span class="tc-page-num" id="tcPageNum">1 / 1</span>
+              <button class="tc-page-btn" id="tcPageNext" onclick="nextPage()">&rsaquo;</button>
+            </div>
           </div>
         </div>
 
