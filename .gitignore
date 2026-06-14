@@ -49,6 +49,10 @@ Thumbs.db
 # 临时文件
 *.tmp
 *.bak
+*.db-shm
+*.db-wal
+__part*.py
+__transform.py
 # Added by code-review-graph
 .code-review-graph/
 
