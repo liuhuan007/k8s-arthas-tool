@@ -86,6 +86,32 @@ function navigateTo(tabId) {
   }
 }
 
+// 任务中心子面板导航
+function navigateToTaskCenter(panel) {
+  var isIndexPage = (window.location.pathname === '/' || window.location.pathname === '/index.html');
+  if (isIndexPage) {
+    switchTab('task-center');
+  } else {
+    window.location.href = '/tasks#task-center';
+  }
+  setTimeout(function () {
+    if (typeof scSwitchPanel === 'function') scSwitchPanel(panel);
+  }, 100);
+}
+
+// 诊断中心子面板导航（侧边栏导航模式）
+function navigateToDiagnosis(section) {
+  var isIndexPage = (window.location.pathname === '/' || window.location.pathname === '/index.html');
+  if (isIndexPage) {
+    switchTab('diagnosis-cap');
+  } else {
+    window.location.href = '/diagnosis-center';
+  }
+  setTimeout(function () {
+    if (typeof dcSwitchSection === 'function') dcSwitchSection(section);
+  }, 100);
+}
+
 // ── 侧边栏激活高亮（独立页面也用到） ────────────────────────────────────────
 function highlightActiveNav(activeNavTab) {
   document.querySelectorAll('[data-nav-tab]').forEach(function(el) {
@@ -1070,6 +1096,8 @@ let _sid = null, _cid = null, _pollTimer = null, _polling = false;
 let _cmdHist = [], _histIdx = -1, _selCmd = null;
 let _pfTaskId = null, _pfPollTimer = null, _pfStart = null, _pfDur = 60, _pfLL = 0;
 let _pfPollingForConn = null; // 记录当前轮询是为哪个连接服务
+let _pfLastMsg = '';          // 上次后端 message，用于去重
+let _pfLastProgressLog = 0;   // 上次输出进度日志的时间戳
 let _pfTaskInfo = { type: '-', event: '-', duration: 0, status: '-' }; // 当前任务信息
 let _snap = null, _histData = [], _logRaw = '', _logWrap = true;
 let _fbSelected = null, _fbCurPath = '/tmp';
@@ -1166,7 +1194,7 @@ const WORKSPACE_META = {
   'model-config': { kicker: 'Model Config', title: '模型配置', sub: '配置大模型供应商、Base URL、模型名称和系统提示词' },
   'mcp-center': { kicker: 'MCP Access', title: 'MCP 接入', sub: '管理 MCP Token 和客户端接入配置，按需加载配置详情' },
   diag: { kicker: 'Diagnosis', title: '性能诊断', sub: '按场景组织 JVM 与 Pod 诊断流程' },
-  'diagnosis-cap': { kicker: 'Diagnosis Capabilities', title: '诊断能力', sub: '按层级展示诊断能力，支持快速工具、诊断工具、场景方案、AI 诊断' },
+  'diagnosis-cap': { kicker: 'Diagnosis Center', title: '诊断中心', sub: '按场景组织 JVM 与 Pod 诊断，支持快捷工具、场景方案和 AI 诊断' },
   history: { kicker: 'History', title: '历史记录', sub: '查看命令、采样和文件下载记录' },
   'task-center': { kicker: 'Task Center', title: '任务中心', sub: '规划 Pod 定时脚本、执行结果和任务历史' },
   'toolchain-center': { kicker: 'Toolchain', title: '工具链', sub: '管理 Arthas、async-profiler、jattach 与离线缓存' },
@@ -1946,11 +1974,8 @@ async function switchConnection(connId) {
         loadSnap();
       }
 
-      // 如果采样工具的历史记录面板是打开的，则刷新
-      const historyPanel = document.getElementById('pfl-panel-history');
-      if (historyPanel && historyPanel.style.display !== 'none') {
-        loadPfHistoryForCurrentConn();
-      }
+      // 如果历史面板可见且勾选了连接筛选，刷新
+      if (typeof refreshHistoryIfFiltered === 'function') refreshHistoryIfFiltered();
 
       // 显示切换提示
       const tip = document.createElement('div');
@@ -2352,6 +2377,14 @@ async function _restoreActiveConnection(conn, savedLevel) {
       setConnStatus('ok', `✓ Pod 连接已恢复 (${podD.runtime?.runtime_type || 'unknown'})`);
       toast(`Pod 连接已恢复 (${podD.runtime?.runtime_type || 'unknown'})`, 'success');
 
+      // 确保 namespace 下拉正确回填（预加载可能尚未完成）
+      const _ptNs = document.getElementById('ptNs');
+      if (_ptNs && conn.namespace) {
+        const _hasNs = Array.from(_ptNs.options).some(o => o.value === conn.namespace);
+        if (!_hasNs) _ptNs.add(new Option(conn.namespace, conn.namespace));
+        _ptNs.value = conn.namespace;
+      }
+
       // Step 2: 根据保存的层级判断是否需要升级 Arthas
       // 信任 localStorage 中保存的层级：如果之前是 Arthas 连接，直接尝试升级
       // 运行时检测可能因 kubectl 超时返回 unknown，不能依赖它来决定是否升级
@@ -2525,6 +2558,15 @@ function switchTab(n) {
   const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'hotfix', 4:'terminal', 5:'monitor', 6:'filebrowser', 7:'ai', 8:'model-config', 9:'mcp-center', 10:'task-center', 11:'toolchain-center', 12:'history', 13:'diag', 14:'skill-management', 15:'user-management', 16:'audit-logs', 17:'alerts'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
 
+  // Record previous tab for history panel "back" button
+  if (tab === 'history') {
+    var currentTab = document.querySelector('.panel.on');
+    if (currentTab) {
+      var currentId = currentTab.id.replace('panel-', '');
+      if (currentId !== 'history') _historyReturnTo = currentId;
+    }
+  }
+
   if (['user-management', 'audit-logs', 'skill-management', 'alerts'].includes(tab) && !(typeof isAdmin === 'function' && isAdmin())) {
     toast('只有管理员可以访问此页面', 'warn');
     return;
@@ -2532,15 +2574,23 @@ function switchTab(n) {
 
   // 先切 Tab（允许切换到任何 Tab）
   const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','external-system','history','diag','diagnosis-cap','skill-management','user-management','audit-logs','alerts'];
+  
   allTabs.forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
     document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
     document.querySelectorAll(`[data-nav-tab="${x}"]`).forEach(el => el.classList.toggle('on', x === tab));
-    // 切走时清除旧面板的锁定态和引导
     if (x !== tab) {
       document.getElementById('panel-'+x)?.classList.remove('panel-locked');
     }
   });
+  // 清除任务中心子面板的高亮（不在 allTabs 中）
+  if (tab !== 'task-center') {
+    ['task-schedules', 'task-runs', 'task-scripts'].forEach(function (subTab) {
+      document.querySelectorAll('[data-nav-tab="' + subTab + '"]').forEach(function (el) {
+        el.classList.remove('on');
+      });
+    });
+  }
   
   // ✅ 第13章: 连接切换时通知 DiagnosisContext
   if (tab === 'connections' && window.DiagnosisContext && window.currentConnection) {
@@ -2553,11 +2603,10 @@ function switchTab(n) {
 
   // ✅ 新增: 诊断能力面板初始化
   if (tab === 'diagnosis-cap') {
-    if (typeof diagCapInit === 'function') {
+    if (typeof dcInit === 'function') {
+      dcInit();
+    } else if (typeof diagCapInit === 'function') {
       diagCapInit();
-    }
-    if (typeof diagHistoryInit === 'function') {
-      diagHistoryInit();
     }
   }
   
@@ -2608,21 +2657,16 @@ function switchTab(n) {
   const jarWrap = document.getElementById('ptArthasWrap');
   if(jarWrap) jarWrap.style.display = needsArthas ? 'block' : 'none';
 
-  // Adapt connect button based on connection state + ConnectionGuard
-  const connBtn = document.getElementById('ptConnBtn');
-  const currentLevel = window.ConnectionGuard ? ConnectionGuard.getCurrentLevel() : 'none';
-  if(connBtn) {
-    if(currentLevel === 'arthas') {
-      if(typeof updateConnectionButton === 'function') updateConnectionButton();
-    } else if(tab === 'terminal') {
+  // Adapt connect button — delegate to two-step-connection's updateConnectionButton
+  // which correctly manages ptConnBtn (step 3) and ptUpgradeBtn (step 4) independently
+  if (typeof updateConnectionButton === 'function') updateConnectionButton();
+
+  // Terminal tab overrides ptConnBtn for terminal-specific connect
+  if(tab === 'terminal') {
+    const connBtn = document.getElementById('ptConnBtn');
+    if(connBtn) {
       connBtn.textContent = '🖥️ 终端连接';
       connBtn.onclick = () => { termInit(); };
-    } else if(currentLevel === 'pod' && typeof canUpgradeToArthas === 'function' && canUpgradeToArthas()) {
-      connBtn.textContent = '⚡ 启动 Arthas';
-      connBtn.onclick = () => { if(typeof upgradeToArthas === 'function') upgradeToArthas(); };
-    } else if(currentLevel === 'none') {
-      connBtn.textContent = '🔌 Pod 连接';
-      connBtn.onclick = () => { if(typeof podConnect === 'function') podConnect(); };
     }
   }
 
@@ -2636,12 +2680,6 @@ function switchTab(n) {
   }
   if(tab==='profiler') {
     setTimeout(() => {
-      // 不再在这里加载历史，因为顶部历史显示全部，采样工具有自己的历史面板
-      // 如果历史面板是打开的，则刷新当前连接的历史
-      const historyPanel = document.getElementById('pfl-panel-history');
-      if (historyPanel && historyPanel.style.display !== 'none') {
-        loadPfHistoryForCurrentConn();
-      }
       // 加载当前连接的采样日志
       if (_currentConnId) {
         loadConnectionProfilerLogs(_currentConnId);
@@ -2652,7 +2690,7 @@ function switchTab(n) {
   if(tab==='ai') { setTimeout(()=>{ aiRefreshConnSelect(); document.getElementById('aiInput')?.focus(); },100); }
   if(tab==='model-config') { setTimeout(()=>{ document.querySelector('#panel-model-config button')?.focus(); },100); }
   if(tab==='mcp-center') { setTimeout(()=>{ document.querySelector('#panel-mcp-center iframe')?.contentWindow?.focus?.(); },100); }
-  if(tab==='task-center') { loadTaskCenter(); }
+  if(tab==='task-center') { /* loadTaskCenter() replaced by initTaskCenterV2 */ }
   if(tab==='toolchain-center') { loadToolchainCenter(); }
   if(tab==='diag') { setTimeout(()=>{ if(typeof diagRefreshConn==='function') diagRefreshConn(); },100); }
 
@@ -2721,7 +2759,17 @@ function syncPodTargetFromConnection(conn) {
   const ptPod = document.getElementById('ptPod');
   const ptCtr = document.getElementById('ptCtr');
   const ptArthas = document.getElementById('ptArthas');
-  if (ptNs) ptNs.value = t.namespace || 'default';
+  if (ptNs) {
+    // 确保目标 namespace 在下拉列表中（切换集群时选项可能未加载）
+    const ns = t.namespace || 'default';
+    const exists = Array.from(ptNs.options || []).some(opt => opt.value === ns);
+    if (ns && !exists) ptNs.add(new Option(ns, ns));
+    ptNs.value = ns;
+    // 异步加载该集群的完整 namespace 列表，刷新下拉选项
+    const cached = window._clusterNs && window._clusterNs[t.cluster_name];
+    if (cached) { populateNsList(cached); }
+    else if (t.cluster_name) { autoLoadNs(t.cluster_name); }
+  }
   if (ptPod) ptPod.value = t.pod_name || '';
   if (ptCtr) {
     const value = t.container || '';
@@ -4296,7 +4344,16 @@ function pfSetDur(s) {
 }
 
 async function pfStart() {
-  if(window.ConnectionGuard && !ConnectionGuard.guard('profiler')) return;
+  if(window.ConnectionGuard && !ConnectionGuard.guard('profiler')) {
+    // ConnectionGuard 已经显示了引导面板，这里添加额外的 toast 提示
+    const level = ConnectionGuard.getCurrentLevel();
+    if (level === 'none') {
+      toast('请先建立 Pod 连接，再使用采样工具', 'warn');
+    } else if (level === 'pod') {
+      toast('请先启动 Arthas 诊断环境，再使用采样工具', 'warn');
+    }
+    return;
+  }
   const t = getT();
   if(!t.cluster_name || !t.pod_name) { toast('请先配置集群和 Pod','warn'); return; }
 
@@ -4317,6 +4374,8 @@ async function pfStart() {
   document.getElementById('pfBtn').disabled = true;
   document.getElementById('pfProg').style.display = 'block';
   pfClearLog();
+  _pfLastMsg = '';
+  _pfLastProgressLog = 0;
   pfLog(`提交任务... 事件=${event} 格式=${fmt} 时长=${_pfDur}s`, 'dim');
   try {
     const r = await fetch(`${API}/profile/start`, {
@@ -4367,6 +4426,8 @@ async function pfRunJfr(t) {
   document.getElementById('pfBtn').disabled = true;
   document.getElementById('pfProg').style.display = 'block';
   pfClearLog();
+  _pfLastMsg = '';
+  _pfLastProgressLog = 0;
   pfLog(`JFR 录制: name=${name} settings=${settings} duration=${dur}s`, 'dim');
   pfLog('注意: JFR 需要 JDK 8u262+ 或 JDK 11+', 'warn');
 
@@ -4409,6 +4470,8 @@ async function pfRunDump(t) {
 
   document.getElementById('pfBtn').disabled = true;
   pfClearLog();
+  _pfLastMsg = '';
+  _pfLastProgressLog = 0;
 
   if(dumpType === 'thread') {
     pfLog('导出线程 Dump...', 'dim');
@@ -4482,6 +4545,8 @@ async function pfRunGcLog(t) {
   const btn = document.getElementById('pfBtn');
   if(btn) btn.disabled = true;
   pfClearLog();
+  _pfLastMsg = '';
+  _pfLastProgressLog = 0;
   pfLog('探测 GC 日志配置...', 'dim');
 
   const gcInfo = document.getElementById('gcLogInfo');
@@ -4724,8 +4789,8 @@ async function cancelProfilerTask(taskId) {
         document.getElementById('pfBtn').disabled = false;
         hidePfTaskInfo();
       }
-      // 刷新历史列表
-      loadPfHistoryForCurrentConn();
+      // 刷新历史列表（如果历史面板可见且筛选激活）
+      if (typeof refreshHistoryIfFiltered === 'function') refreshHistoryIfFiltered();
     } else {
       toast(d.msg || '中断失败', 'error');
     }
@@ -4746,29 +4811,54 @@ async function pfPoll() {
 
     // 只为当前连接输出日志和更新 UI
     if (_pfPollingForConn === _currentConnId) {
-      (d.logs||[]).slice(_pfLL).forEach(l => pfLog(l.message, l.level));
-      _pfLL = d.logs?.length||0;
-      const el = (Date.now()-_pfStart)/1000;
-      const totalDur = _pfDur || 30;
-      const overtime = el > totalDur;  // 是否超时
-      const pct = Math.min(95, (el/(totalDur+30))*100);  // 进度条上限提高到 95%
-      document.getElementById('pfProgFill').style.width = pct+'%';
-      document.getElementById('pfProgPct').textContent = Math.round(pct)+'%';
-      
-      // 进度文本：区分正常采样和超时下载阶段
-      if (d.status === 'running') {
-        if (overtime) {
-          document.getElementById('pfProgLbl').textContent = `${_pfMode === 'dump' ? '导出' : '采样'}完成，下载中...`;
-          document.getElementById('pfProgLbl').style.color = 'var(--a3)';
-        } else {
-          document.getElementById('pfProgLbl').textContent = `${_pfMode === 'dump' ? '导出中' : '采样'} ${Math.round(el)}s/${_pfDur}s`;
-          document.getElementById('pfProgLbl').style.color = 'var(--tx2)';
-        }
-      } else {
-        document.getElementById('pfProgLbl').textContent = d.status;
+      // ── 后端 message 变化时输出新日志 ──
+      const curMsg = d.message || '';
+      if (curMsg && curMsg !== _pfLastMsg) {
+        let lv = 'info';
+        if (/失败|error|异常/i.test(curMsg)) lv = 'err';
+        else if (/完成|success|done/i.test(curMsg)) lv = 'ok';
+        else if (/warn|警告/i.test(curMsg)) lv = 'warn';
+        await pfLog(curMsg, lv);
+        _pfLastMsg = curMsg;
       }
 
-      // 更新任务信息面板（从后端同步 type 和 event）
+      // ── 后端 logs 数组（兼容旧格式） ──
+      for (const l of (d.logs||[]).slice(_pfLL)) {
+        await pfLog(l.message, l.level);
+      }
+      _pfLL = d.logs?.length||0;
+
+      const el = (Date.now()-_pfStart)/1000;
+      const totalDur = _pfDur || 30;
+      const overtime = el > totalDur;
+      const pct = Math.min(95, (el/(totalDur+30))*100);
+      const pfFill = document.getElementById('pfProgFill');
+      const pfPct = document.getElementById('pfProgPct');
+      const pfLbl = document.getElementById('pfProgLbl');
+      if(pfFill) pfFill.style.width = pct+'%';
+      if(pfPct) pfPct.textContent = Math.round(pct)+'%';
+
+      // 进度文本
+      if (d.status === 'running') {
+        if (overtime) {
+          if(pfLbl) { pfLbl.textContent = `${_pfMode === 'dump' ? '导出' : '采样'}完成，下载中...`; pfLbl.style.color = 'var(--a3)'; }
+        } else {
+          if(pfLbl) { pfLbl.textContent = `${_pfMode === 'dump' ? '导出中' : '采样'} ${Math.round(el)}s/${_pfDur}s`; pfLbl.style.color = 'var(--tx2)'; }
+        }
+      } else {
+        if(pfLbl) pfLbl.textContent = d.status;
+      }
+
+      // ── 周期性进度日志（每 5 秒输出一次） ──
+      const now = Date.now();
+      if (d.status === 'running' && !_isQuickTask() && now - _pfLastProgressLog >= 5000) {
+        const elapsed = Math.round(el);
+        const remain = Math.max(0, totalDur - elapsed);
+        await pfLog(`⏳ 采样进行中 ${elapsed}s / ${totalDur}s  剩余 ~${remain}s`, 'dim');
+        _pfLastProgressLog = now;
+      }
+
+      // 更新任务信息面板
       _pfTaskInfo.status = d.status || 'running';
       if (d.type) _pfTaskInfo.type = d.type;
       if (d.event) _pfTaskInfo.event = d.event;
@@ -4781,46 +4871,57 @@ async function pfPoll() {
 
       if(d.status==='completed'||d.status==='failed') {
         clearInterval(_pfPollTimer); _pfPollTimer = null; _pfLL = 0;
-        _pfPollingForConn = null;  // 清空轮询连接标记
-        document.getElementById('pfBtn').disabled = false;
+        _pfPollingForConn = null;
+        const pfBtn = document.getElementById('pfBtn');
+        if(pfBtn) pfBtn.disabled = false;
         if(d.status==='completed') {
-          document.getElementById('pfProgFill').style.width='100%';
-          document.getElementById('pfProgPct').textContent='100%';
+          if(pfFill) pfFill.style.width='100%';
+          if(pfPct) pfPct.textContent='100%';
           _pfTaskInfo.progress = '100%';
           _pfTaskInfo.status = 'completed';
-          _pfTaskInfo.outputFile = d.output_file;  // 保存输出文件名
+          _pfTaskInfo.outputFile = d.output_file;
           updatePfTaskInfo();
+          const dur = Math.round((Date.now() - _pfStart) / 1000);
+          await pfLog(`✓ 采样完成（耗时 ${dur}s）`, 'ok');
+          if (d.output_file) {
+            await pfLog(`📄 输出文件: ${d.output_file}`, 'info');
+          }
           toast('完成！','success'); loadLocalFiles(); loadPfHistory();
         } else {
           _pfTaskInfo.status = 'failed';
           updatePfTaskInfo();
+          await pfLog('✗ 任务失败: ' + (d.message || '未知错误'), 'err');
           toast('失败','error');
         }
 
-        // 清除该连接的任务状态缓存
         if (_currentConnId && _pfTasksByConn[_currentConnId]) {
           delete _pfTasksByConn[_currentConnId];
         }
-        // ✅ 清除持久化的任务
         if (typeof _clearPersistedPfTask === 'function' && _currentConnId) {
           _clearPersistedPfTask(_currentConnId);
         }
         _pfTaskId = null;
+        _pfLastMsg = '';
+        _pfLastProgressLog = 0;
       }
     } else {
-      // 不是当前连接，只更新日志位置计数，不输出到 DOM
       _pfLL = d.logs?.length||0;
     }
-  } catch {}
+  } catch(e) { console.error('[pfPoll] error:', e); }
+}
+
+function _isQuickTask() {
+  // Dump 类任务（thread/heap）不需要周期进度日志
+  return _pfMode === 'dump' || (_pfDur && _pfDur <= 15);
 }
 
 async function pfLog(msg, lv='info') {
   const el = document.getElementById('pfl-panel-log');
-  if(el && el.children.length===1 && el.children[0].textContent==='等待启动...') el.innerHTML='';
+  if (!el) return;  // 面板不存在时静默跳过
+  if(el.children.length===1 && el.children[0].textContent==='等待启动...') el.innerHTML='';
   const cls = {info:'o-line',dim:'o-dim',ok:'o-ok',error:'o-err',warn:'o-warn',success:'o-ok'}[lv]||'o-line';
   const d = document.createElement('div');
   d.className = cls;
-  // 使用 innerHTML 而不是 textContent，保留换行符
   d.innerHTML = msg.replace(/\n/g, '<br>');
   el.appendChild(d);
   el.scrollTop = el.scrollHeight;
@@ -4868,38 +4969,41 @@ function pfHistJumpToPage() {}
 function pfHistChangePageSize() {}
 function renderPfHistoryPage() {}
 
-function togglePfHistory() {
-  const historyPanel = document.getElementById('pfl-panel-history');
-  const btn = document.querySelector('#pfl-panel-history').closest('.pf-log').querySelector('button[onclick*="togglePfHistory"]');
+// ── Unified History Panel ──────────────────────────────────────────────────
+var _historyReturnTo = 'profiler';  // which tab to return to when pressing "back"
 
-  if (historyPanel.style.display === 'none') {
-    historyPanel.style.display = 'flex';
-    if (btn) {
-      btn.textContent = '返回日志';
-      btn.title = '返回采样日志';
-    }
-    loadPfHistoryForCurrentConn();
+function historyGoBack() {
+  switchTab(_historyReturnTo);
+}
+
+function toggleHistoryConnFilter() {
+  var checkbox = document.getElementById('histFilterConn');
+  if (!checkbox) return;
+  var container = document.getElementById('hist-panel-profiler');
+  if (!container || typeof SamplingHistory === 'undefined') return;
+
+  if (checkbox.checked && _currentConnId) {
+    SamplingHistory.mount(container, { mode: 'global', connectionId: _currentConnId });
   } else {
-    historyPanel.style.display = 'none';
-    if (btn) {
-      btn.textContent = '本地历史';
-      btn.title = '查看当前连接的历史记录';
-    }
-    // Destroy inline component to avoid stale state
-    if (typeof SamplingHistory !== 'undefined') {
-      const el = document.getElementById('pfl-history-list');
-      if (el) SamplingHistory.destroy();
-    }
+    checkbox.checked = false;
+    SamplingHistory.mount(container, { mode: 'global' });
   }
 }
 
-async function loadPfHistoryForCurrentConn() {
-  const container = document.getElementById('pfl-history-list');
-  if (!container) return;
+function updateHistoryFilterLabel() {
+  var label = document.getElementById('histFilterLabel');
+  var podSpan = document.getElementById('histFilterPod');
+  if (!label) return;
 
-  if (typeof SamplingHistory !== 'undefined') {
-    SamplingHistory.mount(container, { mode: 'inline', connectionId: _currentConnId });
+  if (_currentConnId && window._connections) {
+    var conn = _connections.find(function(c) { return c.id === _currentConnId; });
+    if (conn) {
+      label.style.display = 'flex';
+      if (podSpan) podSpan.textContent = conn.pod_name || '';
+      return;
+    }
   }
+  label.style.display = 'none';
 }
 
 async function loadConnectionProfilerLogs(connId) {
@@ -5157,7 +5261,21 @@ function drawSpark(id, vals, color) {
 function renderProcs(snap) {
   const procs = snap.processes || snap.container_metrics?.processes || [];
   const el = document.getElementById('pmp-pr');
-  if(!procs.length) { el.innerHTML='<div style="color:var(--tx3);padding:30px;text-align:center">无进程数据 (需要 Pod Running 且 ps 可用)</div>'; return; }
+  if(!procs.length) {
+    const phase = snap.pod_info?.phase || 'Unknown';
+    const container = snap.target_container || '—';
+    const cmErr = snap.container_metrics?.error || snap.processes_error || '';
+    el.innerHTML=`<div style="color:var(--tx3);padding:30px;text-align:center">
+      <div style="margin-bottom:8px">无进程数据</div>
+      <div style="font-size:11px;opacity:0.7">
+        Pod 状态: ${esc(phase)} | 容器: ${esc(container)}
+        ${cmErr ? '<br>原因: '+esc(cmErr) : ''}
+        ${phase !== 'Running' ? '<br>需要 Pod 处于 Running 状态' : ''}
+      </div>
+    </div>`;
+    console.warn('[renderProcs] 无进程数据:', { phase, container, cmErr, hasCm: !!snap.container_metrics });
+    return;
+  }
   const normProc = p => ({
     pid: p.pid || '?',
     user: p.user || '—',
@@ -5199,7 +5317,11 @@ function renderDisk(snap) {
   const mounts = cm.disk_mounts || [];
   const el = document.getElementById('pmp-dk');
   if (!mounts.length) {
-    el.innerHTML = '<div style="color:var(--tx3);padding:30px;text-align:center">无磁盘数据 (需要 Pod Running 且 df 可用)</div>';
+    const phase = snap.pod_info?.phase || 'Unknown';
+    el.innerHTML = `<div style="color:var(--tx3);padding:30px;text-align:center">
+      <div style="margin-bottom:8px">无磁盘数据</div>
+      <div style="font-size:11px;opacity:0.7">Pod 状态: ${esc(phase)} | 需要 Pod Running 且 df 可用</div>
+    </div>`;
     return;
   }
 
@@ -5644,6 +5766,9 @@ function normalizeActiveNamespace(nsList) {
   const ptNs = document.getElementById('ptNs');
   if (!ptNs) return;
   const allowed = nsList || [];
+  // 重建选项前记住当前连接的真实 namespace
+  const prevValue = ptNs.value;
+  const connNs = (window._currentConnId || '').split('/')[1] || '';
   ptNs.dataset.allowedNamespaces = JSON.stringify(allowed);
   if (!allowed.length) {
     ptNs.innerHTML = '<option value="">无可用 namespace</option>';
@@ -5651,7 +5776,12 @@ function normalizeActiveNamespace(nsList) {
     return;
   }
   ptNs.innerHTML = allowed.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-  if (!allowed.includes(ptNs.value)) {
+  // 优先恢复连接的 namespace，其次保留之前选中的值，最后 fallback
+  if (connNs && allowed.includes(connNs)) {
+    ptNs.value = connNs;
+  } else if (prevValue && allowed.includes(prevValue)) {
+    ptNs.value = prevValue;
+  } else {
     ptNs.value = allowed.includes('default') ? 'default' : allowed[0];
   }
 }
@@ -5734,7 +5864,12 @@ async function saveCluster() {
 
 // ── Tasks & Files ──────────────────────────────────────────────────────────────
 async function loadHistory() {
-  await loadPfHistory(false); // 显示所有连接的历史
+  // Update filter label visibility
+  updateHistoryFilterLabel();
+  // Check if filter checkbox is active
+  var checkbox = document.getElementById('histFilterConn');
+  var filterConnId = (checkbox && checkbox.checked && _currentConnId) ? _currentConnId : null;
+  await loadPfHistory(filterConnId);
   await loadLocalFiles();
   // Read counts from badges (SamplingHistory component updates cntPfTasks async)
   const pfCnt = parseInt(document.getElementById('cntPfTasks')?.textContent) || 0;
@@ -5743,22 +5878,33 @@ async function loadHistory() {
   if(el) el.textContent = t;
 }
 
-async function loadPfHistory(filterByCurrentConn = false) {
+function refreshHistoryIfFiltered() {
+  var histPanel = document.getElementById('panel-history');
+  if (!histPanel || !histPanel.classList.contains('on')) return;
+  var checkbox = document.getElementById('histFilterConn');
+  if (checkbox && checkbox.checked) {
+    toggleHistoryConnFilter();
+  }
+}
+
+async function loadPfHistory(connectionId) {
   try {
     // Use the new SamplingHistory component for the global profiler tab
     const container = document.getElementById('hist-panel-profiler');
     if (!container) return;
 
     if (typeof SamplingHistory !== 'undefined') {
-      SamplingHistory.mount(container, { mode: 'global' });
+      var opts = { mode: 'global' };
+      if (connectionId) opts.connectionId = connectionId;
+      SamplingHistory.mount(container, opts);
       // Count is updated internally by the component
       window._pfTasksCount = 0; // Will be updated by component
     } else {
       // Fallback to legacy rendering if component not loaded
       const r = await fetch(`${API}/profile/tasks`); const tasks = await r.json();
       let filteredTasks = tasks;
-      if (filterByCurrentConn && _currentConnId) {
-        const currentConn = _connections.find(c => c.id === _currentConnId);
+      if (connectionId) {
+        const currentConn = _connections.find(c => c.id === connectionId);
         if (currentConn) {
           filteredTasks = tasks.filter(t =>
             t.config.cluster === currentConn.cluster_name &&
@@ -5951,7 +6097,8 @@ window.pfStart = pfStart;
 window.pfSetMode = pfSetMode;
 window.pfSetDur = pfSetDur;
 window.pfClearLog = pfClearLog;
-window.togglePfHistory = togglePfHistory;
+window.historyGoBack = historyGoBack;
+window.toggleHistoryConnFilter = toggleHistoryConnFilter;
 
 // 监控
 window.loadSnap = loadSnap;

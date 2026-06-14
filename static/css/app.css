@@ -295,7 +295,7 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--tx);font-
 .tb-tab-sep{width:1px;height:20px;background:var(--ln);margin:0 4px;align-self:center;flex-shrink:0}
 .panels{flex:1;overflow:hidden;display:flex;flex-direction:column}
 .panel{display:none;flex:1;overflow:hidden;flex-direction:column}
-.panel.on{display:flex}
+.panel.on{display:flex;flex-direction:column}
 
 /* ✅ 热修复面板: 允许滚动 */
 #panel-hotfix.panel.on {
@@ -447,10 +447,10 @@ pre.o-code{background:var(--bg2);padding:8px 10px;border-radius:4px;overflow-x:a
 .cin-run{padding:7px 14px;background:var(--a);color:#fff;border:none;border-radius:4px;font-family:var(--mono);font-size:12px;font-weight:600;cursor:pointer;height:34px;white-space:nowrap;transition:all.15s}
 .cin-run:hover{filter:brightness(1.1)}.cin-run:disabled{opacity:.4;cursor:not-allowed;filter:none}
 /* ── JProfiler ── */
-.pf-grid{display:grid;grid-template-columns:minmax(240px,280px) 1fr;flex:1;overflow:hidden}
-.pf-cfg{border-right:1px solid var(--ln);background:var(--bg1);overflow-y:auto;padding:16px}
+.pf-grid{display:flex;flex-direction:column;flex:1;overflow-y:auto;overflow-x:hidden}
+.pf-cfg{border-right:none;background:var(--bg1);padding:16px;flex-shrink:0}
 .pf-cfg::-webkit-scrollbar{width:4px}.pf-cfg::-webkit-scrollbar-thumb{background:var(--ln2);border-radius:2px}
-.pf-log{display:flex;flex-direction:column;overflow:hidden}
+.pf-log{display:none;flex-direction:column;overflow:hidden}
 .pf-lhd{flex-shrink:0;padding:0 14px;height:36px;background:var(--bg1);border-bottom:1px solid var(--ln);display:flex;align-items:center;gap:8px;font-size:11px;color:var(--tx2)}
 .pf-lb{flex:1;overflow-y:auto;padding:10px 14px;font-size:12px;line-height:1.8}
 /* ── Pod Monitor ── */
@@ -2005,7 +2005,7 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 
 /* ── Container ─────────────────────────────────────────────────────────── */
 .sh-host{height:100%;overflow:hidden;display:flex;flex-direction:column}
-.sh-container{display:flex;flex-direction:column;height:100%;overflow:hidden}
+.sh-container{display:flex;flex-direction:column;height:100%;min-height:0;overflow:visible}
 
 /* ── Toolbar ───────────────────────────────────────────────────────────── */
 .sh-toolbar{flex-shrink:0;background:var(--bg1);border-bottom:1px solid var(--ln);padding:10px 14px;display:flex;flex-direction:column;gap:8px}
@@ -2239,12 +2239,14 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 .sh-type-distribution{flex:1;display:flex;align-items:center;gap:10px;padding:8px 12px;background:var(--bg1);border:1px solid var(--ln);border-radius:8px}
 .sh-type-title{font-size:10px;color:var(--tx3);white-space:nowrap;flex-shrink:0}
 .sh-type-bars{flex:1;display:flex;height:20px;background:var(--bg2);border-radius:4px;overflow:hidden;gap:2px}
-.sh-type-bar{display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--a),var(--a2));border-radius:3px;font-size:9px;font-weight:600;color:#fff;transition:all .3s;min-width:20px}
+.sh-type-bar{display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,var(--a),var(--a2));border-radius:3px;transition:all .3s;min-width:20px}
 .sh-type-bar:hover{filter:brightness(1.2);transform:scaleY(1.1)}
-.sh-type-bar span{opacity:.8}
 .sh-type-jfr{background:linear-gradient(135deg,var(--a3),#34d399)}
 .sh-type-thread{background:linear-gradient(135deg,var(--a6),#fbbf24)}
 .sh-type-heap{background:linear-gradient(135deg,var(--a5),#f87171)}
+.sh-type-legend{display:flex;gap:12px;flex-wrap:wrap;margin-top:6px}
+.sh-type-legend-item{display:flex;align-items:center;gap:4px;font-size:10px;color:var(--tx2)}
+.sh-type-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
 
 .sh-list{padding:6px 10px 10px}
 

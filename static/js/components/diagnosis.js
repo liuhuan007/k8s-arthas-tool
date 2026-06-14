@@ -430,6 +430,10 @@
             DiagnosisContext.registerExecution(localId, capId, cap.name);
             DiagnosisContext.replaceLocalExecutionId(localId, runId);
           }
+          // 重新启动运行中任务的轮询
+          if (typeof window.dcRestartRunningPoll === 'function') {
+            window.dcRestartRunningPoll();
+          }
           showLoading(`正在执行: ${cap.name}（后台执行中）...`);
           return await pollAndShowResult(runId, cap);
         }

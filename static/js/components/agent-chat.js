@@ -54,14 +54,16 @@
 
     // 获取连接 ID
     var connId = '';
-    if (window.ConnectionStore && typeof ConnectionStore.getCurrentConnectionId === 'function') {
-      connId = ConnectionStore.getCurrentConnectionId() || '';
+    if (window.ConnectionStore && typeof ConnectionStore.getCurrentConnId === 'function') {
+      connId = ConnectionStore.getCurrentConnId() || '';
     } else if (window._currentConnId) {
       connId = window._currentConnId;
     }
 
     try {
       _abortController = new AbortController();
+      // 120 秒超时保护，防止 _isStreaming 卡死
+      var _timeoutId = setTimeout(function() { _abortController.abort(); }, 120000);
 
       // Phase 7：调用 Agent SDK 接口
       var r = await fetch('/api/agent/send_message', {
@@ -139,6 +141,7 @@
         _updateMessage(assistantEl, '❌ 请求失败: ' + e.message, false);
       }
     } finally {
+      clearTimeout(_timeoutId);
       _isStreaming = false;
       if (sendBtn) sendBtn.disabled = false;
       _abortController = null;

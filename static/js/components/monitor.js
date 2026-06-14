@@ -3,6 +3,14 @@
  * 处理 Pod CPU/内存/网络/进程等指标采集和展示
  */
 
+// ── 工具函数 ───────────────────────────────────────────────────────────────
+if (typeof esc === 'undefined') {
+  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+}
+if (typeof fmtSz === 'undefined') {
+  function fmtSz(b) { if(!b||b<0) return '0B'; const u=['B','KB','MB','GB','TB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++;} return b.toFixed(i?1:0)+u[i]; }
+}
+
 // ── State ─────────────────────────────────────────────────────────────────
 // _metricsPolling, _metricsTimer, _metricsCache 在 app-ui.js 中声明，使用 window 访问
 
@@ -112,7 +120,9 @@ function renderProcs(snap) {
   
   const procs = snap.processes || snap.container_metrics?.processes || [];
   if (procs.length === 0) {
-    el.innerHTML = '<tr><td colspan="6" class="empty-state">无进程数据</td></tr>';
+    const phase = snap.pod_info?.phase || 'Unknown';
+    const cmErr = snap.processes_error || snap.container_metrics?.error || '';
+    el.innerHTML = `<tr><td colspan="6" class="empty-state">无进程数据${phase !== 'Running' ? ' (Pod: '+phase+')' : ''}${cmErr ? ' — '+cmErr : ''}</td></tr>`;
     return;
   }
   const normProc = p => ({

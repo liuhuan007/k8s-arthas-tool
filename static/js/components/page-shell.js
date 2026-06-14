@@ -104,19 +104,47 @@ class PageShell {
         input.value = '';
         this.autoResizeInput(input);
         
-        // 如果存在原有的aiSend函数，使用它
+        // 优先使用 ai-chat.js 的 aiSend（它处理流式响应和 Function Calling）
         if (typeof aiSend === 'function') {
-            // 将消息设置到原有的输入框
             const originalInput = document.getElementById('aiInput');
             if (originalInput) {
                 originalInput.value = message;
                 aiSend();
+                // 同步显示用户消息到抽屉
+                this._syncDrawerWithMain('user', message);
+                return;
             }
-        } else {
-            // 简单的消息显示
-            this.addAIMessage('user', message);
-            this.addAIMessage('ai', 'AI 助手功能正在初始化中，请稍候...');
         }
+        
+        // 降级：直接在抽屉中显示
+        this.addAIMessage('user', message);
+        this.addAIMessage('ai', 'AI 助手功能正在初始化中，请稍候...');
+    }
+    
+    _syncDrawerWithMain(role, content) {
+        // 将 ai-chat.js 的消息同步显示到抽屉
+        const drawerMessages = document.getElementById('aiDrawerMessages');
+        if (!drawerMessages) return;
+        
+        const welcome = drawerMessages.querySelector('.ai-welcome');
+        if (welcome) welcome.remove();
+        
+        // 添加消息到抽屉
+        const msgDiv = document.createElement('div');
+        msgDiv.className = `ai-message ai-message-${role}`;
+        msgDiv.innerHTML = `
+            <div class="ai-message-avatar">${role === 'user' ? '👤' : '🤖'}</div>
+            <div class="ai-message-content">${this._escHtml(content)}</div>
+        `;
+        drawerMessages.appendChild(msgDiv);
+        drawerMessages.scrollTop = drawerMessages.scrollHeight;
+    }
+    
+    _escHtml(text) {
+        if (!text) return '';
+        const d = document.createElement('div');
+        d.textContent = text;
+        return d.innerHTML;
     }
     
     addAIMessage(role, content) {

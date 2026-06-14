@@ -43,7 +43,7 @@
    * 渲染历史记录
    */
   function renderHistory() {
-    const container = document.getElementById('diagHistoryContainer');
+    const container = document.getElementById('diagHistoryContainer') || document.getElementById('dcHistoryContainer');
     if (!container) return;
 
     if (_historyData.length === 0) {
@@ -141,7 +141,7 @@
   };
 
   function renderHistoryDetail(run, result) {
-    const container = document.getElementById('diagHistoryDetail') || document.getElementById('diagHistoryContainer');
+    const container = document.getElementById('diagHistoryDetail') || document.getElementById('diagHistoryContainer') || document.getElementById('dcHistoryContainer');
     if (!container) return;
 
     const isProfiler = !run.capability_id && result && result.type;

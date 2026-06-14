@@ -696,7 +696,7 @@ if (new URLSearchParams(window.location.search).get('embed') === '1') {
     // ── 加载统计 ──
     async function loadStats() {
         try {
-            const stats = await safeGet('/api/anomaly/events/stats');
+            const stats = await safeGet('/anomaly/events/stats');
             const el = document.getElementById('alertStats');
             if (!el) return;
             el.innerHTML = `
@@ -795,7 +795,7 @@ if (new URLSearchParams(window.location.search).get('embed') === '1') {
         if (pod) params.pod = pod;
 
         try {
-            const data = await safeGet('/api/anomaly/events', params);
+            const data = await safeGet('/anomaly/events', params);
             const events = data.events || [];
             const total = data.total || 0;
 
@@ -905,7 +905,7 @@ if (new URLSearchParams(window.location.search).get('embed') === '1') {
             if (editId) {
                 await safePut('/api/anomaly/rules/' + editId, data);
             } else {
-                await safePost('/api/anomaly/rules', data);
+                await safePost('/anomaly/rules', data);
             }
             closeRuleModal();
             loadRules();
@@ -937,7 +937,7 @@ if (new URLSearchParams(window.location.search).get('embed') === '1') {
     // ── 通知 ──
     async function loadNotifications() {
         try {
-            const data = await safeGet('/api/anomaly/notifications');
+            const data = await safeGet('/anomaly/notifications');
             const body = document.getElementById('notifBody');
             if (!body) return;
 
@@ -974,7 +974,7 @@ if (new URLSearchParams(window.location.search).get('embed') === '1') {
 
     window.markNotifRead = async function(id) {
         try {
-            await safePost('/api/anomaly/notifications/' + id + '/read');
+            await safePost('/anomaly/notifications/' + id + '/read');
             loadNotifications();
         } catch (e) {
             console.error('标记已读失败:', e);
@@ -983,7 +983,7 @@ if (new URLSearchParams(window.location.search).get('embed') === '1') {
 
     window.markAllRead = async function() {
         try {
-            await safePost('/api/anomaly/notifications/read-all');
+            await safePost('/anomaly/notifications/read-all');
             loadNotifications();
         } catch (e) {
             console.error('全部已读失败:', e);

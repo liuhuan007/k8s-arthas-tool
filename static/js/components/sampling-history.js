@@ -590,10 +590,16 @@ const SamplingHistory = (() => {
           <div class="sh-type-distribution">
             <span class="sh-type-title">任务类型分布</span>
             <div class="sh-type-bars">
-              ${typeCounts.profiler > 0 ? `<div class="sh-type-bar" style="width: ${(typeCounts.profiler / counts.all) * 100}%" title="Profiler: ${typeCounts.profiler}"><span>P</span></div>` : ''}
-              ${typeCounts.jfr > 0 ? `<div class="sh-type-bar sh-type-jfr" style="width: ${(typeCounts.jfr / counts.all) * 100}%" title="JFR: ${typeCounts.jfr}"><span>J</span></div>` : ''}
-              ${typeCounts.threaddump > 0 ? `<div class="sh-type-bar sh-type-thread" style="width: ${(typeCounts.threaddump / counts.all) * 100}%" title="Thread: ${typeCounts.threaddump}"><span>T</span></div>` : ''}
-              ${typeCounts.heapdump > 0 ? `<div class="sh-type-bar sh-type-heap" style="width: ${(typeCounts.heapdump / counts.all) * 100}%" title="Heap: ${typeCounts.heapdump}"><span>H</span></div>` : ''}
+              ${typeCounts.profiler > 0 ? `<div class="sh-type-bar" style="width: ${(typeCounts.profiler / counts.all) * 100}%" title="Profiler: ${typeCounts.profiler}"></div>` : ''}
+              ${typeCounts.jfr > 0 ? `<div class="sh-type-bar sh-type-jfr" style="width: ${(typeCounts.jfr / counts.all) * 100}%" title="JFR: ${typeCounts.jfr}"></div>` : ''}
+              ${typeCounts.threaddump > 0 ? `<div class="sh-type-bar sh-type-thread" style="width: ${(typeCounts.threaddump / counts.all) * 100}%" title="线程转储: ${typeCounts.threaddump}"></div>` : ''}
+              ${typeCounts.heapdump > 0 ? `<div class="sh-type-bar sh-type-heap" style="width: ${(typeCounts.heapdump / counts.all) * 100}%" title="堆转储: ${typeCounts.heapdump}"></div>` : ''}
+            </div>
+            <div class="sh-type-legend">
+              ${typeCounts.profiler > 0 ? `<span class="sh-type-legend-item"><span class="sh-type-dot" style="background:var(--a)"></span>${ICON.flame} Profiler ${typeCounts.profiler}</span>` : ''}
+              ${typeCounts.jfr > 0 ? `<span class="sh-type-legend-item"><span class="sh-type-dot" style="background:#34d399"></span>${ICON.layers} JFR ${typeCounts.jfr}</span>` : ''}
+              ${typeCounts.threaddump > 0 ? `<span class="sh-type-legend-item"><span class="sh-type-dot" style="background:#fbbf24"></span>${ICON.cpu} 线程转储 ${typeCounts.threaddump}</span>` : ''}
+              ${typeCounts.heapdump > 0 ? `<span class="sh-type-legend-item"><span class="sh-type-dot" style="background:#f87171"></span>${ICON.box} 堆转储 ${typeCounts.heapdump}</span>` : ''}
             </div>
           </div>
         </div>
@@ -989,8 +995,8 @@ const SamplingHistory = (() => {
       const r = await fetch(`${API}/profile/tasks`, { credentials: 'include' });
       let tasks = await r.json();
 
-      // Inline mode: filter by connection
-      if (_mode === 'inline' && _connId && typeof _connections !== 'undefined') {
+      // Filter by connection when connectionId is set
+      if (_connId && typeof _connections !== 'undefined') {
         const conn = _connections.find(c => c.id === _connId);
         if (conn) {
           tasks = tasks.filter(t =>
