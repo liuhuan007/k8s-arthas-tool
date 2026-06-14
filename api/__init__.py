@@ -6,15 +6,15 @@ from flask import Flask
 def get_connection_by_id(conn_id: str):
     """根据连接 ID 获取底层连接对象。
 
-    1. 先查内存 _connections 池（正常路径）
+    1. 先查内存 connections 池（正常路径）
     2. 如果内存中没有，尝试从数据库恢复（服务重启后内存清空的场景）
     """
     import logging
     log = logging.getLogger(__name__)
 
-    from server import _connections, _connections_lock
-    with _connections_lock:
-        entry = _connections.get(conn_id)
+    from backend.app_context import connections, connections_lock
+    with connections_lock:
+        entry = connections.get(conn_id)
     if entry:
         return entry.get('conn')
 
@@ -26,7 +26,7 @@ def get_connection_by_id(conn_id: str):
 def _recover_connection_from_db(conn_id: str, log):
     """从数据库恢复连接到内存池。"""
     from models.db import db
-    from server import _connections, _connections_lock, _make_runner
+    from backend.app_context import connections, connections_lock, make_runner
 
     row = db.fetch_one(
         'SELECT cluster_name, namespace, pod_name, container_name, status '
@@ -47,7 +47,7 @@ def _recover_connection_from_db(conn_id: str, log):
     pod_name = row.get('pod_name', '')
     container_name = row.get('container_name', '')
 
-    runner, err = _make_runner(cluster_name)
+    runner, err = make_runner(cluster_name)
     if err:
         log.warning("[recovery] Cannot create runner for %s: %s", conn_id, err)
         return None
@@ -65,8 +65,8 @@ def _recover_connection_from_db(conn_id: str, log):
 
         ok, msg = conn.connect()
         if ok:
-            with _connections_lock:
-                _connections[conn_id] = {"conn": conn, "user_id": None, "level": "arthas"}
+            with connections_lock:
+                connections[conn_id] = {"conn": conn, "user_id": None, "level": "arthas"}
             log.info("[recovery] Connection %s recovered from DB", conn_id)
             return conn
         else:
@@ -96,6 +96,9 @@ def register_blueprints(app: Flask):
     from api.agent import agent_bp
     from api.toolbox import toolbox_bp
     from api.knowledge import knowledge_bp
+    from api.arthas_routes import arthas_bp
+    from api.mcp_standard import mcp_std_bp
+    from api.scheduler_routes import scheduler_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(users_bp)
@@ -114,3 +117,6 @@ def register_blueprints(app: Flask):
     app.register_blueprint(agent_bp)
     app.register_blueprint(toolbox_bp)
     app.register_blueprint(knowledge_bp)
+    app.register_blueprint(arthas_bp)
+    app.register_blueprint(scheduler_bp)
+    app.register_blueprint(mcp_std_bp)

@@ -234,6 +234,10 @@ from api.task_center import init_task_tables, start_task_scheduler
 init_task_tables()
 start_task_scheduler()
 
+# 初始化 Scheduler 模块
+from api.scheduler_routes import init_scheduler
+init_scheduler()
+
 # 启动 task_logs 定时清理服务
 def _start_cleanup_scheduler():
     """启动 task_logs 清理定时任务"""
@@ -252,7 +256,7 @@ def _start_cleanup_scheduler():
         parts = cleanup_cron.split()
         if len(parts) == 5:
             scheduler.add_job(
-                cleanup_service.cleanup_old_logs,
+                cleanup_service.cleanup_expired_logs,
                 'cron',
                 minute=parts[0],
                 hour=parts[1],
@@ -267,7 +271,7 @@ def _start_cleanup_scheduler():
         parts = archive_cleanup_cron.split()
         if len(parts) == 5:
             scheduler.add_job(
-                cleanup_service.cleanup_old_artifacts,
+                cleanup_service.cleanup_old_archives,
                 'cron',
                 minute=parts[0],
                 hour=parts[1],
@@ -342,9 +346,9 @@ OUTPUT_DIR.mkdir(exist_ok=True)
 
 
 def _load_clusters() -> List[Dict]:
-    """加载集群配置（委托给 api/clusters.py 统一实现）"""
-    from api.clusters import _load_clusters as _load
-    return _load()
+    """加载集群配置（委托给 backend.app_context 统一实现）"""
+    from backend.app_context import load_clusters
+    return load_clusters()
 
 
 def _sync_clusters_to_db():
@@ -364,27 +368,9 @@ def _sync_clusters_to_db():
 
 
 def _make_runner(cluster_name: str) -> tuple:
-    """创建 KubectlExecutor"""
-    from flask import has_request_context
-    clusters = _load_clusters()
-    cluster = next((c for c in clusters if c.get('name') == cluster_name), None)
-    if not cluster:
-        return None, "集群不存在"
-
-    # 非 admin 检查集群访问权限（仅在请求上下文中检查，启动恢复时跳过）
-    if has_request_context() and current_user.is_authenticated:
-        if not current_user.is_admin:
-            user_clusters = db.fetch_all(
-                'SELECT cluster_id FROM user_clusters WHERE user_id = ?',
-                (current_user.id,)
-            )
-            allowed = {r['cluster_id'] for r in user_clusters}
-            if cluster.get('id') not in allowed:
-                return None, "无权访问此集群"
-    
-    kubeconfig = cluster.get('kubeconfig', '')
-    context = cluster.get('context', '')
-    return KubectlExecutor(kubeconfig=kubeconfig, context=context), None
+    """创建 KubectlExecutor（委托给 backend.app_context）"""
+    from backend.app_context import make_runner
+    return make_runner(cluster_name)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -631,27 +617,22 @@ def check_pod():
 # Arthas 连接管理
 # ═══════════════════════════════════════════════════════════════════════════════
 
-# 连接状态缓存 (待迁移到数据库)
-# 格式: {conn_id: {"conn": ArthasConnection, "user_id": int}}
-_connections: Dict[str, dict] = {}
-_connections_lock = threading.Lock()
-
-# Phase 5: 连接健康状态缓存
-# 格式: {conn_id: {"status": "healthy"|"unhealthy"|"unknown", "last_check_at": str, "latency_ms": float|None}}
-_conn_health: Dict[str, dict] = {}
-_conn_health_lock = threading.Lock()
+# 连接状态管理（委托给 backend.app_context 统一管理）
+from backend.app_context import (
+    connections as _connections,
+    connections_lock as _connections_lock,
+    conn_health as _conn_health,
+    conn_health_lock as _conn_health_lock,
+    recovery_status as _recovery_status,
+    get_state_manager as _get_state_manager,
+    ensure_connection as _ensure_connection,
+    check_conn_owner as _check_conn_owner,
+    get_conn as _get_conn,
+    save_arthas_command as _save_arthas_command,
+)
+_state_manager = _get_state_manager()
 
 _start_phase5_services()
-
-# Phase 5: 连接恢复状态
-_recovery_status: Dict[str, dict] = {"recovered": [], "stale": [], "completed": False}
-
-# ✅ 关键修复: 初始化 ConnectionStateManager
-from backend.core.connection_state import ConnectionStateManager
-_state_manager = ConnectionStateManager(db)
-# 启动 TTL 清理 (每 30 分钟)
-_state_manager.schedule_ttl_cleanup(interval_seconds=1800)
-log.info("ConnectionStateManager initialized with TTL cleanup (30min interval)")
 
 
 # ── Phase 5: 启动恢复（实际 Arthas 连接重建）─────────────────────────────────
