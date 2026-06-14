@@ -642,7 +642,7 @@ class ExecutionProgress {
     this.steps = data.steps || [];
     this.render();
     
-    if (data.status === 'completed' || data.status === 'failed') {
+    if (data.status === 'success' || data.status === 'failed') {
       this.stopPolling();
     }
   }
@@ -708,7 +708,7 @@ class ExecutionProgress {
   }
   
   updateProgress() {
-    const completed = this.steps.filter(s => s.status === 'completed').length;
+    const completed = this.steps.filter(s => s.status === 'success').length;
     this.progress = (completed / this.steps.length) * 100;
     this.renderProgressBar();
   }
@@ -810,7 +810,7 @@ class ExecutionProgress {
 接收轮询响应
     │
     ├── status=running → 更新进度和步骤
-    ├── status=completed → 显示完成
+    ├── status=success → 显示完成
     └── status=failed → 显示错误
     ├── llm_analysis → 显示AI分析
     └── diagnosis_complete → 显示完成

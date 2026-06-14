@@ -226,7 +226,7 @@ def start_connection(pod_name, namespace, cluster_name):
 ```javascript
 // 页面加载时检查连接状态
 async function restoreConnection() {
-    const savedId = localStorage.getItem('currentConnectionId');
+    const savedId = sessionStorage.getItem('currentConnectionId');
     
     if (!savedId) {
         // 无保存的连接，显示连接列表
@@ -967,8 +967,8 @@ class ConnectionStore {
     }
     
     restoreState() {
-        // 从localStorage恢复
-        const savedId = localStorage.getItem('currentConnectionId');
+        // 从sessionStorage恢复（每个标签页独立）
+        const savedId = sessionStorage.getItem('currentConnectionId');
         if (savedId) {
             this.loadConnection(savedId);
         }
@@ -986,14 +986,14 @@ class ConnectionStore {
             this.emit('connectionRestored', data);
         } else {
             // 连接异常，清除状态
-            localStorage.removeItem('currentConnectionId');
+            sessionStorage.removeItem('currentConnectionId');
             this.emit('connectionLost', connectionId);
         }
     }
     
     setCurrentConnection(connectionId) {
         this.currentConnectionId = connectionId;
-        localStorage.setItem('currentConnectionId', connectionId);
+        sessionStorage.setItem('currentConnectionId', connectionId);
     }
 }
 ```

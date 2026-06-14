@@ -82,9 +82,9 @@ task_definitions → task_logs (execution_mode='manual'|'scheduled')
 ```python
 class TaskStatus(Enum):
     PENDING = "pending"
-    RUNNING = "running"
+    running = "running"
     SUCCESS = "success"  # 统一使用 success
-    FAILED = "failed"
+    failed = "failed"
     CANCELLED = "cancelled"
 
 class DiagnosisRun:
@@ -147,17 +147,17 @@ class TaskQueue:
     async def _start_task(self, task: DiagnosisTask):
         """启动任务"""
         self.running_tasks[task.id] = task
-        task.status = TaskStatus.RUNNING
+        task.status = 'running'
         task.started_at = datetime.now()
         
         # 执行任务
         try:
             result = await self._execute_task(task)
             task.result = result
-            task.status = TaskStatus.COMPLETED
+            task.status = 'success'
         except Exception as e:
             task.error = str(e)
-            task.status = TaskStatus.FAILED
+            task.status = 'failed'
         finally:
             task.completed_at = datetime.now()
             del self.running_tasks[task.id]
