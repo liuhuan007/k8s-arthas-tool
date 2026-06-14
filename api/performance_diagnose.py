@@ -50,30 +50,30 @@ def _parse_conn_id(connection_id: str) -> dict:
 def _get_alive_connection(connection_id: str):
     """获取活跃的 Arthas 连接
     
-    只要 conn 对象在 _connections 中就返回，让后续实际操作判断是否真正可用。
+    只要 conn 对象在 connections 中就返回，让后续实际操作判断是否真正可用。
     """
-    from server import _connections, _connections_lock
+    from backend.app_context import connections, connections_lock
 
     if not connection_id:
-        with _connections_lock:
+        with connections_lock:
             # admin 可用所有连接，非 admin 仅自己的
             if current_user.is_admin:
-                alive = [(cid, e) for cid, e in _connections.items() if e.get('conn')]
+                alive = [(cid, e) for cid, e in connections.items() if e.get('conn')]
             else:
-                alive = [(cid, e) for cid, e in _connections.items()
+                alive = [(cid, e) for cid, e in connections.items()
                          if e.get('user_id') == current_user.id and e.get('conn')]
             if alive:
                 return alive[-1][1]['conn']
         return None
 
-    with _connections_lock:
-        entry = _connections.get(connection_id)
+    with connections_lock:
+        entry = connections.get(connection_id)
         if not entry:
-            # 尝试模糊匹配：connection_id 可能与 _connections 的 key 略有差异
-            for cid in _connections:
+            # 尝试模糊匹配：connection_id 可能与 connections 的 key 略有差异
+            for cid in connections:
                 if connection_id in cid or cid in connection_id:
                     log.warning("_get_alive_connection: fuzzy match %r -> %r", connection_id, cid)
-                    entry = _connections[cid]
+                    entry = connections[cid]
                     break
             if not entry:
                 return None
@@ -89,11 +89,11 @@ def _get_alive_connection(connection_id: str):
 
 def _list_diagnosable_instances() -> list:
     """列出当前用户所有可诊断的已连接实例"""
-    from server import _connections, _connections_lock
+    from backend.app_context import connections, connections_lock
 
     instances = []
-    with _connections_lock:
-        for cid, entry in _connections.items():
+    with connections_lock:
+        for cid, entry in connections.items():
             # admin 可看所有，非 admin 仅自己的
             if not current_user.is_admin and entry.get('user_id') != current_user.id:
                 continue
@@ -283,13 +283,13 @@ def diagnose_tool():
 
     conn = _get_alive_connection(connection_id)
     if not conn:
-        # 尝试用 _ensure_connection 自动重建
-        from server import _ensure_connection
+        # 尝试用 ensure_connection 自动重建
+        from backend.app_context import ensure_connection
         rebuild_params = _parse_conn_id(connection_id)
         rebuild_d = {**d, **rebuild_params}
-        conn, err = _ensure_connection(connection_id, rebuild_d)
+        conn, err = ensure_connection(connection_id, rebuild_d)
         if err:
-            log.warning("diagnose_tool: _ensure_connection failed: %s, connection_id=%r", err, connection_id)
+            log.warning("diagnose_tool: ensure_connection failed: %s, connection_id=%r", err, connection_id)
     if not conn:
         return jsonify({"error": "Arthas 连接不可用，请先在左侧连接目标 Pod"}), 400
 
@@ -389,17 +389,17 @@ def diagnose_performance():
     class_pattern = d.get('class_pattern', '')
     method_pattern = d.get('method_pattern', '')
 
-    # 获取连接 — 优先用 _get_alive_connection，失败则用 server._ensure_connection 自动重建
+    # 获取连接 — 优先用 _get_alive_connection，失败则用 server.ensure_connection 自动重建
     conn = _get_alive_connection(connection_id)
     if not conn:
-        # 尝试用 _ensure_connection 自动重建（与 /api/arthas/exec 相同逻辑）
-        from server import _ensure_connection
-        # 从 connection_id 解析连接参数，补充到 d 中供 _ensure_connection 使用
+        # 尝试用 ensure_connection 自动重建（与 /api/arthas/exec 相同逻辑）
+        from backend.app_context import ensure_connection
+        # 从 connection_id 解析连接参数，补充到 d 中供 ensure_connection 使用
         rebuild_params = _parse_conn_id(connection_id)
         rebuild_d = {**d, **rebuild_params}
-        conn, err = _ensure_connection(connection_id, rebuild_d)
+        conn, err = ensure_connection(connection_id, rebuild_d)
         if err:
-            log.warning("diagnose_performance: _ensure_connection failed: %s, connection_id=%r, rebuild_params=%s", err, connection_id, rebuild_params)
+            log.warning("diagnose_performance: ensure_connection failed: %s, connection_id=%r, rebuild_params=%s", err, connection_id, rebuild_params)
     if not conn:
         # 尝试列出可用实例供用户选择
         instances = _list_diagnosable_instances()

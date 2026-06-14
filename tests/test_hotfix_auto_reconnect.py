@@ -21,7 +21,7 @@ class TestHotfixAutoReconnect(unittest.TestCase):
 
     def test_get_connection_imports_ensure_connection(self):
         """测试 _get_connection 导入 _ensure_connection"""
-        self.assertIn('from server import _connections, _connections_lock, _ensure_connection', self.hotfix_py,
+        self.assertIn('from backend.app_context import connections, connections_lock, ensure_connection', self.hotfix_py,
                      "❌ 应该导入 _ensure_connection")
 
     def test_get_connection_has_two_step_logic(self):

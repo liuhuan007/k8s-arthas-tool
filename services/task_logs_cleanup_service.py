@@ -33,7 +33,7 @@ def get_cleanup_config(key: str, default: str) -> str:
 class TaskLogsCleanupService:
     """task_logs 定时清理服务"""
     
-    async def cleanup_expired_logs(self):
+    def cleanup_expired_logs(self):
         """清理过期的 task_logs"""
         try:
             retention_days = int(get_cleanup_config('task_logs.retention_days', '30'))
@@ -103,7 +103,7 @@ class TaskLogsCleanupService:
         except Exception as e:
             log.error("task_logs 清理失败: %s", e, exc_info=True)
     
-    async def cleanup_old_archives(self):
+    def cleanup_old_archives(self):
         """清理旧的归档日志"""
         try:
             retention_days = int(get_cleanup_config('task_logs_archive.retention_days', '365'))
@@ -147,7 +147,7 @@ class TaskLogsCleanupService:
             
             return {
                 'active_logs': active_logs['cnt'] if active_logs else 0,
-                'archived_logs': archived_logs['archived_logs'] if archived_logs else 0,
+                'archived_logs': archived_logs['cnt'] if archived_logs else 0,
                 'archive_total': archive_total['cnt'] if archive_total else 0,
                 'retention_days': int(get_cleanup_config('task_logs.retention_days', '30')),
                 'archive_retention_days': int(get_cleanup_config('task_logs_archive.retention_days', '365')),

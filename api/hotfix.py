@@ -20,17 +20,17 @@ _hotfix_service = HotfixService()
 def _get_connection(conn_id: str):
     """从全局连接池获取连接,支持自动重建"""
     try:
-        from server import _connections, _connections_lock, _ensure_connection
+        from backend.app_context import connections, connections_lock, ensure_connection
     except ImportError:
         return None, "服务未初始化"
     
     # ✅ 第一步: 尝试从内存获取
-    with _connections_lock:
-        available = list(_connections.keys())
+    with connections_lock:
+        available = list(connections.keys())
         log.info(f"[_get_connection] 查找 conn_id={conn_id}, 可用连接: {available}")
         
-        if conn_id in _connections:
-            entry = _connections[conn_id]
+        if conn_id in connections:
+            entry = connections[conn_id]
             log.info(f"[_get_connection] 内存中找到连接, entry.user_id={entry.get('user_id')}, current_user.id={current_user.id}")
             
             # 检查权限
@@ -46,9 +46,9 @@ def _get_connection(conn_id: str):
             if not hasattr(conn, 'http_client') or conn.http_client is None:
                 log.warning(f"[_get_connection] 连接不完整, http_client=None, 删除并重建 conn_id={conn_id}")
                 # 删除不完整的连接
-                with _connections_lock:
-                    if conn_id in _connections:
-                        del _connections[conn_id]
+                with connections_lock:
+                    if conn_id in connections:
+                        del connections[conn_id]
                 # 继续执行后续的重建逻辑
             else:
                 return conn, None
@@ -65,7 +65,7 @@ def _get_connection(conn_id: str):
     namespace = parts[1]
     pod_name = parts[2]
     
-    # 调用 _ensure_connection 自动重建
+    # 调用 ensure_connection 自动重建
     d = {
         'cluster_name': cluster_name,
         'namespace': namespace,
@@ -74,7 +74,7 @@ def _get_connection(conn_id: str):
     }
     
     try:
-        conn, err = _ensure_connection(conn_id, d)
+        conn, err = ensure_connection(conn_id, d)
         if err:
             log.warning(f"[_get_connection] 自动重建失败: {err}")
             return None, f"连接已丢失，请重新建立连接: {err}"

@@ -105,9 +105,9 @@ def _get_connection(connection_id: str):
         ArthasConnection object or None if not found/inactive.
     """
     try:
-        from server import _connections, _connections_lock
-        with _connections_lock:
-            entry = _connections.get(connection_id)
+        from backend.app_context import connections, connections_lock
+        with connections_lock:
+            entry = connections.get(connection_id)
         if entry and entry.get("conn"):
             return entry["conn"]
         return None

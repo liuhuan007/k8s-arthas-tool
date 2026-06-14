@@ -306,8 +306,10 @@ class AuditService:
                  resource_id: str, details: str):
         """通用审计日志记录（内部方法，供特殊场景使用）"""
         client = AuditService._get_client_info()
+        # user_id 为 None/0 时写 NULL，避免 FOREIGN KEY 约束失败
+        safe_user_id = user_id if user_id else None
         db.insert('audit_logs', {
-            'user_id': user_id or 0,
+            'user_id': safe_user_id,
             'action': action,
             'resource_type': resource_type,
             'resource_id': resource_id,

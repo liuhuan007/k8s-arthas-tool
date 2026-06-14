@@ -207,63 +207,65 @@ def delete_cluster(cluster_id: str):
 @login_required
 def test_cluster(cluster_id: str):
     """测试集群连接"""
-    import subprocess
+    from backend.core.kubectl import KubectlExecutor
     
     cluster, err, code = _check_cluster_access(cluster_id)
     if err:
         return jsonify(err), code
     
-    # 构建 kubectl 命令
-    cmd = ['kubectl', 'cluster-info']
-    if cluster.get('kubeconfig'):
-        cmd.extend(['--kubeconfig', cluster['kubeconfig']])
-    if cluster.get('context'):
-        cmd.extend(['--context', cluster['context']])
+    runner = KubectlExecutor(
+        kubeconfig=cluster.get('kubeconfig', ''),
+        context=cluster.get('context', ''),
+    )
     
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=10)
-        stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ''
-        stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ''
-        if result.returncode == 0:
+        ok, msg = runner.cluster_info()
+        if ok:
             return jsonify({'ok': True, 'message': '连接成功'})
         else:
-            return jsonify({'ok': False, 'error': stderr or '连接失败'}), 400
-    except subprocess.TimeoutExpired:
-        return jsonify({'ok': False, 'error': '连接超时'}), 400
-    except FileNotFoundError:
-        return jsonify({'ok': False, 'error': 'kubectl 未找到'}), 400
+            return jsonify({'ok': False, 'error': _parse_kubectl_error(msg) or msg or '连接失败'}), 400
+    except Exception as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+
+
+def _parse_kubectl_error(stderr: str) -> str:
+    """解析 kubectl stderr，返回用户友好的错误信息"""
+    if 'the server has asked for the client to provide credentials' in stderr:
+        return 'kubectl 认证失败：kubeconfig 中的凭据无效或已过期，请更新 kubeconfig 配置'
+    if 'Unable to connect to the server' in stderr:
+        return 'kubectl 无法连接到集群，请检查网络和 kubeconfig 配置'
+    if 'No resources found' in stderr:
+        return ''
+    # 从多行 stderr 中提取关键错误信息（跳过 memcache.go 等库内部日志）
+    lines = stderr.strip().splitlines()
+    meaningful = [l for l in lines if 'memcache.go' not in l and 'Unhandled Error' not in l]
+    return meaningful[-1].strip() if meaningful else stderr.strip()[:200]
 
 
 @clusters_bp.route('/clusters/<cluster_id>/namespaces', methods=['GET'])
 @login_required
 def list_namespaces(cluster_id: str):
     """获取命名空间列表"""
-    import subprocess
+    from backend.core.kubectl import KubectlExecutor
     
     cluster, err, code = _check_cluster_access(cluster_id)
     if err:
         return jsonify(err), code
     
-    # 构建 kubectl 命令
-    cmd = ['kubectl', 'get', 'ns', '-o', 'json']
-    if cluster.get('kubeconfig'):
-        cmd.extend(['--kubeconfig', cluster['kubeconfig']])
-    if cluster.get('context'):
-        cmd.extend(['--context', cluster['context']])
+    runner = KubectlExecutor(
+        kubeconfig=cluster.get('kubeconfig', ''),
+        context=cluster.get('context', ''),
+    )
     
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=10)
-        stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ''
-        stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ''
-        if result.returncode == 0:
-            data = json.loads(stdout)
+        rc, out, stderr = runner._run(["get", "ns", "-o", "json"], timeout=10)
+        if rc == 0:
+            data = json.loads(out)
             ns_list = [item['metadata']['name'] for item in data.get('items', [])]
             ns_list = AuthorizationService.filter_namespaces(current_user, cluster.get('id') or cluster_id, ns_list)
             return jsonify({'namespaces': ns_list})
         else:
-            return jsonify({'error': stderr}), 400
-    except subprocess.TimeoutExpired:
-        return jsonify({'error': '请求超时'}), 400
+            return jsonify({'error': _parse_kubectl_error(stderr) or '获取命名空间列表失败'}), 400
     except json.JSONDecodeError:
         return jsonify({'error': '解析失败'}), 400
 
@@ -272,7 +274,7 @@ def list_namespaces(cluster_id: str):
 @login_required
 def list_pods(cluster_id: str):
     """获取 Pod 列表"""
-    import subprocess
+    from backend.core.kubectl import KubectlExecutor
     
     cluster, err, code = _check_cluster_access(cluster_id)
     if err:
@@ -282,19 +284,15 @@ def list_pods(cluster_id: str):
     if not AuthorizationService.can_access_namespace(current_user, cluster.get('id') or cluster_id, namespace):
         return jsonify({'error': '无权访问该 namespace'}), 403
     
-    # 构建 kubectl 命令
-    cmd = ['kubectl', 'get', 'pods', '-n', namespace, '-o', 'json']
-    if cluster.get('kubeconfig'):
-        cmd.extend(['--kubeconfig', cluster['kubeconfig']])
-    if cluster.get('context'):
-        cmd.extend(['--context', cluster['context']])
+    runner = KubectlExecutor(
+        kubeconfig=cluster.get('kubeconfig', ''),
+        context=cluster.get('context', ''),
+    )
     
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=10)
-        stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ''
-        stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ''
-        if result.returncode == 0:
-            data = json.loads(stdout)
+        rc, out, stderr = runner._run(["-n", namespace, "get", "pods", "-o", "json"], timeout=15)
+        if rc == 0:
+            data = json.loads(out)
             pods = []
             for item in data.get('items', []):
                 pods.append({
@@ -306,16 +304,16 @@ def list_pods(cluster_id: str):
                 })
             return jsonify({'pods': pods})
         else:
-            return jsonify({'error': stderr}), 400
-    except subprocess.TimeoutExpired:
-        return jsonify({'error': '请求超时'}), 400
+            return jsonify({'error': _parse_kubectl_error(stderr) or '获取 Pod 列表失败'}), 400
+    except json.JSONDecodeError:
+        return jsonify({'error': '解析失败'}), 400
 
 
 @clusters_bp.route('/clusters/<cluster_id>/contexts', methods=['GET'])
 @login_required
 def list_contexts(cluster_id: str):
     """获取可用上下文列表"""
-    import subprocess
+    from backend.core.kubectl import KubectlExecutor
     
     cluster, err, code = _check_cluster_access(cluster_id)
     if err:
@@ -324,17 +322,18 @@ def list_contexts(cluster_id: str):
     if not cluster.get('kubeconfig'):
         return jsonify({'error': '未配置 kubeconfig'}), 400
     
-    cmd = ['kubectl', 'config', 'get-contexts', '-o', 'json']
+    runner = KubectlExecutor(
+        kubeconfig=cluster.get('kubeconfig', ''),
+        context=cluster.get('context', ''),
+    )
     
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=10)
-        stdout = result.stdout.decode('utf-8', errors='replace') if result.stdout else ''
-        stderr = result.stderr.decode('utf-8', errors='replace') if result.stderr else ''
-        if result.returncode == 0:
-            data = json.loads(stdout)
+        rc, out, stderr = runner._run(["config", "get-contexts", "-o", "json"], timeout=10)
+        if rc == 0:
+            data = json.loads(out)
             contexts = [c['name'] for c in data.get('clusters', [])]
             return jsonify({'contexts': contexts})
         else:
-            return jsonify({'error': stderr}), 400
-    except subprocess.TimeoutExpired:
-        return jsonify({'error': '请求超时'}), 400
+            return jsonify({'error': _parse_kubectl_error(stderr) or '获取上下文列表失败'}), 400
+    except json.JSONDecodeError:
+        return jsonify({'error': '解析失败'}), 400

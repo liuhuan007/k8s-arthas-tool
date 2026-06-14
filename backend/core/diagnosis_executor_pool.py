@@ -45,6 +45,8 @@ class DiagnosisExecutorPool:
         
         # 活跃执行追踪
         self.active_executions: Dict[str, Dict[str, Any]] = {}
+        # 取消信号：execution_id → threading.Event
+        self.cancel_events: Dict[str, threading.Event] = {}
         self._lock = threading.Lock()
     
     def submit_diagnosis(
@@ -105,7 +107,8 @@ class DiagnosisExecutorPool:
                 f'Pod {pod_key} 正在被诊断，请稍后重试'
             )
         
-        # 5. 注册活跃执行
+        # 5. 注册活跃执行 + 创建取消信号
+        cancel_event = threading.Event()
         with self._lock:
             self.active_executions[execution_id] = {
                 'execution_id': execution_id,
@@ -116,8 +119,9 @@ class DiagnosisExecutorPool:
                 'started_at': time.time(),
                 'user_id': user_id,
             }
+            self.cancel_events[execution_id] = cancel_event
         
-        # 6. 返回锁和清理函数
+        # 6. 返回锁、取消信号和清理函数
         def cleanup(status='completed', error=None):
             """执行完成后清理"""
             with self._lock:
@@ -126,22 +130,24 @@ class DiagnosisExecutorPool:
                     if error:
                         self.active_executions[execution_id]['error'] = error
                     self.active_executions[execution_id]['finished_at'] = time.time()
-            
+
             # 释放 Pod 锁
             pod_lock.release()
-            
+
             # 3 秒后从活跃列表移除
             def delayed_cleanup():
                 time.sleep(3)
                 with self._lock:
                     self.active_executions.pop(execution_id, None)
-            
+                    self.cancel_events.pop(execution_id, None)
+
             threading.Thread(target=delayed_cleanup, daemon=True).start()
-        
+
         return {
             'ok': True,
             'execution_id': execution_id,
             'pod_lock': pod_lock,
+            'cancel_event': cancel_event,
             'cleanup': cleanup,
         }
     
@@ -170,6 +176,15 @@ class DiagnosisExecutorPool:
             'status': 'submitted',
         }
     
+    def is_cancelled(self, execution_id: str) -> bool:
+        """检查执行是否已取消（内存信号，比 DB 查询快）"""
+        cancel_event = self.cancel_events.get(execution_id)
+        if cancel_event and cancel_event.is_set():
+            return True
+        with self._lock:
+            execution = self.active_executions.get(execution_id)
+            return bool(execution and execution.get('status') == 'cancelled')
+
     def get_active_count(self) -> int:
         """获取活跃执行数"""
         with self._lock:
@@ -185,14 +200,18 @@ class DiagnosisExecutorPool:
     
     def cancel_execution(self, execution_id: str) -> bool:
         """
-        取消执行
-        
-        注意：只能取消排队中的任务，已执行的任务无法取消
+        取消执行（协作式）
+
+        设置取消信号，场景方案每步前检查此信号。
         """
         with self._lock:
             execution = self.active_executions.get(execution_id)
             if execution and execution['status'] == 'running':
                 execution['status'] = 'cancelled'
+                # 设置取消信号，通知正在执行的场景方案停止后续步骤
+                cancel_event = self.cancel_events.get(execution_id)
+                if cancel_event:
+                    cancel_event.set()
                 return True
         return False
     

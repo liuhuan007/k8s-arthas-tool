@@ -144,13 +144,13 @@ class ConnectionAwareExecutor:
         """
         # 查询已执行的步骤
         steps = db.fetch_all(
-            'SELECT step_number, command, status FROM task_step_logs WHERE execution_id = ?',
+            'SELECT step_number, command, status FROM step_logs WHERE run_id = ?',
             (execution_id,)
         )
         
         # 记录回滚日志
         for step in steps:
-            if step['status'] == 'completed':
+            if step['status'] == 'success':
                 print(
                     f"[场景方案回滚] 步骤 {step['step_number']} 已执行: "
                     f"{step['command']}（无法回滚）"

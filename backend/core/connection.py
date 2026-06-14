@@ -210,12 +210,21 @@ class ArthasConnection:
                 current_info = self.state_manager.get_connection_state(self.connection_id)
                 current_state = current_info.get("state", ConnectionState.DISCONNECTED)
                 
+                # 从 connection_id 解析 user_id (格式: cluster/ns/pod@u{user_id})
+                user_id = None
+                if "@u" in self.connection_id:
+                    try:
+                        user_id = int(self.connection_id.split("@u")[-1])
+                    except (ValueError, IndexError):
+                        pass
+                
                 # 通过状态管理器执行转换
                 success = self.state_manager.transition_state(
                     self.connection_id,
                     current_state,
                     state,
-                    message=message
+                    message=message,
+                    user_id=user_id
                 )
                 if not success:
                     log.warning("State transition rejected by manager: %s -> %s", 

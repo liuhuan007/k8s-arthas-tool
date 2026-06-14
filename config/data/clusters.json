@@ -4,5 +4,11 @@
     "name": "性能环境",
     "kubeconfig": "C:\\Users\\Administrator\\.kube\\config-performance",
     "context": "kubernetes-admin@cluster.local"
+  },
+  {
+    "id": "87ca21d0",
+    "name": "内部环境",
+    "kubeconfig": "C:\\Users\\Administrator\\.kube\\config",
+    "context": "kubernetes-admin@cluster.local"
   }
 ]

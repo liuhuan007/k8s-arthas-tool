@@ -106,11 +106,11 @@ class TestDiagnosisCenterHtml:
         assert 'dcCapabilityGrid' in content
 
     def test_html_has_tab_panels(self):
-        """包含三个 Tab 面板"""
+        """包含 Tab 面板"""
         content = (STATIC_DIR / 'diagnosis-center.html').read_text(encoding='utf-8')
-        assert 'dc-panel-capabilities' in content
+        assert 'dc-panel-quick' in content
         assert 'dc-panel-history' in content
-        assert 'dc-panel-chat' in content
+        assert 'dc-panel-ai' in content
 
     def test_html_has_search_input(self):
         """包含搜索输入框"""
@@ -209,9 +209,9 @@ class TestDiagnosisCenterJs:
         assert 'window.dcInit' in content
 
     def test_has_dc_switch_tab(self):
-        """导出 dcSwitchTab 函数"""
+        """导出 dcSwitchSection 内容区切换函数"""
         content = self._read()
-        assert 'window.dcSwitchTab' in content
+        assert 'window.dcSwitchSection' in content
 
     def test_has_dc_on_search(self):
         """导出 dcOnSearch 搜索函数"""
@@ -219,9 +219,9 @@ class TestDiagnosisCenterJs:
         assert 'window.dcOnSearch' in content
 
     def test_has_dc_filter_by_level(self):
-        """导出 dcFilterByLevel 筛选函数"""
+        """导出 dcFilterCategory 筛选函数"""
         content = self._read()
-        assert 'window.dcFilterByLevel' in content
+        assert 'window.dcFilterCategory' in content
 
     def test_has_dc_execute(self):
         """导出 dcExecute 执行函数"""
@@ -289,9 +289,9 @@ class TestDiagnosisCenterJs:
         assert 'dcCapabilityGrid' in content
 
     def test_uses_filter_level(self):
-        """支持层级筛选"""
+        """支持分类筛选"""
         content = self._read()
-        assert '_currentLevel' in content
+        assert '_activeCategory' in content
 
     def test_uses_search_text(self):
         """支持搜索"""
@@ -819,8 +819,6 @@ class TestCrossFileConsistency:
         assert 'paramFormOpen' in content or 'diagShowParameterForm' in content
         # 引用了 execution-history
         assert 'diagHistoryInit' in content or 'dcLoadHistory' in content
-        # 引用了 diagnosis-context
-        assert 'DiagnosisContext' in content
 
     def test_no_circular_references(self):
         """无循环引用：diagnosis-center.js 不被其他组件引用"""

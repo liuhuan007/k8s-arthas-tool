@@ -53,8 +53,8 @@ class Config:
     @classmethod
     def validate_production(cls):
         """启动时校验生产环境安全配置"""
-        if cls.SECRET_KEY == _DEFAULT_SECRET:
+        if not os.environ.get('SECRET_KEY'):
             warnings.warn(
-                "⚠ SECRET_KEY 使用默认值，生产环境必须设置 SECRET_KEY 环境变量！",
+                "⚠ SECRET_KEY 未设置，当前使用随机生成值（重启后会话失效）。生产环境请设置 SECRET_KEY 环境变量！",
                 stacklevel=2
             )

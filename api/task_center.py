@@ -49,7 +49,7 @@ log = logging.getLogger(__name__)
 def list_capabilities():
     """查询诊断能力目录"""
     type_filter = request.args.get('type')
-    category_filter = request.args.get('category')
+    category_filter = request.args.get('category') or type_filter  # type 是 category 的别名
     level_filter = request.args.get('level')
     keyword = request.args.get('keyword', '').strip()
     include_disabled = request.args.get('include_disabled') == '1'
@@ -57,15 +57,15 @@ def list_capabilities():
     where_clauses = []
     params = []
 
-    if type_filter:
-        where_clauses.append('category = ?')
-        params.append(type_filter)
     if category_filter:
         where_clauses.append('category = ?')
         params.append(category_filter)
     if level_filter:
-        where_clauses.append('level = ?')
-        params.append(int(level_filter))
+        try:
+            where_clauses.append('level = ?')
+            params.append(int(level_filter))
+        except (ValueError, TypeError):
+            return _error('level 参数必须是整数')
     if keyword:
         where_clauses.append('(name LIKE ? OR description LIKE ?)')
         params.extend([f'%{keyword}%', f'%{keyword}%'])
@@ -125,8 +125,6 @@ def load_extension(cap_type: str, capability_id: int) -> dict:
     已移除（空壳表），返回空 extension。
     """
     return {}
-
-    return extension
 
 
 _CAPABILITY_CATEGORIES = {'quick', 'tool', 'scenario', 'ai', 'mcp'}
@@ -481,7 +479,8 @@ def _json_loads(text: Optional[str], default: Any = None) -> Any:
         return {} if default is None else default
     try:
         return json.loads(text)
-    except Exception:
+    except (json.JSONDecodeError, TypeError) as exc:
+        log.warning('JSON 解析失败: %s (input=%s...)', exc, str(text)[:80])
         return {} if default is None else default
 
 
@@ -527,7 +526,7 @@ def _validate_tool_install_path(value: Any) -> str:
         raise ValueError('安装路径必须是 Pod 内绝对路径')
     if '..' in Path(path).parts or '\n' in path or '\r' in path or '\x00' in path:
         raise ValueError('安装路径包含非法字符')
-    blocked = ('/etc', '/bin', '/sbin', '/usr/bin', '/usr/sbin')
+    blocked = ('/etc', '/bin', '/sbin', '/usr/bin', '/usr/sbin', '/root', '/home', '/proc', '/sys', '/dev', '/var', '/boot', '/lib', '/lib64')
     if path in blocked or any(path.startswith(prefix + '/') for prefix in blocked):
         raise ValueError('安装路径不能位于系统敏感目录')
     return path
@@ -711,9 +710,9 @@ def _run_node_task(run_id: str, task: Dict[str, Any]) -> Dict[str, Any]:
 
 def _get_cluster_config(cluster_name: str) -> Dict[str, str]:
     """复用 server.py 的集群配置和用户权限校验逻辑，避免在任务中心重复维护集群权限。"""
-    from server import _load_clusters
+    from backend.app_context import load_clusters
 
-    clusters = _load_clusters()
+    clusters = load_clusters()
     cluster = next((c for c in clusters if c.get('name') == cluster_name), None)
     if not cluster:
         raise ValueError('集群不存在')
@@ -1232,6 +1231,10 @@ def init_task_tables():
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_task_logs_user_created ON task_logs(user_id, created_at DESC)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_task_logs_task_created ON task_logs(task_id, created_at DESC)')
         cursor.execute('CREATE INDEX IF NOT EXISTS idx_task_logs_status_started ON task_logs(status, started_at DESC)')
+        # 复合索引：step_logs 按 run_id + step_number 排序（替代单列 run_id 索引）
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_step_logs_run_step ON step_logs(run_id, step_number)')
+        # 复合索引：能力目录按 level + category 排序
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_diag_caps_level_category ON diagnosis_capabilities(level, category, id)')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS task_schedules (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1769,6 +1772,9 @@ def create_definition():
         return _error('任务名称不能为空')
     if not execution_mode:
         return _error('执行位置仅支持 node / pod')
+    # 安全限制：node 模式下在服务器本地执行脚本，仅限 admin
+    if execution_mode == 'node' and not _is_admin_user():
+        return _error('Node 本机执行仅限管理员', 403)
     if not template_id and not script_body:
         return _error('请选择脚本模板或填写内联脚本')
     try:
@@ -1816,6 +1822,9 @@ def run_definition(task_id: int):
         return _error('任务不是 active 状态，不能执行')
     if not _validate_execution_mode(task.get('execution_mode') or 'node'):
         return _error('执行位置仅支持 node / pod')
+    # 安全限制：node 模式下在服务器本地执行脚本，仅限 admin
+    if task.get('execution_mode') == 'node' and not _is_admin_user():
+        return _error('Node 本机执行仅限管理员', 403)
 
     run = _execute_task_definition(task, current_user.id)
     return jsonify({'ok': True, 'run': _row_to_run(run, include_logs=True)})
@@ -1840,6 +1849,10 @@ def delete_definition(task_id: int):
 def list_runs():
     limit = min(int(request.args.get('limit', 50)), 200)
     offset = int(request.args.get('offset', 0))
+    total = db.fetch_one(
+        "SELECT COUNT(*) AS cnt FROM task_logs WHERE user_id = ? AND execution_type = 'script'",
+        (current_user.id,)
+    )
     rows = db.fetch_all('''
         SELECT r.*, d.name AS task_name
         FROM task_logs r
@@ -1848,7 +1861,12 @@ def list_runs():
         ORDER BY r.created_at DESC
         LIMIT ? OFFSET ?
     ''', (current_user.id, limit, offset))
-    return jsonify({'runs': [_row_to_run(row) for row in rows]})
+    return jsonify({
+        'runs': [_row_to_run(row) for row in rows],
+        'total': total['cnt'] if total else 0,
+        'limit': limit,
+        'offset': offset,
+    })
 
 
 @task_bp.route('/runs/<run_id>/logs', methods=['GET'])
@@ -1898,21 +1916,39 @@ def cancel_task_run(run_id: str):
         'id = ?',
         (run_id,),
     )
+
+    # 通知 DiagnosisExecutorPool 设置取消信号（加速场景方案步骤中断）
+    try:
+        from backend.core.diagnosis_executor_pool import get_diagnosis_executor_pool
+        pool = get_diagnosis_executor_pool()
+        pool.cancel_execution(run_id)
+    except Exception:
+        pass  # 任务可能不在 pool 中（如手动任务），忽略错误
+
     return jsonify({'ok': True, 'run_id': run_id, 'status': 'cancelled'})
 
 
 @task_bp.route('/diagnosis/history', methods=['GET'])
 @login_required
 def diagnosis_history():
-    """查询诊断执行历史（能力执行记录 + Profiler 采样记录）。"""
+    """查询诊断执行历史（仅 diagnosis 类型记录）。"""
     limit = min(int(request.args.get('limit', 50)), 200)
     offset = int(request.args.get('offset', 0))
+    status_filter = request.args.get('status', '').strip()
 
-    where_sql = '1=1'
+    where_sql = "t.execution_type = 'diagnosis'"
     params = []
     if not getattr(current_user, 'is_admin', False):
         where_sql += ' AND t.user_id = ?'
         params.append(current_user.id)
+    if status_filter:
+        where_sql += ' AND t.status = ?'
+        params.append(status_filter)
+
+    total = db.fetch_one(
+        f'SELECT COUNT(*) AS cnt FROM task_logs t WHERE {where_sql}',
+        tuple(params)
+    )
 
     rows = db.fetch_all(f'''
         SELECT
@@ -1949,7 +1985,14 @@ def diagnosis_history():
         item['result'] = _json_loads(item.pop('result_json', None), None)
         history.append(item)
 
-    return jsonify({'ok': True, 'history': history, 'count': len(history)})
+    return jsonify({
+        'ok': True,
+        'history': history,
+        'count': len(history),
+        'total': total['cnt'] if total else 0,
+        'limit': limit,
+        'offset': offset,
+    })
 
 
 # ─────────────────────────────────────────────────────────────
@@ -2065,8 +2108,7 @@ def delete_schedule(schedule_id: int):
 # 后台调度器
 # ─────────────────────────────────────────────────────────────
 
-import logging as _logging
-_sched_log = _logging.getLogger('task_scheduler')
+_sched_log = logging.getLogger('task_scheduler')
 
 
 def _run_due_schedules_once() -> int:
@@ -2284,6 +2326,7 @@ def _run_diagnosis_execution(
     connection: Dict[str, Any],
     user_id: int,
     cleanup,
+    cancel_event=None,
 ) -> Dict[str, Any]:
     from backend.core.connection_aware_executor import get_connection_aware_executor
 
@@ -2293,7 +2336,7 @@ def _run_diagnosis_execution(
         if capability['category'] in ('quick', 'tool'):
             return _execute_arthas_command(capability, extension, params, active_conn)
         if capability['category'] == 'scenario':
-            return _execute_scenario(capability, extension, params, active_conn, run_id=run_id)
+            return _execute_scenario(capability, extension, params, active_conn, run_id=run_id, cancel_event=cancel_event)
         if capability['category'] == 'ai':
             return _execute_ai_diagnosis(capability, extension, params, connection)
         if capability['category'] == 'mcp':
@@ -2390,11 +2433,13 @@ def execute_diagnosis():
     )
 
     cleanup = submit_result['cleanup']
+    cancel_event = submit_result.get('cancel_event')
     if capability['category'] in ('scenario', 'ai'):
         thread = threading.Thread(
             target=lambda: _run_diagnosis_execution(
                 run_id, connection_id, capability, extension, params,
                 active_conn, connection, current_user.id, cleanup,
+                cancel_event=cancel_event,
             ),
             name=f'diagnosis-{run_id[:8]}',
             daemon=True,
@@ -2406,6 +2451,7 @@ def execute_diagnosis():
         result = _run_diagnosis_execution(
             run_id, connection_id, capability, extension, params,
             active_conn, connection, current_user.id, cleanup,
+            cancel_event=cancel_event,
         )
     except Exception as exc:
         return _error(f'诊断执行失败: {str(exc)}', 500)
@@ -2460,26 +2506,30 @@ def _execute_arthas_command(capability, extension, params, connection):
     }
 
 
-def _execute_scenario(capability, extension, params, connection, run_id=None):
+def _execute_scenario(capability, extension, params, connection, run_id=None, cancel_event=None):
     """执行场景方案（多步骤）"""
     from backend.core.arthas_executor import ArthasCommandExecutor
 
     if not connection or not getattr(connection, 'http_client', None):
         raise ValueError('Arthas 连接不可用，请重新建立连接')
-    
+
     # 解析步骤
     steps = extension.get('steps', [])
     if not steps:
         raise ValueError('场景方案未配置步骤')
-    
+
     # 执行步骤（支持跨步数据传递）
     step_outputs = {}
     step_results = []
     total_duration = 0
-    
+
     cancelled = False
 
     for step in steps:
+        # 检查取消信号：优先检查内存中的 cancel_event（更快），其次查 DB
+        if cancel_event and cancel_event.is_set():
+            cancelled = True
+            break
         if run_id and _is_task_log_cancelled(run_id):
             cancelled = True
             break
@@ -2680,7 +2730,16 @@ def get_script_template(template_id):
 @task_bp.route('/script-templates/<int:template_id>', methods=['PUT'])
 @login_required
 def update_script_template(template_id):
-    """更新脚本模板"""
+    """更新脚本模板（仅创建者或 admin）"""
+    template = db.fetch_one(
+        'SELECT * FROM script_templates WHERE id = ?',
+        (template_id,)
+    )
+    if not template:
+        return jsonify({'ok': False, 'message': '模板不存在'}), 404
+    if template.get('created_by') != current_user.id and not _is_admin_user():
+        return jsonify({'ok': False, 'message': '无权修改此模板'}), 403
+
     data = request.get_json()
     
     fields = {}
@@ -2709,15 +2768,17 @@ def update_script_template(template_id):
 @task_bp.route('/script-templates/<int:template_id>', methods=['DELETE'])
 @login_required
 def delete_script_template(template_id):
-    """删除脚本模板"""
+    """删除脚本模板（仅创建者或 admin）"""
     template = db.fetch_one(
-        'SELECT id FROM script_templates WHERE id = ?',
+        'SELECT * FROM script_templates WHERE id = ?',
         (template_id,)
     )
-    
+
     if not template:
         return jsonify({'ok': False, 'message': '模板不存在'}), 404
-    
+    if template.get('created_by') != current_user.id and not _is_admin_user():
+        return jsonify({'ok': False, 'message': '无权删除此模板'}), 403
+
     db.execute('DELETE FROM script_templates WHERE id = ?', (template_id,))
     
     return jsonify({
@@ -2733,10 +2794,16 @@ def delete_script_template(template_id):
 @task_bp.route('/health/connections', methods=['GET'])
 @login_required
 def check_connections_health():
-    """检查所有 Arthas 连接健康状态"""
+    """检查当前用户的 Arthas 连接健康状态"""
     from backend.core.connection import ArthasConnection
-    
-    connections = db.fetch_all('SELECT * FROM connections WHERE status = ?', ('active',))
+
+    if getattr(current_user, 'is_admin', False):
+        connections = db.fetch_all('SELECT * FROM connections WHERE status = ?', ('active',))
+    else:
+        connections = db.fetch_all(
+            'SELECT * FROM connections WHERE status = ? AND user_id = ?',
+            ('active', current_user.id)
+        )
     
     health_results = []
     for conn in connections:

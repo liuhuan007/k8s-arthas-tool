@@ -73,7 +73,7 @@ class TestHotfixConnectionDiagnosis(unittest.TestCase):
         """诊断: 后端是否正确导入 _connections"""
         # 应该有 try-except 处理 ImportError
         self.assertIn("try:", self.hotfix_py)
-        self.assertIn("from server import _connections, _connections_lock", self.hotfix_py)
+        self.assertIn("from backend.app_context import connections, connections_lock, ensure_connection", self.hotfix_py)
         self.assertIn("except ImportError:", self.hotfix_py)
         
         print("[OK] 后端导入 _connections 有异常处理")
@@ -145,7 +145,7 @@ class TestHotfixConnectionDiagnosis(unittest.TestCase):
             issues.append("❌ 前端缺少调试日志")
         
         # 3. 后端导入
-        if "from server import _connections" not in self.hotfix_py:
+        if "from backend.app_context import connections" not in self.hotfix_py:
             issues.append("❌ 后端未导入 _connections")
         
         # 4. 后端日志

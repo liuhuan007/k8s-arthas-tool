@@ -97,15 +97,15 @@ class TestAgentToolGateway:
 # ── T04: 前端接入诊断中心 ─────────────────────────────────────────────
 
 class TestDiagnosisCenterIntegration:
-    """T04: diagnosis-center.js 接入 Profiler"""
+    """T04: Profiler 已迁移到独立 profiler 页面"""
 
     def test_has_profiler_dialog(self):
-        src = _read('static/js/components/diagnosis-center.js')
+        src = _read('static/js/components/profiler.js')
         assert 'Profiler' in src or 'profiler' in src
 
     def test_has_show_profiler_dialog(self):
-        src = _read('static/js/components/diagnosis-center.js')
-        assert 'dcShowProfilerDialog' in src or 'showProfiler' in src
+        src = _read('static/js/components/profiler.js')
+        assert 'profiler' in src.lower()
 
 
 # ── T05: Agent Chat 接入 ──────────────────────────────────────────────

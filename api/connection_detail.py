@@ -146,9 +146,9 @@ def get_connection_health(connection_id: str):
 
     # 尝试从内存缓存获取更精确的数据
     try:
-        from server import _conn_health, _conn_health_lock
-        with _conn_health_lock:
-            cached = _conn_health.get(connection_id)
+        from backend.app_context import conn_health, conn_health_lock
+        with conn_health_lock:
+            cached = conn_health.get(connection_id)
             if cached:
                 data["health_status"] = cached.get("status", data["health_status"])
                 data["last_health_check"] = cached.get(
@@ -278,9 +278,9 @@ def trigger_health_check(connection_id: str):
 
     # 同步更新内存缓存
     try:
-        from server import _conn_health, _conn_health_lock
-        with _conn_health_lock:
-            _conn_health[connection_id] = {
+        from backend.app_context import conn_health, conn_health_lock
+        with conn_health_lock:
+            conn_health[connection_id] = {
                 "status": health_status,
                 "latency_ms": latency_ms,
                 "last_check_at": now_str,
@@ -548,9 +548,9 @@ def delete_connection(connection_id: str):
 
         # 通知内存缓存清理
         try:
-            from server import _conn_health, _conn_health_lock
-            with _conn_health_lock:
-                _conn_health.pop(connection_id, None)
+            from backend.app_context import conn_health, conn_health_lock
+            with conn_health_lock:
+                conn_health.pop(connection_id, None)
         except (ImportError, Exception):
             pass
 

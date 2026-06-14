@@ -27,6 +27,7 @@ DIAGNOSIS_RESULT_JS = (JS_COMPONENTS / 'diagnosis-result.js').read_text(encoding
 DIAGNOSIS_HISTORY_JS = (JS_COMPONENTS / 'diagnosis-history.js').read_text(encoding='utf-8')
 DIAGNOSIS_EXECUTION_JS = (JS_COMPONENTS / 'diagnosis-execution.js').read_text(encoding='utf-8')
 DIAGNOSIS_RENDERER_JS = (JS_COMPONENTS / 'diagnosis-renderer.js').read_text(encoding='utf-8')
+DIAGNOSIS_CENTER_JS = (JS_COMPONENTS / 'diagnosis-center.js').read_text(encoding='utf-8')
 DIAGNOSIS_CONTEXT_JS = (JS_CORE / 'diagnosis-context.js').read_text(encoding='utf-8')
 API_JS = (STATIC / 'js' / 'core' / 'api.js').read_text(encoding='utf-8')
 AI_CHAT_JS = (STATIC / 'js' / 'ai-chat.js').read_text(encoding='utf-8')
@@ -145,10 +146,23 @@ class TestDOMBindingContract:
     """HTML 容器 ID 与 JS DOM 操作的绑定一致性"""
 
     DOM_BINDINGS = {
-        'diagnosisCapList': {
+        'dcCapabilityGrid-quick': {
             'html': True,
-            'js': [DIAGNOSIS_JS],
-            'usage': '能力卡片容器',
+            'js': [DIAGNOSIS_CENTER_JS],
+            'usage': '快捷诊断能力卡片容器',
+            'js_pattern': 'dcCapabilityGrid-',
+        },
+        'dcCapabilityGrid-scenario': {
+            'html': True,
+            'js': [DIAGNOSIS_CENTER_JS],
+            'usage': '场景方案能力卡片容器',
+            'js_pattern': 'dcCapabilityGrid-',
+        },
+        'dcCapabilityGrid-ai': {
+            'html': True,
+            'js': [DIAGNOSIS_CENTER_JS],
+            'usage': 'AI 诊断能力卡片容器',
+            'js_pattern': 'dcCapabilityGrid-',
         },
         'diagFormContainer': {
             'html': True,
@@ -272,8 +286,10 @@ class TestDOMBindingContract:
         """DOM ID 应在对应的 JS 文件中被引用"""
         binding = self.DOM_BINDINGS[dom_id]
         all_js = '\n'.join(binding['js'])
-        assert dom_id in all_js, \
-            f"DOM ID '{dom_id}' ({binding['usage']}) 未在 JS 中被引用"
+        # 支持 pattern 匹配（用于动态构造的 ID）
+        check_str = binding.get('js_pattern', dom_id)
+        assert check_str in all_js, \
+            f"DOM ID '{dom_id}' ({binding['usage']}) 未在 JS 中被引用 (pattern: '{check_str}')"
 
     @pytest.mark.parametrize("dom_id", [
         dom_id for dom_id, b in DOM_BINDINGS.items() if b['html']

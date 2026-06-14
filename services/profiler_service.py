@@ -28,6 +28,8 @@ class ProfilerService:
     def __init__(self):
         """初始化 Profiler 服务"""
         self.db = get_db()
+        # task_id -> ProfilerWorkflow 实例（仅在任务运行期间存在）
+        self._running_workflows: Dict[str, ProfilerWorkflow] = {}
 
     def create_task(self, connection_id: str, task_type: str = 'cpu',
                    event: str = 'cpu', duration: int = 60,
@@ -117,12 +119,15 @@ class ProfilerService:
                 # 获取数据库连接
                 from api import get_connection_by_id
                 conn = get_connection_by_id(task['connection_id'])
-                
+
                 if not conn:
                     raise Exception(f"连接 {task['connection_id']} 不存在或已断开")
-                
+
                 # 创建 ProfilerWorkflow 实例
                 workflow = ProfilerWorkflow(conn)
+
+                # 存入运行中字典，供 stop_task 调用 cancel()
+                self._running_workflows[task_id] = workflow
                 
                 # 根据任务类型设置参数
                 mode = task['mode'] or task['type']
@@ -130,9 +135,9 @@ class ProfilerService:
                 duration = task['duration'] or 60
                 fmt = task['format'] or 'html'
                 
-                # 设置输出目录
-                from flask import current_app
-                output_dir = current_app.config.get('OUTPUT_DIR', 'profiler_output')
+                # 设置输出目录（直接使用 Config，因为此方法在后台线程中执行，无 Flask 应用上下文）
+                from backend.config import Config
+                output_dir = Config.OUTPUT_DIR
                 
                 # 执行工作流
                 result = workflow.run(
@@ -169,7 +174,11 @@ class ProfilerService:
                     'message': str(e),
                     'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 }, 'id = ?', (task_id,))
-        
+
+            finally:
+                # 清理运行中引用
+                self._running_workflows.pop(task_id, None)
+
         thread = threading.Thread(target=run_task, daemon=True)
         thread.start()
         
@@ -192,12 +201,20 @@ class ProfilerService:
         if not task:
             return {"success": False, "message": f"任务 {task_id} 不存在"}
         
-        if task['status'] != 'running':
+        if task['status'] not in ('running', 'starting'):
             return {
                 "success": False,
                 "message": f"任务状态为 {task['status']}，无法停止"
             }
-        
+
+        # 实际停止 ProfilerWorkflow
+        workflow = self._running_workflows.get(task_id)
+        if workflow:
+            workflow.cancel()
+            log.info("Profiler workflow cancel() 已调用: task_id=%s", task_id)
+        else:
+            log.warning("Profiler workflow 引用未找到（可能已完成）: task_id=%s", task_id)
+
         # 更新任务状态为 stopped
         now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         self.db.update('profiler_tasks', {
@@ -205,10 +222,7 @@ class ProfilerService:
             'message': '任务已停止',
             'updated_at': now_ts,
         }, 'id = ?', (task_id,))
-        
-        # TODO: 实际停止 ProfilerWorkflow 的执行
-        # 需要通过某种方式获取正在运行的 workflow 实例并调用 cancel()
-        
+
         log.info("Profiler 任务已停止: task_id=%s", task_id)
         return {"success": True, "message": "任务已停止"}
 
@@ -340,11 +354,21 @@ class ProfilerService:
                 "profiler_result": result
             }
             
-            # 写入 task_logs 表
+            # 写入 task_logs 表（connection_id 存在 target_json 中，与表结构一致）
             self.db.insert('task_logs', {
                 'id': f"prof-{task_id}",
-                'connection_id': task.get('connection_id', ''),
+                'user_id': task.get('user_id'),
                 'capability_id': None,  # Profiler 不是 capability
+                'execution_mode': 'manual',
+                'execution_type': 'profiler',
+                'run_type': 'profiler',
+                'target_json': json.dumps({
+                    'connection_id': task.get('connection_id', ''),
+                    'cluster_name': task.get('cluster_name', ''),
+                    'namespace': task.get('namespace', ''),
+                    'pod_name': task.get('pod_name', ''),
+                    'type': task.get('type', ''),
+                }),
                 'status': status,
                 'result_json': json.dumps(result_data, ensure_ascii=False),
                 'started_at': task.get('created_at', now_ts),

@@ -93,7 +93,7 @@ class CleanupService:
                 # 记录审计日志
                 from services.audit_service import AuditService
                 AuditService._log_raw(
-                    conn.get('owner_user_id', 0),
+                    conn.get('owner_user_id'),  # None 时写 NULL，避免 FK 约束失败
                     'connection_ttl_cleanup',
                     'connection',
                     str(conn_id),

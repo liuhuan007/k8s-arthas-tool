@@ -504,10 +504,10 @@ def _get_connection_info(connection_id: str) -> str:
     """获取当前连接信息，用于 AI 上下文"""
     if not connection_id:
         # 尝试使用当前用户的活跃连接（优先最近的）
-        from server import _connections, _connections_lock
-        with _connections_lock:
+        from backend.app_context import connections, connections_lock
+        with connections_lock:
             alive_conns = []
-            for cid, entry in _connections.items():
+            for cid, entry in connections.items():
                 if entry.get('user_id') == current_user.id:
                     conn = entry.get('conn')
                     if conn and conn.is_alive():
@@ -518,9 +518,9 @@ def _get_connection_info(connection_id: str) -> str:
     if not connection_id:
         return "未连接到任何 Pod，请先在左侧面板连接目标 Pod。"
 
-    from server import _connections, _connections_lock
-    with _connections_lock:
-        entry = _connections.get(connection_id)
+    from backend.app_context import connections, connections_lock
+    with connections_lock:
+        entry = connections.get(connection_id)
         if not entry:
             return f"连接 {connection_id} 不存在。"
 
@@ -965,15 +965,15 @@ def _arthas_diagnose_performance(target: str, class_pattern: str, method_pattern
 
 def _get_alive_connection(connection_id: str):
     """获取活跃的 Arthas 连接"""
-    from server import _connections, _connections_lock
+    from backend.app_context import connections, connections_lock
 
     # 如果没有指定 connection_id，尝试找当前用户的活跃连接
     if not connection_id:
-        with _connections_lock:
+        with connections_lock:
             # 优先找第一个活跃连接（按最近连接时间排序，最新的在前）
             # Python 3.7+ dict 保持插入顺序，最新的连接在后面
             alive_conns = []
-            for cid, entry in _connections.items():
+            for cid, entry in connections.items():
                 if entry.get('user_id') == current_user.id:
                     conn = entry.get('conn')
                     if conn and conn.is_alive():
@@ -983,8 +983,8 @@ def _get_alive_connection(connection_id: str):
                 return alive_conns[-1][1]
         return None
 
-    with _connections_lock:
-        entry = _connections.get(connection_id)
+    with connections_lock:
+        entry = connections.get(connection_id)
         if entry and entry.get('user_id') == current_user.id:
             conn = entry.get('conn')
             if conn and conn.is_alive():

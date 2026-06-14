@@ -60,9 +60,9 @@ def _get_arthas_connection(connection_id: str):
         ArthasConnection 或 None
     """
     try:
-        from server import _connections  # 全局活跃连接字典
-        if _connections and connection_id in _connections:
-            return _connections[connection_id]
+        from backend.app_context import connections  # 全局活跃连接字典
+        if connections and connection_id in connections:
+            return connections[connection_id]
     except (ImportError, AttributeError):
         pass
 

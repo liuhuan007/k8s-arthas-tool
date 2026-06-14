@@ -32,9 +32,9 @@ class AgentToolGateway:
     def _get_connection(self, connection_id: str):
         """获取活跃的 Arthas 连接"""
         try:
-            from server import _connections, _connections_lock
-            with _connections_lock:
-                entry = _connections.get(connection_id)
+            from backend.app_context import connections, connections_lock
+            with connections_lock:
+                entry = connections.get(connection_id)
             if entry and entry.get('conn'):
                 conn = entry['conn']
                 # 验证连接是否存活

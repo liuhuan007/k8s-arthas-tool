@@ -313,18 +313,18 @@ def mcp_proxy(token):
 
 @mcp_bp.route('/api/mcp/connections', methods=['GET'])
 @login_required
-def list_available_connections():
+def list_availableconnections():
     """列出当前用户可绑定 MCP Token 的活跃 Arthas 连接。
 
     MCP 代理依赖 Arthas HTTP/MCP port-forward，因此这里只返回当前内存中
     属于当前用户、仍存活且具备本地端口的 Arthas 连接；不再混入数据库历史记录，
     避免 Token 绑定到已经不存在的 Pod 或断开的连接。
     """
-    from server import _connections, _connections_lock
+    from backend.app_context import connections, connections_lock
 
     available = []
-    with _connections_lock:
-        for conn_id, entry in _connections.items():
+    with connections_lock:
+        for conn_id, entry in connections.items():
             if entry.get('user_id') != current_user.id:
                 continue
 
@@ -369,9 +369,9 @@ def list_available_connections():
 
 def _get_connection_entry(connection_id: str):
     """从内存中获取连接条目，验证归属"""
-    from server import _connections, _connections_lock
-    with _connections_lock:
-        entry = _connections.get(connection_id)
+    from backend.app_context import connections, connections_lock
+    with connections_lock:
+        entry = connections.get(connection_id)
         if entry and entry.get('user_id') == current_user.id:
             return entry
     return None
@@ -379,9 +379,9 @@ def _get_connection_entry(connection_id: str):
 
 def _get_connection_obj(connection_id: str):
     """从内存中获取 ArthasConnection 对象"""
-    from server import _connections, _connections_lock
-    with _connections_lock:
-        entry = _connections.get(connection_id)
+    from backend.app_context import connections, connections_lock
+    with connections_lock:
+        entry = connections.get(connection_id)
         if entry:
             return entry.get('conn')
     return None
