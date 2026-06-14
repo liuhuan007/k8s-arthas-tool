@@ -1,1058 +1,360 @@
 /**
- * 任务中心组件 - 重构版
- * 
- * 功能：
- * 1. 任务定义管理（创建/编辑/删除）
- * 2. 执行历史查询（即时诊断/定时任务）
- * 3. 定时调度管理（Cron/间隔/一次性）
+ * task-center.js — 任务中心内容面板（无内部侧边栏）
+ * 侧边栏子菜单由主侧边栏提供，此文件只负责渲染内容区
  */
-(function() {
+(function () {
   'use strict';
-  console.log('[TaskCenter] loaded version 20260514b');
 
-  // ── State ──────────────────────────────────────────────────────────────
-  let _allLogs = [];           // 所有日志数据
-  let _filteredLogs = [];      // 筛选后的日志
-  let _currentPage = 1;
-  let _pageSize = 20;
-  let _statusFilter = 'all';
-  let _modeFilter = 'all';
-  let _timeFilter = 'all';
-  let _searchQuery = '';
+  var _activePanel = 'tasks';
+  var _tasks = [];
+  var _runs = [];
+  var _stats = {};
 
-  /**
-   * 初始化任务中心
-   */
-  window.initTaskCenterV2 = async function() {
-    await Promise.all([
-      loadTaskDefinitions(),
-      loadTaskLogs(),
-      loadTaskSchedules(),
-      loadTaskStats()
-    ]);
+  // ── 公开入口 ──────────────────────────────────────────────────────────
+  window.initTaskCenterV2 = async function () {
+    _renderContent();
+    await _loadAll();
   };
 
-  /**
-   * 加载任务统计
-   */
-  async function loadTaskStats() {
-    try {
-      const data = await safeGet('/tasks/overview');
-      const stats = data.stats || data;
-
-      // 更新统计卡片
-      const total = (stats.running || 0) + (stats.pending || 0) + (stats.success || 0) + (stats.failed || 0) + (stats.cancelled || 0);
-      document.getElementById('tcStatTotal').textContent = total;
-      document.getElementById('tcStatRunning').textContent = stats.running || 0;
-      document.getElementById('tcStatPending').textContent = stats.pending || 0;
-      document.getElementById('tcStatSuccess').textContent = stats.success || 0;
-      document.getElementById('tcStatFailed').textContent = stats.failed || 0;
-
-      // 计算成功率
-      const successRate = total > 0 ? Math.round(((stats.success || 0) / total) * 100) : 0;
-      document.getElementById('tcStatSuccessRate').textContent = `${successRate}%`;
-    } catch (e) {
-      console.error('加载任务统计失败:', e);
-    }
-  }
-
-  /**
-   * 按状态筛选任务
-   */
-  window.filterByStatus = function(status) {
-    // 切换到执行历史 Tab
-    switchTCTab('logs');
-
-    // 筛选日志列表
-    const logItems = document.querySelectorAll('.task-log-item');
-    logItems.forEach(item => {
-      if (status === 'all') {
-        item.style.display = '';
-      } else {
-        const itemStatus = item.dataset.status;
-        item.style.display = itemStatus === status ? '' : 'none';
-      }
+  window.scSwitchPanel = function (panel) {
+    _activePanel = panel;
+    // 更新主侧边栏高亮
+    document.querySelectorAll('[data-nav-tab]').forEach(function (el) {
+      var tab = el.getAttribute('data-nav-tab');
+      var isActive = (tab === 'task-center' && panel === 'tasks')
+        || (tab === 'task-schedules' && panel === 'schedules')
+        || (tab === 'task-runs' && panel === 'runs')
+        || (tab === 'task-scripts' && panel === 'scripts');
+      el.classList.toggle('on', isActive);
     });
-
-    // 更新 Tab 高亮
-    document.querySelectorAll('.tc-stat-card').forEach(card => {
-      card.classList.remove('active');
+    // 更新内容面板
+    document.querySelectorAll('.sc-panel').forEach(function (el) {
+      el.classList.toggle('active', el.id === 'sc-panel-' + panel);
     });
-    event.currentTarget.classList.add('active');
-  };
-  
-  /**
-   * 切换 Tab
-   */
-  window.switchTCTab = function(tabName) {
-    // 更新按钮状态
-    document.querySelectorAll('.tc-tab').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.tcTab === tabName);
-    });
-    
-    // 更新面板显示
-    document.querySelectorAll('.tc-panel').forEach(panel => {
-      panel.style.display = 'none';
-    });
-    document.getElementById(`tcPanel-${tabName}`).style.display = 'block';
-  };
-  
-  let _currentStep = 1;  // 创建任务步骤
-
-  /**
-   * 打开创建任务模态框
-   */
-  window.openCreateTaskModal = function() {
-    _currentStep = 1;
-    const modal = document.createElement('div');
-    modal.className = 'tc-modal-overlay';
-    modal.id = 'tcCreateModal';
-    modal.innerHTML = `
-      <div class="tc-modal" style="width:min(680px,96vw)">
-        <div class="tc-modal-header">
-          <div class="tc-modal-title-row">
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--a)" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>
-            <h3 class="tc-modal-title">创建任务</h3>
-          </div>
-          <button class="tc-modal-close" onclick="this.closest('.tc-modal-overlay').remove()">&times;</button>
-        </div>
-
-        <!-- 步骤指示器 -->
-        <div class="tc-steps">
-          <div class="tc-step tc-step-active" data-step="1">
-            <span class="tc-step-no">1</span>
-            <span class="tc-step-label">基本信息</span>
-          </div>
-          <div class="tc-step-line"></div>
-          <div class="tc-step" data-step="2">
-            <span class="tc-step-no">2</span>
-            <span class="tc-step-label">执行配置</span>
-          </div>
-          <div class="tc-step-line"></div>
-          <div class="tc-step" data-step="3">
-            <span class="tc-step-no">3</span>
-            <span class="tc-step-label">脚本内容</span>
-          </div>
-        </div>
-
-        <div class="tc-modal-body">
-          <!-- Step 1: 基本信息 -->
-          <div class="tc-step-panel" id="tcStep1">
-            <div class="tc-form-group">
-              <label class="tc-form-label">任务名称 <span class="tc-required">*</span></label>
-              <input id="newTaskName" class="tc-input" placeholder="例如：CPU 巡检、内存分析" style="width:100%">
-              <span class="tc-form-hint">任务名称应简明描述任务目的</span>
-            </div>
-            <div class="tc-form-group">
-              <label class="tc-form-label">执行位置</label>
-              <div class="tc-radio-group">
-                <label class="tc-radio-card tc-radio-active" data-value="node">
-                  <input type="radio" name="execMode" value="node" checked onchange="togglePodTarget(false)">
-                  <span class="tc-radio-icon">🖥️</span>
-                  <span class="tc-radio-title">服务端本机</span>
-                  <span class="tc-radio-desc">在服务端执行脚本</span>
-                </label>
-                <label class="tc-radio-card" data-value="pod">
-                  <input type="radio" name="execMode" value="pod" onchange="togglePodTarget(true)">
-                  <span class="tc-radio-icon">📦</span>
-                  <span class="tc-radio-title">Pod 内执行</span>
-                  <span class="tc-radio-desc">在 K8s Pod 中执行</span>
-                </label>
-              </div>
-            </div>
-          </div>
-
-          <!-- Step 2: 执行配置 -->
-          <div class="tc-step-panel" id="tcStep2" style="display:none">
-            <div class="tc-form-row">
-              <div class="tc-form-group tc-form-half">
-                <label class="tc-form-label">脚本运行时</label>
-                <select id="newTaskRuntime" class="tc-select" style="width:100%">
-                  <option value="shell">Shell</option>
-                  <option value="python">Python</option>
-                </select>
-              </div>
-              <div class="tc-form-group tc-form-half">
-                <label class="tc-form-label">超时时间(秒)</label>
-                <input id="newTaskTimeout" class="tc-input" type="number" min="1" max="600" value="60" style="width:100%">
-              </div>
-            </div>
-            <div id="newTaskPodTarget" style="display:none">
-              <div class="tc-form-row">
-                <div class="tc-form-group tc-form-half">
-                  <label class="tc-form-label">集群名称 <span class="tc-required">*</span></label>
-                  <input id="newTaskCluster" class="tc-input" placeholder="cluster name" style="width:100%">
-                </div>
-                <div class="tc-form-group tc-form-half">
-                  <label class="tc-form-label">命名空间 <span class="tc-required">*</span></label>
-                  <input id="newTaskNamespace" class="tc-input" placeholder="default" style="width:100%">
-                </div>
-              </div>
-              <div class="tc-form-row">
-                <div class="tc-form-group tc-form-half">
-                  <label class="tc-form-label">Pod 名称 <span class="tc-required">*</span></label>
-                  <input id="newTaskPod" class="tc-input" placeholder="pod name" style="width:100%">
-                </div>
-                <div class="tc-form-group tc-form-half">
-                  <label class="tc-form-label">容器名</label>
-                  <input id="newTaskContainer" class="tc-input" placeholder="可选" style="width:100%">
-                </div>
-              </div>
-            </div>
-          </div>
-
-          <!-- Step 3: 脚本内容 -->
-          <div class="tc-step-panel" id="tcStep3" style="display:none">
-            <div class="tc-form-group">
-              <label class="tc-form-label">脚本内容 <span class="tc-required">*</span></label>
-              <textarea id="newTaskScript" class="tc-textarea" rows="12" placeholder="# 在此输入脚本内容&#10;&#10;echo 'Hello from Task Center'&#10;uptime&#10;df -h" style="width:100%"></textarea>
-              <span class="tc-form-hint">支持 Shell 和 Python 脚本</span>
-            </div>
-          </div>
-        </div>
-
-        <div class="tc-modal-footer">
-          <button class="tc-btn" id="tcStepPrev" onclick="taskStepPrev()" style="display:none">上一步</button>
-          <div style="flex:1"></div>
-          <button class="tc-btn" onclick="this.closest('.tc-modal-overlay').remove()">取消</button>
-          <button class="tc-btn tc-btn-primary" id="tcStepNext" onclick="taskStepNext()">下一步</button>
-        </div>
-      </div>
-    `;
-
-    document.body.appendChild(modal);
-    modal.addEventListener('click', (e) => {
-      if (e.target === modal) modal.remove();
-    });
-
-    // Radio card active state
-    modal.querySelectorAll('.tc-radio-card').forEach(card => {
-      card.addEventListener('click', () => {
-        modal.querySelectorAll('.tc-radio-card').forEach(c => c.classList.remove('tc-radio-active'));
-        card.classList.add('tc-radio-active');
-      });
-    });
+    // 渲染
+    if (panel === 'tasks') _renderTaskCards();
+    if (panel === 'schedules') _renderScheduleList();
+    if (panel === 'runs') _renderRunTable();
+    if (panel === 'scripts') _renderScriptLibrary();
   };
 
-  /**
-   * 切换 Pod 目标显示
-   */
-  window.togglePodTarget = function(show) {
-    const el = document.getElementById('newTaskPodTarget');
-    if (el) el.style.display = show ? 'block' : 'none';
-  };
-
-  /**
-   * 步骤导航
-   */
-  window.taskStepNext = function() {
-    if (_currentStep === 1) {
-      const name = document.getElementById('newTaskName')?.value?.trim();
-      if (!name) { toast('请输入任务名称', 'err'); return; }
-    }
-    if (_currentStep === 3) {
-      submitCreateTaskV2();
-      return;
-    }
-    _currentStep++;
-    updateStepUI();
-  };
-
-  window.taskStepPrev = function() {
-    if (_currentStep > 1) {
-      _currentStep--;
-      updateStepUI();
-    }
-  };
-
-  function updateStepUI() {
-    // 面板切换
-    [1, 2, 3].forEach(i => {
-      const panel = document.getElementById(`tcStep${i}`);
-      if (panel) panel.style.display = i === _currentStep ? 'block' : 'none';
-    });
-
-    // 步骤指示器
-    document.querySelectorAll('.tc-step').forEach(step => {
-      const s = parseInt(step.dataset.step);
-      step.classList.toggle('tc-step-active', s === _currentStep);
-      step.classList.toggle('tc-step-done', s < _currentStep);
-    });
-
-    // 按钮
-    const prev = document.getElementById('tcStepPrev');
-    const next = document.getElementById('tcStepNext');
-    if (prev) prev.style.display = _currentStep > 1 ? '' : 'none';
-    if (next) next.textContent = _currentStep === 3 ? '创建任务' : '下一步';
-  }
-  
-  /**
-   * 提交创建任务
-   */
-  window.submitCreateTaskV2 = async function() {
-    const name = document.getElementById('newTaskName')?.value?.trim();
-    if (!name) {
-      toast('请输入任务名称', 'err');
-      return;
-    }
-    const scriptBody = document.getElementById('newTaskScript')?.value?.trim();
-    if (!scriptBody) {
-      toast('请输入脚本内容', 'err');
-      return;
-    }
-
-    try {
-      const executionMode = document.querySelector('input[name="execMode"]:checked')?.value || 'node';
-      const target = executionMode === 'pod' ? {
-        cluster_name: document.getElementById('newTaskCluster')?.value?.trim(),
-        namespace: document.getElementById('newTaskNamespace')?.value?.trim(),
-        pod_name: document.getElementById('newTaskPod')?.value?.trim(),
-        container: document.getElementById('newTaskContainer')?.value?.trim(),
-      } : {};
-      if (executionMode === 'pod' && (!target.cluster_name || !target.namespace || !target.pod_name)) {
-        toast('Pod 内执行需要填写集群、命名空间和 Pod 名称', 'err');
-        return;
-      }
-      await safePost('/tasks/definitions', {
-        name: name,
-        execution_mode: executionMode,
-        runtime: document.getElementById('newTaskRuntime')?.value || 'shell',
-        timeout_seconds: Number(document.getElementById('newTaskTimeout')?.value || 60),
-        script_body: scriptBody,
-        target,
-      });
-
-      toast('任务创建成功', 'ok');
-      document.querySelector('.tc-modal-overlay')?.remove();
-      await loadTaskDefinitions();
-      await loadTaskStats();
-      if (typeof switchTCTab === 'function') switchTCTab('definitions');
-    } catch (e) {
-      toast(`创建失败：${e.message}`, 'err');
-    }
-  };
-
-  /**
-   * 加载任务定义
-   */
-  async function loadTaskDefinitions() {
-    try {
-      const data = await safeGet('/tasks/definitions');
-      renderTaskDefinitions(data.tasks || data.definitions || []);
-    } catch (e) {
-      console.error('加载任务定义失败:', e);
-    }
-  }
-
-  /**
-   * 渲染任务定义列表
-   */
-  function renderTaskDefinitions(definitions) {
-    const container = document.getElementById('taskDefList');
+  // ── 内容渲染（无内部侧边栏） ─────────────────────────────────────────
+  function _renderContent() {
+    var container = document.getElementById('panel-task-center');
     if (!container) return;
 
-    if (definitions.length === 0) {
-      container.innerHTML = `
-        <div class="tc-empty-state">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity=".25">
-            <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/>
-          </svg>
-          <div class="tc-empty-title">暂无任务定义</div>
-          <div class="tc-empty-sub">点击「新建任务」创建第一个任务</div>
-        </div>
-      `;
+    // 隐藏旧的 hero / tabs / stats
+    var opsPage = container.querySelector('.ops-page');
+    if (opsPage) { opsPage.style.padding = '0'; opsPage.style.overflow = 'hidden'; }
+    var hero = container.querySelector('.ops-hero');
+    if (hero) hero.style.display = 'none';
+    var tabs = container.querySelector('.task-center-tabs');
+    if (tabs) tabs.style.display = 'none';
+    var statsDash = container.querySelector('.tc-stats-dashboard');
+    if (statsDash) statsDash.style.display = 'none';
+
+    container.innerHTML = ''
+      + '<div style="display:flex;flex-direction:column;height:100%;overflow:hidden">'
+      // 顶栏
+      + '<div class="sc-topbar">'
+      + '  <span class="sc-topbar-title" id="sc-topbar-title">📋 任务列表</span>'
+      + '  <div class="sc-topbar-stats" id="sc-topbar-stats"></div>'
+      + '  <button class="sc-btn-new" onclick="scOpenWizard()">+ 新建任务</button>'
+      + '</div>'
+      // 内容区
+      + '<div class="sc-content">'
+      + '  <div class="sc-panel active" id="sc-panel-tasks"></div>'
+      + '  <div class="sc-panel" id="sc-panel-schedules"></div>'
+      + '  <div class="sc-panel" id="sc-panel-runs"></div>'
+      + '  <div class="sc-panel" id="sc-panel-scripts"></div>'
+      + '</div>'
+      + '</div>';
+  }
+
+  // ── 数据加载 ──────────────────────────────────────────────────────────
+  async function _loadAll() {
+    try {
+      var data = await safeGet('/scheduler/tasks', {});
+      _tasks = data.tasks || [];
+    } catch (e) { console.error('[scheduler] load tasks:', e); }
+    try {
+      var rData = await safeGet('/scheduler/runs', { limit: 100 });
+      _runs = rData.runs || [];
+    } catch (e) { console.error('[scheduler] load runs:', e); }
+    try {
+      _stats = await safeGet('/scheduler/stats', {});
+    } catch (e) {}
+    _updateStats();
+    _renderTaskCards();
+  }
+
+  window.scLoadTasks = async function () {
+    try {
+      var data = await safeGet('/scheduler/tasks', {});
+      _tasks = data.tasks || [];
+    } catch (e) {}
+    try {
+      var rData = await safeGet('/scheduler/runs', { limit: 100 });
+      _runs = rData.runs || [];
+    } catch (e) {}
+    _updateStats();
+    _renderTaskCards();
+  };
+
+  function _updateStats() {
+    var el = document.getElementById('sc-topbar-stats');
+    if (!el) return;
+    el.innerHTML = ''
+      + '<span class="sc-stat-badge all">全部 ' + (_stats.total_tasks || _tasks.length) + '</span>'
+      + '<span class="sc-stat-badge active">活跃 ' + (_tasks.filter(function (t) { return t.schedule_enabled; }).length) + '</span>'
+      + '<span class="sc-stat-badge scheduled">调度中 ' + (_stats.active_schedules || 0) + '</span>';
+  }
+
+  // ── 任务列表 ──────────────────────────────────────────────────────────
+  function _renderTaskCards() {
+    var panel = document.getElementById('sc-panel-tasks');
+    if (!panel) return;
+    if (_tasks.length === 0) {
+      panel.innerHTML = '<div class="sc-empty">'
+        + '<div class="sc-empty-icon">📋</div>'
+        + '<div class="sc-empty-title">暂无任务</div>'
+        + '<div class="sc-empty-desc">创建你的第一个脚本任务，支持 Shell/Python/Binary 运行时，可配置定时调度</div>'
+        + '<button class="sc-empty-action" onclick="scOpenWizard()">+ 新建任务</button>'
+        + '</div>';
       return;
     }
+    panel.innerHTML = _tasks.map(function (t) { return _renderTaskCard(t); }).join('');
+  }
 
-    container.innerHTML = definitions.map(def => {
-      const modeConfig = {
-        immediate: { text: '即时诊断', icon: '⚡', cls: 'tc-mode-immediate' },
-        manual: { text: '手动任务', icon: '▶️', cls: 'tc-mode-manual' },
-        scheduled: { text: '定时任务', icon: '⏰', cls: 'tc-mode-scheduled' }
-      };
-      const mode = modeConfig[def.execution_mode] || { text: def.execution_mode, icon: '📋', cls: '' };
+  function _renderTaskCard(task) {
+    var runtimeTag = '<span class="sc-tag ' + (task.runtime || 'shell') + '">' + (task.runtime || 'shell').toUpperCase() + '</span>';
+    var targetTag = '<span class="sc-tag ' + (task.target_type || 'node') + '">' + _targetLabel(task.target_type) + '</span>';
+    var schedTag = '';
+    if (task.schedule_type && task.schedule_type !== 'none') {
+      var schedText = task.schedule_type === 'cron' ? '⏱ ' + (task.cron_expr || '') : '🔁 ' + (task.interval_seconds || 0) + 's';
+      schedTag = '<span class="sc-tag schedule">' + schedText + '</span>';
+    }
+    var lastRun = '';
+    if (task.last_run) {
+      var cls = task.last_run.status === 'success' ? 'success' : task.last_run.status === 'failed' ? 'failed' : 'pending';
+      var label = task.last_run.status === 'success' ? '● 上次成功' : task.last_run.status === 'failed' ? '● 上次失败' : '● ' + task.last_run.status;
+      var time = task.last_run.completed_at ? _timeAgo(task.last_run.completed_at) : '';
+      lastRun = '<span class="sc-task-last-run ' + cls + '">' + label + ' ' + time + '</span>';
+    }
+    return '<div class="sc-task-card">'
+      + '<div class="sc-task-header">'
+      + '  <span class="sc-task-name">' + _esc(task.name) + '</span>'
+      + '  ' + runtimeTag + ' ' + targetTag + ' ' + schedTag
+      + '  ' + lastRun
+      + '</div>'
+      + '<div class="sc-task-desc">' + _esc(task.description || '暂无描述') + '</div>'
+      + '<div class="sc-task-actions">'
+      + '  <button class="sc-btn-sm primary" onclick="scRunTask(\'' + task.id + '\')">▶ 立即执行</button>'
+      + '  <button class="sc-btn-sm secondary" onclick="scEditTask(\'' + task.id + '\')">编辑</button>'
+      + '  <button class="sc-btn-sm secondary" onclick="scViewRuns(\'' + task.id + '\')">查看记录</button>'
+      + '  <button class="sc-btn-sm danger" onclick="scDeleteTask(\'' + task.id + '\')">删除</button>'
+      + '</div>'
+    + '</div>';
+  }
 
-      const runtimeIcon = def.runtime === 'python' ? '🐍' : '📜';
-      const execCount = def.execution_count || 0;
-      const lastExec = def.last_executed_at ? formatTimeAgo(def.last_executed_at) : '从未执行';
+  // ── 调度管理 ──────────────────────────────────────────────────────────
+  function _renderScheduleList() {
+    var panel = document.getElementById('sc-panel-schedules');
+    if (!panel) return;
+    var scheduled = _tasks.filter(function (t) { return t.schedule_type && t.schedule_type !== 'none'; });
+    if (scheduled.length === 0) {
+      panel.innerHTML = '<div class="sc-empty">'
+        + '<div class="sc-empty-icon">⏱</div>'
+        + '<div class="sc-empty-title">暂无调度任务</div>'
+        + '<div class="sc-empty-desc">在任务创建向导的第 3 步配置 Cron 或固定间隔调度</div>'
+        + '</div>';
+      return;
+    }
+    var rows = scheduled.map(function (t) {
+      var nextRun = t.next_run_at ? new Date(t.next_run_at).toLocaleString('zh-CN') : '-';
+      var lastRun = t.last_run_at ? _timeAgo(t.last_run_at) : '-';
+      var statusBadge = t.schedule_enabled
+        ? '<span class="sc-run-status success">活跃</span>'
+        : '<span class="sc-run-status pending">已暂停</span>';
+      return '<tr>'
+        + '<td>' + _esc(t.name) + '</td>'
+        + '<td>' + statusBadge + '</td>'
+        + '<td>' + _esc(t.schedule_type === 'cron' ? t.cron_expr : ('每 ' + t.interval_seconds + 's')) + '</td>'
+        + '<td>' + nextRun + '</td>'
+        + '<td>' + lastRun + '</td>'
+        + '<td><button class="sc-btn-sm secondary" onclick="scToggleSchedule(\'' + t.id + '\',' + (t.schedule_enabled ? 'false' : 'true') + ')">' + (t.schedule_enabled ? '暂停' : '恢复') + '</button></td>'
+      + '</tr>';
+    }).join('');
+    panel.innerHTML = '<table class="sc-run-table"><thead><tr>'
+      + '<th>任务名称</th><th>状态</th><th>调度规则</th><th>下次执行</th><th>上次执行</th><th>操作</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
 
-      return `
-        <div class="tc-task-card" data-id="${def.id}">
-          <div class="tc-task-header">
-            <div class="tc-task-title-row">
-              <span class="tc-task-icon">${mode.icon}</span>
-              <span class="tc-task-name">${escapeHtml(def.name)}</span>
-              <span class="tc-mode-badge ${mode.cls}">${mode.text}</span>
-            </div>
-            <div class="tc-task-actions">
-              <button class="tc-btn tc-btn-primary" onclick="executeTaskDefinition(${def.id})" title="执行任务">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="currentColor"><polygon points="5 3 19 12 5 21 5 3"/></svg>
-                执行
-              </button>
-              <button class="tc-btn tc-btn-ghost" onclick="editTaskDefinition(${def.id})" title="编辑任务">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
-              </button>
-              <button class="tc-btn tc-btn-ghost tc-btn-danger" onclick="deleteTaskDefinition(${def.id})" title="删除任务">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-              </button>
-            </div>
-          </div>
-          <div class="tc-task-meta">
-            <span class="tc-meta-item" title="运行时">
-              ${runtimeIcon} ${def.runtime || 'shell'}
-            </span>
-            <span class="tc-meta-item" title="超时时间">
-              ⏱️ ${def.timeout_seconds || 60}s
-            </span>
-            <span class="tc-meta-item" title="执行次数">
-              📊 执行 ${execCount} 次
-            </span>
-            <span class="tc-meta-item" title="最后执行">
-              🕐 ${lastExec}
-            </span>
-          </div>
-          ${def.description ? `<div class="tc-task-desc">${escapeHtml(def.description)}</div>` : ''}
-        </div>
-      `;
+  // ── 执行记录 ──────────────────────────────────────────────────────────
+  function _renderRunTable() {
+    var panel = document.getElementById('sc-panel-runs');
+    if (!panel) return;
+    if (_runs.length === 0) {
+      panel.innerHTML = '<div class="sc-empty">'
+        + '<div class="sc-empty-icon">📊</div>'
+        + '<div class="sc-empty-title">暂无执行记录</div>'
+        + '<div class="sc-empty-desc">执行任务后，运行记录将在此显示</div>'
+        + '</div>';
+      return;
+    }
+    var rows = _runs.map(function (r) {
+      var statusCls = r.status || 'pending';
+      var duration = (r.started_at && r.completed_at)
+        ? ((new Date(r.completed_at) - new Date(r.started_at)) / 1000).toFixed(1) + 's' : '-';
+      return '<tr>'
+        + '<td>' + _esc(r.task_name || r.task_id) + '</td>'
+        + '<td><span class="sc-run-status ' + statusCls + '">' + _statusText(r.status) + '</span></td>'
+        + '<td>' + _esc(r.trigger_type || '-') + '</td>'
+        + '<td>' + duration + '</td>'
+        + '<td>' + (r.exit_code != null ? r.exit_code : '-') + '</td>'
+        + '<td>' + _timeAgo(r.created_at) + '</td>'
+        + '<td><button class="sc-btn-sm secondary" onclick="scViewRunDetail(\'' + r.id + '\')">查看</button></td>'
+      + '</tr>';
+    }).join('');
+    panel.innerHTML = '<table class="sc-run-table"><thead><tr>'
+      + '<th>任务</th><th>状态</th><th>触发</th><th>耗时</th><th>退出码</th><th>时间</th><th>操作</th>'
+      + '</tr></thead><tbody>' + rows + '</tbody></table>';
+  }
+
+  // ── 脚本库 ──────────────────────────────────────────────────────────
+  function _renderScriptLibrary() {
+    var panel = document.getElementById('sc-panel-scripts');
+    if (!panel) return;
+    var scripts = _tasks.filter(function (t) { return t.script_content; });
+    if (scripts.length === 0) {
+      panel.innerHTML = '<div class="sc-empty">'
+        + '<div class="sc-empty-icon">📁</div>'
+        + '<div class="sc-empty-title">暂无脚本</div>'
+        + '<div class="sc-empty-desc">创建任务时编写脚本，会自动收录到脚本库</div>'
+        + '</div>';
+      return;
+    }
+    panel.innerHTML = scripts.map(function (t) {
+      var preview = (t.script_content || '').substring(0, 200);
+      return '<div class="sc-task-card">'
+        + '<div class="sc-task-header">'
+        + '  <span class="sc-task-name">' + _esc(t.name) + '</span>'
+        + '  <span class="sc-tag ' + (t.runtime || 'shell') + '">' + (t.runtime || 'shell').toUpperCase() + '</span>'
+        + '</div>'
+        + '<pre style="background:var(--bg);border:1px solid var(--ln);border-radius:6px;padding:10px;font-size:11px;line-height:1.6;color:var(--tx2);max-height:120px;overflow:auto;margin:0 0 8px 0;white-space:pre-wrap">' + _esc(preview) + '</pre>'
+        + '<div class="sc-task-actions">'
+        + '  <button class="sc-btn-sm primary" onclick="scOpenWizard(_getTaskById(\'' + t.id + '\'))">编辑</button>'
+        + '  <button class="sc-btn-sm secondary" onclick="scCopyScript(\'' + t.id + '\')">复制脚本</button>'
+        + '</div>'
+      + '</div>';
     }).join('');
   }
 
-  /**
-   * 格式化时间为 "多久前"
-   */
-  function formatTimeAgo(dateStr) {
-    if (!dateStr) return '未知';
-    const date = new Date(dateStr);
-    const now = new Date();
-    const diff = Math.floor((now - date) / 1000);
+  // ── 操作函数 ──────────────────────────────────────────────────────────
+  window.scRunTask = async function (taskId) {
+    try {
+      var result = await safePost('/scheduler/tasks/' + taskId + '/run', {});
+      if (result && result.ok) {
+        if (typeof toast === 'function') toast('任务已触发执行', 'success');
+        await scLoadTasks();
+      }
+    } catch (e) { alert('执行失败: ' + e.message); }
+  };
 
+  window.scEditTask = function (taskId) {
+    var task = _tasks.find(function (t) { return t.id === taskId; });
+    if (task) scOpenWizard(task);
+  };
+
+  window.scDeleteTask = async function (taskId) {
+    if (!confirm('确定要删除此任务？')) return;
+    try {
+      await safePost('/scheduler/tasks/' + taskId, {});
+      if (typeof toast === 'function') toast('任务已删除', 'success');
+      await scLoadTasks();
+    } catch (e) { alert('删除失败: ' + e.message); }
+  };
+
+  window.scViewRuns = async function (taskId) {
+    try {
+      var data = await safeGet('/scheduler/tasks/' + taskId + '/runs', { limit: 50 });
+      _runs = data.runs || [];
+    } catch (e) { _runs = []; }
+    scSwitchPanel('runs');
+  };
+
+  window.scToggleSchedule = async function (taskId, enabled) {
+    try {
+      await safePost('/scheduler/tasks/' + taskId + '/schedule', {
+        enabled: enabled === 'true' || enabled === true ? 1 : 0,
+      });
+      await scLoadTasks();
+      if (_activePanel === 'schedules') _renderScheduleList();
+    } catch (e) { alert('操作失败: ' + e.message); }
+  };
+
+  window.scViewRunDetail = async function (runId) {
+    try {
+      var data = await safeGet('/scheduler/runs/' + runId, {});
+      var run = data.run;
+      if (!run) return;
+      var overlay = document.createElement('div');
+      overlay.className = 'sc-run-detail-overlay';
+      overlay.onclick = function (e) { if (e.target === overlay) overlay.remove(); };
+      overlay.innerHTML = '<div class="sc-run-detail">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">'
+        + '  <h3 style="font-size:14px;color:var(--tx);margin:0">运行详情</h3>'
+        + '  <button class="sc-btn-sm secondary" onclick="this.closest(\'.sc-run-detail-overlay\').remove()">关闭</button>'
+        + '</div>'
+        + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:16px;font-size:12px">'
+        + '  <div><span style="color:var(--tx3)">任务:</span> ' + _esc(run.task_name || run.task_id) + '</div>'
+        + '  <div><span style="color:var(--tx3)">状态:</span> <span class="sc-run-status ' + run.status + '">' + _statusText(run.status) + '</span></div>'
+        + '  <div><span style="color:var(--tx3)">触发:</span> ' + _esc(run.trigger_type) + '</div>'
+        + '  <div><span style="color:var(--tx3)">退出码:</span> ' + (run.exit_code != null ? run.exit_code : '-') + '</div>'
+        + '</div>'
+        + (run.stdout ? '<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--tx3);margin-bottom:4px">STDOUT</div><pre>' + _esc(run.stdout) + '</pre></div>' : '')
+        + (run.stderr ? '<div style="margin-bottom:12px"><div style="font-size:11px;color:var(--tx3);margin-bottom:4px">STDERR</div><pre style="border-color:rgba(255,69,58,.2)">' + _esc(run.stderr) + '</pre></div>' : '')
+        + (run.error ? '<div style="margin-bottom:12px"><div style="font-size:11px;color:#FF453A;margin-bottom:4px">ERROR</div><pre style="border-color:rgba(255,69,58,.2)">' + _esc(run.error) + '</pre></div>' : '')
+        + '</div>';
+      document.body.appendChild(overlay);
+    } catch (e) { alert('加载失败: ' + e.message); }
+  };
+
+  window.scCopyScript = function (taskId) {
+    var task = _tasks.find(function (t) { return t.id === taskId; });
+    if (task && task.script_content) {
+      navigator.clipboard.writeText(task.script_content).then(function () {
+        if (typeof toast === 'function') toast('脚本已复制', 'success');
+      });
+    }
+  };
+
+  window._getTaskById = function (id) {
+    return _tasks.find(function (t) { return t.id === id; });
+  };
+
+  // ── 工具函数 ──────────────────────────────────────────────────────────
+  function _esc(s) {
+    if (s == null) return '';
+    var d = document.createElement('div');
+    d.textContent = String(s);
+    return d.innerHTML;
+  }
+  function _targetLabel(type) {
+    var m = { node: 'NODE', pod: 'POD', pods: 'PODS', namespace: 'NS' };
+    return m[type] || (type || 'NODE').toUpperCase();
+  }
+  function _statusText(s) {
+    var m = { success: '成功', failed: '失败', running: '运行中', pending: '等待中', cancelled: '已取消' };
+    return m[s] || s || '未知';
+  }
+  function _timeAgo(ts) {
+    if (!ts) return '';
+    var diff = (Date.now() - new Date(ts).getTime()) / 1000;
     if (diff < 60) return '刚刚';
-    if (diff < 3600) return `${Math.floor(diff / 60)} 分钟前`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)} 小时前`;
-    if (diff < 604800) return `${Math.floor(diff / 86400)} 天前`;
-    return date.toLocaleDateString('zh-CN');
-  }
-
-  /**
-   * 加载执行历史
-   */
-  async function loadTaskLogs() {
-    try {
-      const data = await safeGet('/tasks/runs', { limit: 100 });
-      _allLogs = data.runs || [];
-      _currentPage = 1;
-      applyLogFilters();
-    } catch (e) {
-      console.error('加载执行历史失败:', e);
-    }
-  }
-
-  /**
-   * 应用筛选条件
-   */
-  window.applyLogFilters = function() {
-    _statusFilter = document.getElementById('tcLogStatusFilter')?.value || 'all';
-    _modeFilter = document.getElementById('tcLogModeFilter')?.value || 'all';
-    _timeFilter = document.getElementById('tcLogTimeFilter')?.value || 'all';
-    _searchQuery = document.getElementById('tcLogSearchFilter')?.value?.trim().toLowerCase() || '';
-
-    _filteredLogs = _allLogs.filter(log => {
-      // 状态筛选
-      if (_statusFilter !== 'all' && log.status !== _statusFilter) return false;
-
-      // 模式筛选
-      if (_modeFilter !== 'all' && log.execution_mode !== _modeFilter) return false;
-
-      // 时间筛选
-      if (_timeFilter !== 'all') {
-        const logDate = new Date(log.started_at);
-        const now = new Date();
-        const diffDays = (now - logDate) / (1000 * 60 * 60 * 24);
-
-        if (_timeFilter === 'today' && diffDays > 1) return false;
-        if (_timeFilter === 'week' && diffDays > 7) return false;
-        if (_timeFilter === 'month' && diffDays > 30) return false;
-      }
-
-      // 搜索筛选
-      if (_searchQuery) {
-        const taskName = (log.task_name || log.capability_name || '').toLowerCase();
-        if (!taskName.includes(_searchQuery)) return false;
-      }
-
-      return true;
-    });
-
-    renderFilteredLogs();
-    updatePagination();
-  };
-
-  /**
-   * 渲染筛选后的日志
-   */
-  function renderFilteredLogs() {
-    const start = (_currentPage - 1) * _pageSize;
-    const end = start + _pageSize;
-    const pageLogs = _filteredLogs.slice(start, end);
-
-    renderTaskLogs(pageLogs);
-  }
-
-  /**
-   * 更新分页信息
-   */
-  function updatePagination() {
-    const total = _filteredLogs.length;
-    const totalPages = Math.ceil(total / _pageSize) || 1;
-    const start = total > 0 ? (_currentPage - 1) * _pageSize + 1 : 0;
-    const end = Math.min(_currentPage * _pageSize, total);
-
-    document.getElementById('tcPageStart').textContent = start;
-    document.getElementById('tcPageEnd').textContent = end;
-    document.getElementById('tcPageTotal').textContent = total;
-    document.getElementById('tcPageNum').textContent = `${_currentPage} / ${totalPages}`;
-
-    document.getElementById('tcPagePrev').disabled = _currentPage <= 1;
-    document.getElementById('tcPageNext').disabled = _currentPage >= totalPages;
-  }
-
-  /**
-   * 上一页
-   */
-  window.prevPage = function() {
-    if (_currentPage > 1) {
-      _currentPage--;
-      renderFilteredLogs();
-      updatePagination();
-    }
-  };
-
-  /**
-   * 下一页
-   */
-  window.nextPage = function() {
-    const totalPages = Math.ceil(_filteredLogs.length / _pageSize) || 1;
-    if (_currentPage < totalPages) {
-      _currentPage++;
-      renderFilteredLogs();
-      updatePagination();
-    }
-  };
-
-  /**
-   * 切换每页条数
-   */
-  window.changePageSize = function() {
-    _pageSize = parseInt(document.getElementById('tcPageSize').value) || 20;
-    _currentPage = 1;
-    renderFilteredLogs();
-    updatePagination();
-  };
-
-  /**
-   * 重置筛选条件
-   */
-  window.resetLogFilters = function() {
-    document.getElementById('tcLogStatusFilter').value = 'all';
-    document.getElementById('tcLogModeFilter').value = 'all';
-    document.getElementById('tcLogTimeFilter').value = 'all';
-    document.getElementById('tcLogSearchFilter').value = '';
-    _statusFilter = 'all';
-    _modeFilter = 'all';
-    _timeFilter = 'all';
-    _searchQuery = '';
-    _currentPage = 1;
-    applyLogFilters();
-  };
-
-  // ── 报告管理 ──────────────────────────────────────────────────────────
-  let _allReports = [];
-
-  /**
-   * 加载任务报告（成功执行的记录）
-   */
-  window.loadTaskReports = async function() {
-    try {
-      const data = await safeGet('/tasks/runs', { limit: 200, status: 'success' });
-      _allReports = (data.runs || []).filter(r => r.status === 'success');
-      renderTaskReports(_allReports);
-    } catch (e) {
-      console.error('加载报告失败:', e);
-    }
-  };
-
-  /**
-   * 渲染任务报告列表
-   */
-  function renderTaskReports(reports) {
-    const container = document.getElementById('taskReportList');
-    if (!container) return;
-
-    if (reports.length === 0) {
-      container.innerHTML = `
-        <div class="tc-empty-state">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity=".25">
-            <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/>
-          </svg>
-          <div class="tc-empty-title">暂无执行报告</div>
-          <div class="tc-empty-sub">成功执行的任务将自动生成报告</div>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = reports.map(r => {
-      const duration = r.duration_ms ? (r.duration_ms >= 1000 ? `${(r.duration_ms / 1000).toFixed(1)}s` : `${r.duration_ms}ms`) : '-';
-      const timeAgo = formatTimeAgo(r.started_at);
-
-      return `
-        <div class="tc-report-item">
-          <div class="tc-report-icon">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="var(--a3)" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          </div>
-          <div class="tc-report-content">
-            <div class="tc-report-title">${escapeHtml(r.task_name || r.capability_name || '执行报告')}</div>
-            <div class="tc-report-meta">
-              <span>${timeAgo}</span>
-              <span>耗时 ${duration}</span>
-              <span>${r.execution_mode || '-'}</span>
-            </div>
-          </div>
-          <div class="tc-report-actions">
-            <button class="tc-btn tc-btn-ghost" onclick="viewTaskLogDetail(${r.id})" title="查看详情">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-            </button>
-            <button class="tc-btn tc-btn-ghost" onclick="exportReport(${r.id})" title="导出报告">
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-            </button>
-          </div>
-        </div>
-      `;
-    }).join('');
-  }
-
-  /**
-   * 导出单个报告
-   */
-  window.exportReport = async function(runId) {
-    try {
-      const data = await safeGet(`/tasks/runs/${runId}/logs`);
-      const log = data.run;
-      const result = log.result || (log.result_json ? JSON.parse(log.result_json) : null);
-
-      const report = {
-        id: log.id,
-        task_name: log.task_name || log.capability_name,
-        status: log.status,
-        execution_mode: log.execution_mode,
-        started_at: log.started_at,
-        duration_ms: log.duration_ms,
-        stdout: log.stdout || result?.stdout || '',
-        stderr: log.stderr || result?.stderr || '',
-        error_message: log.error_message || '',
-        rendered_command: log.rendered_command || ''
-      };
-
-      const blob = new Blob([JSON.stringify(report, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `report-${log.id}-${Date.now()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      toast('报告已导出', 'ok');
-    } catch (e) {
-      toast(`导出失败：${e.message}`, 'err');
-    }
-  };
-
-  /**
-   * 导出全部报告
-   */
-  window.exportAllReports = async function() {
-    if (_allReports.length === 0) {
-      toast('暂无报告可导出', 'err');
-      return;
-    }
-
-    try {
-      const allData = [];
-      for (const r of _allReports.slice(0, 50)) {
-        try {
-          const data = await safeGet(`/tasks/runs/${r.id}/logs`);
-          const log = data.run;
-          const result = log.result || (log.result_json ? JSON.parse(log.result_json) : null);
-          allData.push({
-            id: log.id,
-            task_name: log.task_name || log.capability_name,
-            status: log.status,
-            started_at: log.started_at,
-            duration_ms: log.duration_ms,
-            stdout: log.stdout || result?.stdout || '',
-            stderr: log.stderr || result?.stderr || ''
-          });
-        } catch {}
-      }
-
-      const blob = new Blob([JSON.stringify(allData, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `task-reports-${Date.now()}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-
-      toast(`已导出 ${allData.length} 条报告`, 'ok');
-    } catch (e) {
-      toast(`导出失败：${e.message}`, 'err');
-    }
-  };
-
-  /**
-   * 渲染执行历史
-   */
-  function renderTaskLogs(logs) {
-    const container = document.getElementById('taskLogList');
-    if (!container) return;
-
-    if (logs.length === 0) {
-      container.innerHTML = `
-        <div class="tc-empty-state">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity=".25">
-            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-          </svg>
-          <div class="tc-empty-title">暂无执行记录</div>
-          <div class="tc-empty-sub">执行任务后，记录将显示在这里</div>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = logs.map(log => {
-      const statusConfig = {
-        success: { text: '成功', cls: 'tc-status-success', icon: '✓' },
-        failed: { text: '失败', cls: 'tc-status-failed', icon: '✕' },
-        running: { text: '执行中', cls: 'tc-status-running', icon: '⟳' },
-        pending: { text: '待处理', cls: 'tc-status-pending', icon: '⏳' },
-        cancelled: { text: '已取消', cls: 'tc-status-cancelled', icon: '⊘' },
-        partial: { text: '部分成功', cls: 'tc-status-partial', icon: '⚠' }
-      };
-      const status = statusConfig[log.status] || { text: log.status, cls: '', icon: '?' };
-
-      const duration = log.duration_ms ? (log.duration_ms >= 1000 ? `${(log.duration_ms / 1000).toFixed(1)}s` : `${log.duration_ms}ms`) : '-';
-      const timeAgo = formatTimeAgo(log.started_at);
-
-      return `
-        <div class="tc-log-item" data-status="${log.status}" onclick="viewTaskLogDetail(${log.id})">
-          <div class="tc-log-status ${status.cls}">
-            <span class="tc-status-icon">${status.icon}</span>
-          </div>
-          <div class="tc-log-content">
-            <div class="tc-log-title">${escapeHtml(log.task_name || log.capability_name || '即时诊断')}</div>
-            <div class="tc-log-meta">
-              <span class="tc-log-time" title="${log.started_at}">${timeAgo}</span>
-              <span class="tc-log-duration">耗时 ${duration}</span>
-              ${log.execution_mode ? `<span class="tc-log-mode">${log.execution_mode}</span>` : ''}
-            </div>
-          </div>
-          <div class="tc-log-actions">
-            <span class="tc-status-badge ${status.cls}">${status.text}</span>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="tc-log-arrow">
-              <polyline points="9 18 15 12 9 6"/>
-            </svg>
-          </div>
-        </div>
-      `;
-    }).join('');
-  }
-
-  /**
-   * 加载定时调度
-   */
-  async function loadTaskSchedules() {
-    try {
-      const data = await safeGet('/tasks/schedules');
-      renderTaskSchedules(data.schedules || []);
-    } catch (e) {
-      console.error('加载定时调度失败:', e);
-    }
-  }
-
-  /**
-   * 渲染定时调度列表
-   */
-  function renderTaskSchedules(schedules) {
-    const container = document.getElementById('taskScheduleList');
-    if (!container) return;
-
-    if (schedules.length === 0) {
-      container.innerHTML = `
-        <div class="tc-empty-state">
-          <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" opacity=".25">
-            <circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/>
-          </svg>
-          <div class="tc-empty-title">暂无定时任务</div>
-          <div class="tc-empty-sub">创建定时调度以开始使用</div>
-        </div>
-      `;
-      return;
-    }
-
-    container.innerHTML = schedules.map(s => {
-      const isActive = s.status === 'active';
-      const scheduleType = s.schedule_type === 'cron' ? 'Cron' : '间隔';
-      const scheduleValue = s.schedule_type === 'cron' ? s.cron_expression : `${s.interval_seconds}s`;
-      const nextRun = s.next_run_at ? formatTimeAgo(s.next_run_at) : '-';
-      const execCount = s.execution_count || 0;
-
-      return `
-        <div class="tc-schedule-item ${isActive ? 'tc-schedule-active' : 'tc-schedule-paused'}">
-          <div class="tc-schedule-header">
-            <div class="tc-schedule-title-row">
-              <span class="tc-schedule-icon">${isActive ? '🟢' : '⏸️'}</span>
-              <span class="tc-schedule-name">${escapeHtml(s.name)}</span>
-              <span class="tc-schedule-status ${isActive ? 'tc-active' : 'tc-paused'}">${isActive ? '运行中' : '已暂停'}</span>
-            </div>
-            <div class="tc-schedule-actions">
-              <button class="tc-btn tc-btn-ghost" onclick="toggleSchedule(${s.id}, '${isActive ? 'paused' : 'active'}')" title="${isActive ? '暂停' : '恢复'}">
-                ${isActive ? '⏸️' : '▶️'}
-              </button>
-              <button class="tc-btn tc-btn-ghost tc-btn-danger" onclick="deleteSchedule(${s.id})" title="删除">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
-              </button>
-            </div>
-          </div>
-          <div class="tc-schedule-meta">
-            <span class="tc-meta-item" title="调度类型">
-              📅 ${scheduleType}: ${scheduleValue}
-            </span>
-            <span class="tc-meta-item" title="执行次数">
-              📊 已执行 ${execCount} 次
-            </span>
-            <span class="tc-meta-item" title="下次执行">
-              ⏰ 下次：${nextRun}
-            </span>
-          </div>
-        </div>
-      `;
-    }).join('');
-  }
-
-  /**
-   * 执行任务定义
-   */
-  window.executeTaskDefinition = async function(defId) {
-    try {
-      toast('开始执行任务...', 'info');
-      const result = await safePost(`/tasks/definitions/${defId}/run`, {}, 650000);
-      const runId = result.run?.id || result.run?.run_id;
-      const status = result.run?.status || 'unknown';
-      toast(status === 'success' ? '任务执行成功' : '任务执行完成，请查看日志', status === 'success' ? 'ok' : 'warn');
-      loadTaskLogs();
-      if (runId) setTimeout(() => window.viewTaskLogDetail(runId), 80);
-    } catch (e) {
-      toast(`执行失败：${e.message}`, 'err');
-    }
-  };
-
-  /**
-   * 查看执行详情
-   */
-  window.viewTaskLogDetail = async function(logId) {
-    try {
-      const data = await safeGet(`/tasks/runs/${logId}/logs`);
-      const log = data.run;
-
-      const result = log.result || (log.result_json ? JSON.parse(log.result_json) : null);
-      const stdout = log.stdout || result?.stdout || '';
-      const stderr = log.stderr || result?.stderr || '';
-      const errorMsg = log.error_message || result?.error || '';
-
-      const statusConfig = {
-        success: { text: '成功', cls: 'tc-detail-success', icon: '✓' },
-        failed: { text: '失败', cls: 'tc-detail-failed', icon: '✕' },
-        running: { text: '执行中', cls: 'tc-detail-running', icon: '⟳' },
-        pending: { text: '待处理', cls: 'tc-detail-pending', icon: '⏳' },
-        cancelled: { text: '已取消', cls: 'tc-detail-cancelled', icon: '⊘' }
-      };
-      const status = statusConfig[log.status] || { text: log.status, cls: '', icon: '?' };
-      const duration = log.duration_ms ? (log.duration_ms >= 1000 ? `${(log.duration_ms / 1000).toFixed(2)}s` : `${log.duration_ms}ms`) : '-';
-
-      // 创建详情模态框
-      const modal = document.createElement('div');
-      modal.className = 'tc-modal-overlay';
-      modal.innerHTML = `
-        <div class="tc-modal">
-          <div class="tc-modal-header">
-            <div class="tc-modal-title-row">
-              <span class="tc-modal-icon ${status.cls}">${status.icon}</span>
-              <div>
-                <h3 class="tc-modal-title">${escapeHtml(log.task_name || log.capability_name || '执行详情')}</h3>
-                <span class="tc-modal-subtitle">ID: ${log.id}</span>
-              </div>
-            </div>
-            <button class="tc-modal-close" onclick="this.closest('.tc-modal-overlay').remove()">&times;</button>
-          </div>
-
-          <div class="tc-modal-body">
-            <!-- 状态卡片 -->
-            <div class="tc-detail-status-card ${status.cls}">
-              <div class="tc-detail-stat">
-                <span class="tc-detail-stat-label">状态</span>
-                <span class="tc-detail-stat-value">${status.text}</span>
-              </div>
-              <div class="tc-detail-stat">
-                <span class="tc-detail-stat-label">耗时</span>
-                <span class="tc-detail-stat-value">${duration}</span>
-              </div>
-              <div class="tc-detail-stat">
-                <span class="tc-detail-stat-label">开始时间</span>
-                <span class="tc-detail-stat-value">${log.started_at || '-'}</span>
-              </div>
-              <div class="tc-detail-stat">
-                <span class="tc-detail-stat-label">执行模式</span>
-                <span class="tc-detail-stat-value">${log.execution_mode || '-'}</span>
-              </div>
-            </div>
-
-            <!-- 基本信息 -->
-            <div class="tc-detail-section">
-              <h4 class="tc-detail-section-title">基本信息</h4>
-              <div class="tc-detail-grid">
-                <div class="tc-detail-item">
-                  <span class="tc-detail-label">能力名称</span>
-                  <span class="tc-detail-value">${escapeHtml(log.capability_name || '-')}</span>
-                </div>
-                <div class="tc-detail-item">
-                  <span class="tc-detail-label">能力版本</span>
-                  <span class="tc-detail-value">${log.capability_version || '-'}</span>
-                </div>
-                <div class="tc-detail-item">
-                  <span class="tc-detail-label">执行类型</span>
-                  <span class="tc-detail-value">${log.execution_type || '-'}</span>
-                </div>
-                <div class="tc-detail-item">
-                  <span class="tc-detail-label">退出码</span>
-                  <span class="tc-detail-value">${log.exit_code ?? '-'}</span>
-                </div>
-              </div>
-            </div>
-
-            ${errorMsg ? `
-            <!-- 错误信息 -->
-            <div class="tc-detail-section">
-              <h4 class="tc-detail-section-title tc-text-danger">错误信息</h4>
-              <div class="tc-detail-error">${escapeHtml(errorMsg)}</div>
-            </div>
-            ` : ''}
-
-            ${stdout ? `
-            <!-- 标准输出 -->
-            <div class="tc-detail-section">
-              <h4 class="tc-detail-section-title">标准输出</h4>
-              <pre class="tc-detail-output tc-detail-stdout">${escapeHtml(stdout)}</pre>
-            </div>
-            ` : ''}
-
-            ${stderr ? `
-            <!-- 标准错误 -->
-            <div class="tc-detail-section">
-              <h4 class="tc-detail-section-title tc-text-warning">标准错误</h4>
-              <pre class="tc-detail-output tc-detail-stderr">${escapeHtml(stderr)}</pre>
-            </div>
-            ` : ''}
-
-            ${log.rendered_command ? `
-            <!-- 执行命令 -->
-            <div class="tc-detail-section">
-              <h4 class="tc-detail-section-title">执行命令</h4>
-              <pre class="tc-detail-output tc-detail-command">${escapeHtml(log.rendered_command)}</pre>
-            </div>
-            ` : ''}
-          </div>
-
-          <div class="tc-modal-footer">
-            ${log.status === 'running' ? `<button class="tc-btn tc-btn-danger" onclick="cancelTaskRun(${log.id})">取消执行</button>` : ''}
-            ${log.status === 'failed' ? `<button class="tc-btn tc-btn-primary" onclick="retryTaskRun(${log.id})">重试</button>` : ''}
-            <button class="tc-btn" onclick="this.closest('.tc-modal-overlay').remove()">关闭</button>
-          </div>
-        </div>
-      `;
-
-      document.body.appendChild(modal);
-      modal.addEventListener('click', (e) => {
-        if (e.target === modal) modal.remove();
-      });
-    } catch (e) {
-      toast(`加载详情失败：${e.message}`, 'err');
-    }
-  };
-
-  /**
-   * 取消任务执行
-   */
-  window.cancelTaskRun = async function(runId) {
-    if (!confirm('确认取消此任务执行？')) return;
-    try {
-      await safePost(`/tasks/runs/${runId}/cancel`);
-      toast('任务已取消', 'ok');
-      document.querySelector('.tc-modal-overlay')?.remove();
-      loadTaskLogs();
-    } catch (e) {
-      toast(`取消失败：${e.message}`, 'err');
-    }
-  };
-
-  /**
-   * 重试任务执行
-   */
-  window.retryTaskRun = async function(runId) {
-    if (!confirm('确认重试此任务？')) return;
-    try {
-      toast('正在重试任务...', 'info');
-      document.querySelector('.tc-modal-overlay')?.remove();
-      loadTaskLogs();
-    } catch (e) {
-      toast(`重试失败：${e.message}`, 'err');
-    }
-  };
-
-  /**
-   * 切换调度状态
-   */
-  window.toggleSchedule = async function(scheduleId, status) {
-    try {
-      await safePut(`/tasks/schedules/${scheduleId}`, { status });
-      toast(status === 'active' ? '调度已恢复' : '调度已暂停', 'ok');
-      loadTaskSchedules();
-    } catch (e) {
-      toast(`操作失败：${e.message}`, 'err');
-    }
-  };
-
-  /**
-   * 删除调度
-   */
-  window.deleteSchedule = async function(scheduleId) {
-    if (!confirm('确认删除此定时任务？')) return;
-    try {
-      await safeDelete(`/tasks/schedules/${scheduleId}`);
-      toast('定时任务已删除', 'ok');
-      loadTaskSchedules();
-    } catch (e) {
-      toast(`删除失败：${e.message}`, 'err');
-    }
-  };
-
-  /**
-   * HTML 转义
-   */
-  function escapeHtml(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    if (diff < 3600) return Math.floor(diff / 60) + '分钟前';
+    if (diff < 86400) return Math.floor(diff / 3600) + '小时前';
+    return Math.floor(diff / 86400) + '天前';
   }
 
 })();
