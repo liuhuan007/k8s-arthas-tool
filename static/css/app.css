@@ -446,13 +446,113 @@ pre.o-code{background:var(--bg2);padding:8px 10px;border-radius:4px;overflow-x:a
 .cin-ta textarea:focus{border-color:var(--a)}.cin-ta textarea::placeholder{color:var(--tx3)}
 .cin-run{padding:7px 14px;background:var(--a);color:#fff;border:none;border-radius:4px;font-family:var(--mono);font-size:12px;font-weight:600;cursor:pointer;height:34px;white-space:nowrap;transition:all.15s}
 .cin-run:hover{filter:brightness(1.1)}.cin-run:disabled{opacity:.4;cursor:not-allowed;filter:none}
-/* ── JProfiler ── */
+/* ── Profiler Panel ── */
 .pf-grid{display:flex;flex-direction:column;flex:1;overflow-y:auto;overflow-x:hidden}
-.pf-cfg{border-right:none;background:var(--bg1);padding:16px;flex-shrink:0}
+.pf-cfg{background:var(--bg1);padding:16px;flex-shrink:0}
 .pf-cfg::-webkit-scrollbar{width:4px}.pf-cfg::-webkit-scrollbar-thumb{background:var(--ln2);border-radius:2px}
-.pf-log{display:none;flex-direction:column;overflow:hidden}
-.pf-lhd{flex-shrink:0;padding:0 14px;height:36px;background:var(--bg1);border-bottom:1px solid var(--ln);display:flex;align-items:center;gap:8px;font-size:11px;color:var(--tx2)}
+.pf-log{display:flex;flex-direction:column;overflow:hidden}
 .pf-lb{flex:1;overflow-y:auto;padding:10px 14px;font-size:12px;line-height:1.8}
+
+/* ── Mode Selector: Card Grid ── */
+.pf-mode-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:12px}
+.pf-mode-card{display:flex;flex-direction:column;align-items:center;gap:6px;padding:12px 8px;background:var(--bg2);border:1px solid var(--ln);border-radius:8px;cursor:pointer;transition:all .2s cubic-bezier(.4,0,.2,1);position:relative;overflow:hidden}
+.pf-mode-card::before{content:'';position:absolute;top:0;left:0;right:0;height:2px;background:transparent;transition:background .2s}
+.pf-mode-card:hover{border-color:rgba(0,122,255,.3);background:rgba(0,122,255,.04);transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.15)}
+.pf-mode-card:active{transform:translateY(0);box-shadow:0 2px 6px rgba(0,0,0,.1)}
+.pf-mode-card.active{border-color:var(--a);background:rgba(0,122,255,.08);box-shadow:0 0 0 1px rgba(0,122,255,.2),0 4px 12px rgba(0,122,255,.12)}
+/* active 卡片独立边框色 */
+#pfMode-profiler.pf-mode-card.active{border-color:#ff9500;background:rgba(255,149,0,.06);box-shadow:0 0 0 1px rgba(255,149,0,.25),0 4px 12px rgba(255,149,0,.1)}
+#pfMode-jfr.pf-mode-card.active{border-color:#34d399;background:rgba(52,199,89,.06);box-shadow:0 0 0 1px rgba(52,199,89,.25),0 4px 12px rgba(52,199,89,.1)}
+#pfMode-dump.pf-mode-card.active{border-color:#8b5cf6;background:rgba(139,92,246,.06);box-shadow:0 0 0 1px rgba(139,92,246,.25),0 4px 12px rgba(139,92,246,.1)}
+#pfMode-gclog.pf-mode-card.active{border-color:#00bfd8;background:rgba(0,191,216,.06);box-shadow:0 0 0 1px rgba(0,191,216,.25),0 4px 12px rgba(0,191,216,.1)}
+.pf-mode-card.active::before{background:var(--a)}
+.pf-mode-card-icon{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:8px;background:var(--bg3);color:var(--tx2);transition:all .2s}
+/* 每个模式独立配色 */
+#pfMode-profiler .pf-mode-card-icon{background:rgba(255,149,0,.12);color:#ff9500}
+#pfMode-jfr .pf-mode-card-icon{background:rgba(52,199,89,.12);color:#34d399}
+#pfMode-dump .pf-mode-card-icon{background:rgba(139,92,246,.12);color:#8b5cf6}
+#pfMode-gclog .pf-mode-card-icon{background:rgba(0,191,216,.12);color:#00bfd8}
+/* active 状态：颜色加深 */
+.pf-mode-card.active #pfMode-profiler .pf-mode-card-icon{background:rgba(255,149,0,.2);color:#ffb340}
+.pf-mode-card.active #pfMode-jfr .pf-mode-card-icon{background:rgba(52,199,89,.2);color:#6ee7b7}
+.pf-mode-card.active #pfMode-dump .pf-mode-card-icon{background:rgba(139,92,246,.2);color:#a78bfa}
+.pf-mode-card.active #pfMode-gclog .pf-mode-card-icon{background:rgba(0,191,216,.2);color:#22d3ee}
+/* hover 状态 */
+.pf-mode-card:hover .pf-mode-card-icon{transform:scale(1.08)}
+#pfMode-profiler:hover .pf-mode-card-icon{background:rgba(255,149,0,.15);color:#ffb340}
+#pfMode-jfr:hover .pf-mode-card-icon{background:rgba(52,199,89,.15);color:#6ee7b7}
+#pfMode-dump:hover .pf-mode-card-icon{background:rgba(139,92,246,.15);color:#a78bfa}
+#pfMode-gclog:hover .pf-mode-card-icon{background:rgba(0,191,216,.15);color:#22d3ee}
+.pf-mode-card-title{font-size:11px;font-weight:600;color:var(--tx2);transition:color .2s}
+.pf-mode-card.active .pf-mode-card-title{color:var(--a)}
+/* active 标题独立配色 */
+#pfMode-profiler.pf-mode-card.active .pf-mode-card-title{color:#ff9500}
+#pfMode-jfr.pf-mode-card.active .pf-mode-card-title{color:#34d399}
+#pfMode-dump.pf-mode-card.active .pf-mode-card-title{color:#8b5cf6}
+#pfMode-gclog.pf-mode-card.active .pf-mode-card-title{color:#00bfd8}
+.pf-mode-card-desc{font-size:9px;color:var(--tx3);text-align:center;line-height:1.3}
+
+/* ── Legacy Segmented Control (fallback) ── */
+.pf-segmented{display:flex;border:1px solid var(--ln2);border-radius:6px;overflow:hidden;margin-bottom:12px}
+.pf-seg-btn{flex:1 1 0;min-width:0;display:inline-flex;align-items:center;justify-content:center;gap:5px;padding:0 4px;height:34px;border:none;background:transparent;color:var(--tx2);font-size:12px;font-weight:500;cursor:pointer;transition:all .15s;border-right:1px solid var(--ln2);font-family:var(--sans);white-space:nowrap;line-height:1}
+.pf-seg-btn:last-child{border-right:none}
+.pf-seg-btn:hover{background:rgba(255,255,255,.04);color:var(--tx)}
+.pf-seg-btn.active{background:rgba(0,122,255,.12);color:var(--a);font-weight:600}
+.pf-seg-btn svg{flex-shrink:0}
+
+/* ── Params Card ── */
+.pf-params-card{background:var(--bg2);border:1px solid var(--ln);border-radius:8px;padding:14px 16px;margin-bottom:12px}
+.pf-params-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px 16px}
+.pf-params-grid.single-col{grid-template-columns:1fr}
+.pf-param-group{display:flex;flex-direction:column;gap:4px}
+.pf-param-label{font-size:12px;color:var(--tx2);font-weight:500}
+.pf-param-hint{font-size:10px;color:var(--tx3);line-height:1.4}
+
+/* ── Duration Quick Buttons ── */
+.pf-dur-quick{display:flex;gap:6px;margin-top:6px;flex-wrap:wrap}
+.pf-dur-btn{padding:3px 8px;border:1px solid var(--ln2);border-radius:4px;background:transparent;color:var(--tx2);font-size:10px;cursor:pointer;transition:all .15s;font-family:var(--mono)}
+.pf-dur-btn:hover{border-color:var(--a);color:var(--a)}
+.pf-dur-btn.active{background:rgba(0,122,255,.1);border-color:var(--a);color:var(--a)}
+
+/* ── Action Bar ── */
+.pf-action-bar{display:flex;gap:8px;margin-top:12px}
+.pf-start-btn{flex:1;padding:10px 0;background:var(--a);color:#fff;border:none;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;transition:all .15s;display:flex;align-items:center;justify-content:center;gap:6px}
+.pf-start-btn:hover{filter:brightness(1.1)}
+.pf-start-btn:disabled{opacity:.4;cursor:not-allowed;filter:none}
+.pf-start-btn.running{background:var(--a5)}
+
+/* ── Status Panel ── */
+.pf-status-panel{background:var(--bg2);border:1px solid var(--ln);border-radius:8px;padding:12px 16px;margin-top:12px;animation:pfSlideIn .2s ease-out}
+@keyframes pfSlideIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.pf-status-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12px}
+.pf-status-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
+.pf-status-dot.running{background:var(--a);animation:pfPulse 1.5s ease-in-out infinite}
+.pf-status-dot.starting{background:var(--a6);animation:pfPulse 1.5s ease-in-out infinite}
+.pf-status-dot.completed{background:var(--a3)}
+.pf-status-dot.failed{background:var(--a5)}
+.pf-status-dot.stopped{background:var(--tx3)}
+@keyframes pfPulse{0%,100%{opacity:1}50%{opacity:.4}}
+.pf-status-meta{display:flex;gap:12px;font-size:11px;color:var(--tx2);margin-top:8px;flex-wrap:wrap}
+.pf-status-meta span{display:flex;align-items:center;gap:4px}
+.pf-status-progress{margin-top:8px}
+.pf-progress-bar{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden}
+.pf-progress-fill{height:100%;background:linear-gradient(90deg,var(--a),var(--a3));border-radius:2px;transition:width .3s}
+.pf-status-actions{margin-top:8px;display:flex;justify-content:flex-end}
+.pf-stop-btn{padding:4px 12px;border:1px solid var(--a5);border-radius:4px;background:transparent;color:var(--a5);font-size:11px;cursor:pointer;transition:all .15s}
+.pf-stop-btn:hover{background:var(--a5);color:#fff}
+
+/* ── Log Header ── */
+.pf-log-header{display:flex;align-items:center;padding:0 14px;height:36px;border-bottom:1px solid var(--ln);background:var(--bg1);flex-shrink:0;gap:8px}
+.pf-log-title{font-size:12px;color:var(--tx2);font-weight:500}
+.pf-log-count{font-size:10px;color:var(--tx3)}
+.pf-log-actions{margin-left:auto;display:flex;gap:8px;align-items:center}
+
+/* ── Mode Description ── */
+.pf-mode-desc{padding:8px 12px;background:var(--bg3);border:1px solid var(--ln);border-radius:6px;font-size:11px;color:var(--tx2);line-height:1.6;margin-bottom:12px}
+
+/* ── Duration Number Input ── */
+.pf-dur-num{width:70px;padding:4px 6px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--a);font-family:var(--mono);font-size:13px;font-weight:600;text-align:center;outline:none}
+.pf-dur-num:focus{border-color:var(--a)}
 /* ── Pod Monitor ── */
 .pm-wrap{flex:1;display:flex;flex-direction:column;overflow:hidden}
 .pm-stabs{flex-shrink:0;display:flex;background:var(--bg2);border-bottom:1px solid var(--ln);overflow-x:auto}
@@ -714,10 +814,10 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 @keyframes ti{from{transform:translateY(6px);opacity:0}to{transform:translateY(0);opacity:1}}
 ::-webkit-scrollbar{width:5px;height:5px}::-webkit-scrollbar-track{background:transparent}::-webkit-scrollbar-thumb{background:var(--ln2);border-radius:3px}
 
-/* ── Profiler mode buttons ── */
+/* ── Profiler mode buttons (legacy compat) ── */
 .pf-mode-btn{background:var(--bg2);border:1px solid var(--ln2);border-radius:4px;color:var(--tx2);cursor:pointer;font-family:var(--mono);transition:all .15s}
 .pf-mode-btn:hover{border-color:var(--a);color:var(--a)}
-.pf-mode-btn.on{background:rgba(0,122,255,.1);border-color:var(--a);color:var(--a);font-weight:600}
+.pf-mode-btn.on,.pf-mode-btn.active{background:rgba(0,122,255,.1);border-color:var(--a);color:var(--a);font-weight:600}
 
 /* ── Command tip / example panel ── */
 .bldr-tip{background:var(--bg);border:1px solid var(--ln);border-radius:5px;padding:10px 12px;margin-bottom:10px;font-size:11px}
@@ -2368,6 +2468,67 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
 .sh-page-btn:hover:not(:disabled){border-color:var(--a);color:var(--a)}
 .sh-page-btn:disabled{opacity:.3;cursor:not-allowed}
 .sh-page-num{font-family:var(--mono);font-size:10px;color:var(--tx2);min-width:40px;text-align:center}
+
+/* ══════════════════════════════════════════════════════════════════════════
+   History Panel — 采样中心
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Panel Container ── */
+.hist-panel{flex:1;display:flex;flex-direction:column;overflow:hidden}
+
+/* ── Segmented Tabs ── */
+.hist-tabs{display:flex;border-bottom:1px solid var(--ln);flex-shrink:0;background:var(--bg1)}
+.hist-tab{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;padding:10px 16px;color:var(--tx2);font-size:12px;font-weight:500;cursor:pointer;border-bottom:2px solid transparent;transition:all .15s;user-select:none}
+.hist-tab:hover{color:var(--tx);background:rgba(255,255,255,.02)}
+.hist-tab.active{color:var(--a);border-bottom-color:var(--a);background:rgba(0,122,255,.04)}
+.hist-tab-icon{display:flex;color:currentColor}
+.hist-tab-badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:16px;padding:0 5px;background:var(--bg3);border-radius:8px;font-size:9px;font-weight:600;color:var(--tx2)}
+.hist-tab.active .hist-tab-badge{background:rgba(0,122,255,.15);color:var(--a)}
+
+/* ── Tab Actions ── */
+.hist-tab-actions{display:flex;align-items:center;gap:8px;padding:0 12px;margin-left:auto;border-bottom:1px solid transparent}
+.hist-tab-btn{display:inline-flex;align-items:center;gap:4px;padding:4px 10px;background:var(--bg2);border:1px solid var(--ln);border-radius:5px;color:var(--tx2);font-size:11px;cursor:pointer;transition:all .15s}
+.hist-tab-btn:hover{border-color:var(--a);color:var(--a);background:rgba(0,122,255,.06)}
+.hist-tab-btn svg{flex-shrink:0}
+
+/* ── Tab Content ── */
+.hist-content{flex:1;overflow:hidden}
+.hist-tab-pane{height:100%;overflow-y:auto;display:none}
+.hist-tab-pane.active{display:block}
+.hist-tab-pane::-webkit-scrollbar{width:5px}
+.hist-tab-pane::-webkit-scrollbar-thumb{background:var(--ln2);border-radius:3px}
+
+/* ── Connection Filter ── */
+.hist-filter-bar{display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--bg2);border-bottom:1px solid var(--ln);flex-shrink:0}
+.hist-filter-label{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--tx2);cursor:pointer;user-select:none}
+.hist-filter-label:hover{color:var(--tx)}
+.hist-filter-label input[type=checkbox]{accent-color:var(--a)}
+.hist-filter-pod{color:var(--a);font-family:var(--mono);font-size:11px}
+
+/* ── Files Tab ── */
+.hist-files-header{display:flex;align-items:center;gap:8px;padding:8px 14px;background:var(--bg2);border-bottom:1px solid var(--ln);font-size:11px;color:var(--tx2)}
+.hist-files-header code{background:var(--bg3);padding:1px 5px;border-radius:3px;font-size:10px;color:var(--a)}
+.hist-files-list{padding:8px 14px}
+.hist-file-row{display:flex;align-items:center;gap:10px;padding:10px 12px;background:var(--bg2);border:1px solid var(--ln);border-radius:6px;margin-bottom:6px;transition:all .2s}
+.hist-file-row:hover{border-color:rgba(0,122,255,.3);background:rgba(0,122,255,.02);transform:translateY(-1px);box-shadow:0 2px 8px rgba(0,0,0,.1)}
+.hist-file-icon{display:flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:6px;flex-shrink:0}
+.hist-file-icon.html{background:rgba(255,149,0,.1);color:var(--a6)}
+.hist-file-icon.jfr{background:rgba(52,199,89,.1);color:var(--a3)}
+.hist-file-icon.log{background:rgba(0,122,255,.1);color:var(--a)}
+.hist-file-icon.other{background:rgba(107,127,160,.1);color:var(--tx2)}
+.hist-file-info{flex:1;min-width:0}
+.hist-file-name{font-size:12px;color:var(--tx);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--mono)}
+.hist-file-meta{font-size:10px;color:var(--tx3);margin-top:2px;display:flex;gap:8px}
+.hist-file-meta .user{color:var(--a)}
+.hist-file-dl{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;background:var(--bg3);border:1px solid var(--ln);border-radius:5px;color:var(--tx2);cursor:pointer;transition:all .15s;flex-shrink:0}
+.hist-file-dl:hover{border-color:var(--a);color:var(--a);background:rgba(0,122,255,.08)}
+.hist-file-dl svg{flex-shrink:0}
+
+/* ── Empty State ── */
+.hist-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:60px 20px;gap:12px;color:var(--tx3)}
+.hist-empty-icon{opacity:.25}
+.hist-empty-title{font-size:14px;font-weight:500;color:var(--tx2)}
+.hist-empty-sub{font-size:12px;color:var(--tx3);text-align:center}
 
 /* ── 任务中心统计仪表盘 ──────────────────────────────────────────────── */
 .tc-stats-dashboard{padding:12px 14px;background:linear-gradient(180deg,rgba(0,122,255,.04),transparent);border-bottom:1px solid var(--ln)}

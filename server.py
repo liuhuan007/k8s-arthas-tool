@@ -1459,54 +1459,59 @@ def start_profiler():
     """启动性能分析任务（委托 ProfilerService，保持旧版响应格式）"""
     from services.profiler_service import get_profiler_service
 
-    d = request.json or {}
-    conn_id = d.get('conn_id') or d.get('connection_id') or ''
-    task_type = d.get('mode') or d.get('type', 'profiler')
-    duration = int(d.get('duration', 60))
-    fmt = d.get('format', 'html')
-    if task_type == 'jfr':
-        event = d.get('event', d.get('jfr_settings', 'default'))
-    elif task_type in ('threaddump', 'heapdump'):
-        event = d.get('event', task_type)
-    else:
-        event = d.get('event', 'cpu')
+    try:
+        d = request.json or {}
+        conn_id = d.get('conn_id') or d.get('connection_id') or ''
+        task_type = d.get('mode') or d.get('type', 'profiler')
+        duration = int(d.get('duration', 60))
+        fmt = d.get('format', 'html')
+        if task_type == 'jfr':
+            event = d.get('event', d.get('jfr_settings', 'default'))
+        elif task_type in ('threaddump', 'heapdump'):
+            event = d.get('event', task_type)
+        else:
+            event = d.get('event', 'cpu')
 
-    conn, err = _ensure_connection(conn_id, d)
-    if err:
-        return jsonify({"state": "FAILED", "message": err}), 404
+        conn, err = _ensure_connection(conn_id, d)
+        if err:
+            return jsonify({"state": "FAILED", "message": err}), 404
 
-    conn_id = conn_id or f"{d.get('cluster_name','')}/{d.get('namespace','default')}/{d.get('pod_name','')}"
+        conn_id = conn_id or f"{d.get('cluster_name','')}/{d.get('namespace','default')}/{d.get('pod_name','')}"
 
-    # 检查同一连接是否已有运行中的任务
-    running_task = db.fetch_one(
-        'SELECT id, type, event, created_at FROM profiler_tasks WHERE connection_id = ? AND status IN (?, ?) LIMIT 1',
-        (conn_id, 'running', 'starting')
-    )
-    if running_task:
-        return jsonify({
-            "state": "FAILED",
-            "message": f"该连接已有运行中的任务 (ID: {running_task['id']}, 类型: {running_task['type']}/{running_task['event']}, 启动于: {running_task['created_at']})，请等待完成后再试"
-        }), 409
+        # 检查同一连接是否已有运行中的任务
+        running_task = db.fetch_one(
+            'SELECT id, type, event, created_at FROM profiler_tasks WHERE connection_id = ? AND status IN (?, ?) LIMIT 1',
+            (conn_id, 'running', 'starting')
+        )
+        if running_task:
+            return jsonify({
+                "state": "FAILED",
+                "message": f"该连接已有运行中的任务 (ID: {running_task['id']}, 类型: {running_task['type']}/{running_task['event']}, 启动于: {running_task['created_at']})，请等待完成后再试"
+            }), 409
 
-    user_id = current_user.id if current_user.is_authenticated else None
-    svc = get_profiler_service()
-    task_id = svc.create_task(
-        connection_id=conn_id,
-        task_type=task_type,
-        event=event,
-        duration=duration,
-        fmt=fmt,
-        user_id=user_id,
-    )
+        user_id = current_user.id if current_user.is_authenticated else None
+        svc = get_profiler_service()
+        task_id = svc.create_task(
+            connection_id=conn_id,
+            task_type=task_type,
+            event=event,
+            duration=duration,
+            fmt=fmt,
+            user_id=user_id,
+        )
 
-    from services.audit_service import AuditService
-    AuditService.log_task_created(user_id, task_id, task_type)
+        from services.audit_service import AuditService
+        AuditService.log_task_created(user_id, task_id, task_type)
 
-    result = svc.start_task(task_id)
-    if not result.get('success'):
-        return jsonify({"state": "FAILED", "message": result.get('message', '启动失败')}), 500
+        result = svc.start_task(task_id)
+        if not result.get('success'):
+            return jsonify({"state": "FAILED", "message": result.get('message', '启动失败')}), 500
 
-    return jsonify({"ok": True, "task_id": task_id})
+        return jsonify({"ok": True, "task_id": task_id})
+
+    except Exception as e:
+        log.error("start_profiler failed: %s", e, exc_info=True)
+        return jsonify({"state": "FAILED", "message": f"启动采样任务失败: {str(e)}"}), 500
 
 
 @app.route('/api/profile/<task_id>', methods=['GET'])

@@ -174,6 +174,11 @@ class ProfilerService:
                     'message': str(e),
                     'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 }, 'id = ?', (task_id,))
+                # 写入诊断历史（失败）
+                try:
+                    self._write_to_diagnosis_history(task_id, task, {'message': str(e)}, 'failed')
+                except Exception:
+                    pass
 
             finally:
                 # 清理运行中引用
@@ -182,6 +187,34 @@ class ProfilerService:
         thread = threading.Thread(target=run_task, daemon=True)
         thread.start()
         
+        # 启动超时监控线程（ duration * 3 或最少 120 秒后检查）
+        task_duration = task.get('duration') or 60
+        timeout_seconds = max(task_duration * 3, 120)
+        def _timeout_watchdog():
+            import time
+            time.sleep(timeout_seconds)
+            # 如果任务仍在运行，标记为超时失败
+            current = self.db.fetch_one('SELECT status FROM profiler_tasks WHERE id = ?', (task_id,))
+            if current and current.get('status') == 'running':
+                log.warning("Profiler 任务超时: task_id=%s, timeout=%ds", task_id, timeout_seconds)
+                # 尝试取消 workflow
+                workflow = self._running_workflows.get(task_id)
+                if workflow:
+                    try:
+                        workflow.cancel()
+                    except Exception:
+                        pass
+                self.db.update('profiler_tasks', {
+                    'status': 'failed',
+                    'message': f'任务超时（超过 {timeout_seconds}s 未完成）',
+                    'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                }, 'id = ?', (task_id,))
+                self._write_to_diagnosis_history(task_id, task, {'message': '任务超时'}, 'failed')
+                self._running_workflows.pop(task_id, None)
+
+        watchdog = threading.Thread(target=_timeout_watchdog, daemon=True)
+        watchdog.start()
+
         return {"success": True, "message": "任务已启动", "task_id": task_id}
 
     def stop_task(self, task_id: str) -> Dict[str, Any]:

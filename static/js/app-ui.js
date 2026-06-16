@@ -1854,25 +1854,12 @@ async function switchConnection(connId) {
               event: targetTask.event || statusData.event || '-',
               duration: _pfDur,
               status: 'running',
+              progressPercent: Math.min(Math.floor((Date.now() - _pfStart) / 1000 / _pfDur * 100), 95),
               outputFile: statusData.output_file
             };
             updatePfTaskInfo();
 
             _pfPollTimer = setInterval(pfPoll, 2000);
-
-            const pfProg = document.getElementById('pfProg');
-            const pfProgFill = document.getElementById('pfProgFill');
-            const pfProgPct = document.getElementById('pfProgPct');
-            const pfProgLbl = document.getElementById('pfProgLbl');
-            const pfBtn = document.getElementById('pfBtn');
-            if (pfProg) pfProg.style.display = 'block';
-            if (pfProgFill) pfProgFill.style.width = `${Math.min((Date.now() - _pfStart) / 1000 / _pfDur * 100, 100)}%`;
-            if (pfProgPct) pfProgPct.textContent = `${Math.min(Math.floor((Date.now() - _pfStart) / 1000), _pfDur)}s`;
-            if (pfProgLbl) pfProgLbl.textContent = `采集中...`;
-            if (pfBtn) {
-              pfBtn.disabled = true;
-              pfBtn.textContent = '⏳ 采集中';
-            }
 
             // 加载该连接的采样日志
             await loadConnectionProfilerLogs(connId);
@@ -1890,24 +1877,10 @@ async function switchConnection(connId) {
               duration: statusData.duration || targetTask.duration || '-',
               status: 'completed',
               progress: '100%',
+              progressPercent: 100,
               outputFile: statusData.output_file
             };
             updatePfTaskInfo();
-
-            // 显示进度条完成状态
-            const pfProg = document.getElementById('pfProg');
-            const pfProgFill = document.getElementById('pfProgFill');
-            const pfProgPct = document.getElementById('pfProgPct');
-            const pfProgLbl = document.getElementById('pfProgLbl');
-            const pfBtn = document.getElementById('pfBtn');
-            if (pfProg) pfProg.style.display = 'block';
-            if (pfProgFill) pfProgFill.style.width = '100%';
-            if (pfProgPct) pfProgPct.textContent = '100%';
-            if (pfProgLbl) pfProgLbl.textContent = '已完成';
-            if (pfBtn) {
-              pfBtn.disabled = false;
-              pfBtn.textContent = '▶ 开始';
-            }
 
             // 加载该连接的采样日志和文件列表
             await loadConnectionProfilerLogs(connId);
@@ -1920,14 +1893,6 @@ async function switchConnection(connId) {
             _pfPollingForConn = null;
             hidePfTaskInfo();
 
-            const pfProg = document.getElementById('pfProg');
-            const pfBtn = document.getElementById('pfBtn');
-            if (pfProg) pfProg.style.display = 'none';
-            if (pfBtn) {
-              pfBtn.disabled = false;
-              pfBtn.textContent = '▶ 开始';
-            }
-
             // 加载该连接的采样日志
             await loadConnectionProfilerLogs(connId);
           }
@@ -1937,33 +1902,19 @@ async function switchConnection(connId) {
           delete _pfTasksByConn[connId];
           _pfPollingForConn = null;
           hidePfTaskInfo();
-          const pfProg = document.getElementById('pfProg');
-          const pfBtn = document.getElementById('pfBtn');
-          if (pfProg) pfProg.style.display = 'none';
-          if (pfBtn) {
-            pfBtn.disabled = false;
-            pfBtn.textContent = '▶ 开始';
-          }
         }
       } else {
         // 没有缓存的任务，重置 UI
         _pfPollingForConn = null;
         hidePfTaskInfo();
-        const pfProg = document.getElementById('pfProg');
+        const pfLogPanel = document.getElementById('pfl-panel-log');
+        const pfLogCnt = document.getElementById('pfLogCnt');
         const pfProgFill = document.getElementById('pfProgFill');
         const pfProgPct = document.getElementById('pfProgPct');
         const pfProgLbl = document.getElementById('pfProgLbl');
-        const pfBtn = document.getElementById('pfBtn');
-        const pfLogPanel = document.getElementById('pfl-panel-log');
-        const pfLogCnt = document.getElementById('pfLogCnt');
-        if (pfProg) pfProg.style.display = 'none';
         if (pfProgFill) pfProgFill.style.width = '0%';
         if (pfProgPct) pfProgPct.textContent = '0%';
-        if (pfProgLbl) pfProgLbl.textContent = '启动中...';
-        if (pfBtn) {
-          pfBtn.disabled = false;
-          pfBtn.textContent = '▶ 开始';
-        }
+        if (pfProgLbl) pfProgLbl.textContent = '等待中...';
         if (pfLogPanel) pfLogPanel.innerHTML = '<div class="o-dim">等待启动...</div>';
         if (pfLogCnt) pfLogCnt.textContent = '0行';
       }
@@ -2701,9 +2652,16 @@ function switchTab(n) {
 
 function switchHistTab(name) {
   ['profiler','files'].forEach(n => {
-    document.getElementById('hist-'+n)?.classList.toggle('on', n===name);
+    const tab = document.getElementById('hist-'+n);
+    if (tab) {
+      tab.classList.toggle('active', n===name);
+      tab.classList.toggle('on', n===name); // legacy compat
+    }
     const p = document.getElementById('hist-panel-'+n);
-    if(p) p.style.display = n===name ? 'block' : 'none';
+    if(p) {
+      p.classList.toggle('active', n===name);
+      p.style.display = n===name ? 'block' : 'none';
+    }
   });
 }
 
@@ -4312,14 +4270,26 @@ const PF_MODE_DESC = {
 function pfSetMode(mode) {
   _pfMode = mode;
   ['profiler','jfr','dump','gclog'].forEach(m => {
-    document.getElementById(`pfMode-${m}`)?.classList.toggle('on', m === mode);
+    const btn = document.getElementById(`pfMode-${m}`);
+    if (btn) {
+      btn.classList.toggle('active', m === mode);
+      btn.classList.toggle('on', m === mode); // legacy compat
+    }
     const cfg = document.getElementById(`pfCfg-${m}`);
     if(cfg) cfg.style.display = m === mode ? 'block' : 'none';
   });
   const desc = document.getElementById('pfModeDesc');
   if(desc) desc.textContent = PF_MODE_DESC[mode] || '';
+  // Update start button text with SVG icons
   const btn = document.getElementById('pfBtn');
-  if(btn) btn.textContent = mode === 'gclog' ? '🔍 探测 GC 日志' : mode === 'dump' ? '▶ 导出' : '▶ 开始采样';
+  if(btn) {
+    const icons = {
+      gclog: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.35-4.35"/></svg> 探测 GC 日志',
+      dump: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> 导出',
+      default: '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polygon points="5 3 19 12 5 21 5 3"/></svg> 开始采样'
+    };
+    btn.innerHTML = icons[mode] || icons.default;
+  }
   // Show/hide dump sub-options
   pfUpdateDumpOpts();
 }
@@ -4368,11 +4338,9 @@ async function pfStart() {
   const fmt    = document.getElementById('pfFmt')?.value    || 'html';
 
   // 更新任务信息面板
-  _pfTaskInfo = { type: 'async-profiler', event: event, duration: _pfDur, status: 'starting' };
+  _pfTaskInfo = { type: 'async-profiler', event: event, duration: _pfDur, status: 'starting', progressPercent: 0 };
   updatePfTaskInfo();
 
-  document.getElementById('pfBtn').disabled = true;
-  document.getElementById('pfProg').style.display = 'block';
   pfClearLog();
   _pfLastMsg = '';
   _pfLastProgressLog = 0;
@@ -4386,7 +4354,6 @@ async function pfStart() {
     if(!r.ok) {
       // 409 = 已有运行中任务，恢复按钮并提示
       if (r.status === 409) {
-        document.getElementById('pfBtn').disabled = false;
         toast(d.message || '该连接已有运行中的任务', 'warn');
         pfLog('⚠ ' + (d.message || '已有运行中的任务'), 'warn');
         hidePfTaskInfo();
@@ -4404,7 +4371,7 @@ async function pfStart() {
     pfLog(`任务已创建: ${d.task_id}`, 'ok');
     _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
     _pfPollTimer = setInterval(pfPoll, 2000);
-  } catch(e) { pfLog('失败: '+e.message, 'err'); document.getElementById('pfBtn').disabled = false; hidePfTaskInfo(); }
+  } catch(e) { pfLog('失败: '+e.message, 'err'); hidePfTaskInfo(); }
 }
 
 async function pfRunJfr(t) {
@@ -4420,11 +4387,9 @@ async function pfRunJfr(t) {
   _pfStart = Date.now(); _pfDur = dur;
 
   // 更新任务信息面板
-  _pfTaskInfo = { type: 'JDK JFR', event: settings, duration: dur, status: 'starting' };
+  _pfTaskInfo = { type: 'JDK JFR', event: settings, duration: dur, status: 'starting', progressPercent: 0 };
   updatePfTaskInfo();
 
-  document.getElementById('pfBtn').disabled = true;
-  document.getElementById('pfProg').style.display = 'block';
   pfClearLog();
   _pfLastMsg = '';
   _pfLastProgressLog = 0;
@@ -4441,7 +4406,6 @@ async function pfRunJfr(t) {
     const d = await r.json(); 
     if(!r.ok) {
       if (r.status === 409) {
-        document.getElementById('pfBtn').disabled = false;
         toast(d.message || '该连接已有运行中的任务', 'warn');
         pfLog('⚠ ' + (d.message || '已有运行中的任务'), 'warn');
         hidePfTaskInfo();
@@ -4457,7 +4421,7 @@ async function pfRunJfr(t) {
     pfLog(`JFR 任务已创建: ${d.task_id}`, 'ok');
     _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
     _pfPollTimer = setInterval(pfPoll, 2000);
-  } catch(e) { pfLog('失败: '+e.message, 'err'); document.getElementById('pfBtn').disabled = false; hidePfTaskInfo(); }
+  } catch(e) { pfLog('失败: '+e.message, 'err'); hidePfTaskInfo(); }
 }
 
 async function pfRunDump(t) {
@@ -4465,10 +4429,9 @@ async function pfRunDump(t) {
   const dumpType = document.getElementById('dumpType')?.value || 'thread';
 
   // 更新任务信息面板
-  _pfTaskInfo = { type: dumpType === 'thread' ? 'Thread Dump' : 'Heap Dump', event: '-', duration: '-', status: 'starting' };
+  _pfTaskInfo = { type: dumpType === 'thread' ? 'Thread Dump' : 'Heap Dump', event: '-', duration: '-', status: 'starting', progressPercent: 0 };
   updatePfTaskInfo();
 
-  document.getElementById('pfBtn').disabled = true;
   pfClearLog();
   _pfLastMsg = '';
   _pfLastProgressLog = 0;
@@ -4483,7 +4446,6 @@ async function pfRunDump(t) {
       const d = await r.json(); 
       if(!r.ok) {
         if (r.status === 409) {
-          document.getElementById('pfBtn').disabled = false;
           toast(d.message || '该连接已有运行中的任务', 'warn');
           pfLog('⚠ ' + (d.message || '已有运行中的任务'), 'warn');
           hidePfTaskInfo();
@@ -4500,12 +4462,10 @@ async function pfRunDump(t) {
       pfLog('正在采集，通常 5~10 秒完成...', 'dim');
       _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
       _pfPollTimer = setInterval(pfPoll, 1500);
-    } catch(e) { pfLog('失败: '+e.message, 'err'); document.getElementById('pfBtn').disabled = false; hidePfTaskInfo(); }
+    } catch(e) { pfLog('失败: '+e.message, 'err'); hidePfTaskInfo(); }
   } else {
     // heap dump
-    // 路径仅用于界面显示，实际文件名由后端用时间戳生成
-    const file    = '';  // 后端自动生成: heap-{pod}-{ts}.hprof
-    // Update UI input to show actual path
+    const file    = '';
     const _hfEl = document.getElementById('dumpHeapFile');
     if(_hfEl) _hfEl.value = file;
     const liveOnly = document.getElementById('dumpHeapLive')?.checked ?? true;
@@ -4520,7 +4480,6 @@ async function pfRunDump(t) {
       const d = await r.json(); 
       if(!r.ok) {
         if (r.status === 409) {
-          document.getElementById('pfBtn').disabled = false;
           toast(d.message || '该连接已有运行中的任务', 'warn');
           pfLog('⚠ ' + (d.message || '已有运行中的任务'), 'warn');
           hidePfTaskInfo();
@@ -4537,13 +4496,15 @@ async function pfRunDump(t) {
       pfLog('采集中，请等待...', 'dim');
       _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
       _pfPollTimer = setInterval(pfPoll, 2000);
-    } catch(e) { pfLog('失败: '+e.message, 'err'); document.getElementById('pfBtn').disabled = false; hidePfTaskInfo(); }
+    } catch(e) { pfLog('失败: '+e.message, 'err'); hidePfTaskInfo(); }
   }
 }
 
 async function pfRunGcLog(t) {
-  const btn = document.getElementById('pfBtn');
-  if(btn) btn.disabled = true;
+  // 更新任务信息面板
+  _pfTaskInfo = { type: 'GC日志', event: 'gc探测', duration: '-', status: 'starting', progressPercent: 0 };
+  updatePfTaskInfo();
+
   pfClearLog();
   _pfLastMsg = '';
   _pfLastProgressLog = 0;
@@ -4619,7 +4580,12 @@ async function pfRunGcLog(t) {
   } catch(e) {
     pfLog('探测失败: ' + e.message, 'err');
   } finally {
-    if(btn) btn.disabled = false;
+    // Re-enable start button
+    const startBtn = document.getElementById('pfBtn');
+    if (startBtn) {
+      startBtn.disabled = false;
+      startBtn.classList.remove('running');
+    }
   }
 }
 
@@ -4671,11 +4637,34 @@ async function gcDownload() {
 
 // 更新任务信息面板
 function updatePfTaskInfo() {
-  const el = document.getElementById('pfTaskInfo');
-  if (!el) return;
-  el.style.display = 'block';
+  const panel = document.getElementById('pfStatusPanel');
+  if (!panel) return;
+  panel.style.display = 'block';
   const info = _pfTaskInfo || {};
-  document.getElementById('pfInfoTaskId').textContent = info.taskId || '-';
+
+  // Status dot
+  const dot = document.getElementById('pfStatusDot');
+  if (dot) {
+    dot.className = 'pf-status-dot ' + (info.status || 'starting');
+  }
+
+  // Status text
+  const statusText = document.getElementById('pfStatusText');
+  if (statusText) {
+    const statusLabels = { starting: '启动中...', running: '采样中', completed: '已完成', failed: '失败', stopped: '已停止' };
+    statusText.textContent = statusLabels[info.status] || info.status || '准备中...';
+  }
+
+  // Status time
+  const statusTime = document.getElementById('pfStatusTime');
+  if (statusTime && info.status === 'running' && _pfStart) {
+    const elapsed = Math.floor((Date.now() - _pfStart) / 1000);
+    const dur = info.duration || 0;
+    statusTime.textContent = dur > 0 ? `${elapsed}s / ${dur}s` : `${elapsed}s`;
+  } else if (statusTime) {
+    statusTime.textContent = '';
+  }
+
   // 友好的类型/事件名称
   const typeLabels = {
     'Thread Dump': '线程转储',
@@ -4693,30 +4682,42 @@ function updatePfTaskInfo() {
     'default': '默认配置',
     'profile': 'Profile 配置'
   };
-  const typeDisplay = typeLabels[info.type] || info.type || '-';
-  const eventDisplay = eventLabels[info.event] || info.event || '-';
-  document.getElementById('pfInfoType').textContent = typeDisplay;
-  document.getElementById('pfInfoEvent').textContent = eventDisplay;
-  // 时长显示：dump 类型或 duration 为 0/空 显示 '-'
+  document.getElementById('pfInfoTaskId').textContent = info.taskId || '-';
+  document.getElementById('pfInfoType').textContent = typeLabels[info.type] || info.type || '-';
+  document.getElementById('pfInfoEvent').textContent = eventLabels[info.event] || info.event || '-';
+
   const isDump = info.type === 'Thread Dump' || info.type === 'Heap Dump' || info.event === 'threaddump' || info.event === 'heapdump';
   const durDisplay = isDump || !info.duration || info.duration === '-' || info.duration === 0 ? '-' : `${info.duration}s`;
   document.getElementById('pfInfoDur').textContent = durDisplay;
-  document.getElementById('pfInfoProgress').textContent = info.progress || '-';
-  const statusEl = document.getElementById('pfInfoStatus');
-  statusEl.textContent = info.status || '-';
-  // 状态颜色
-  if (info.status === 'running') statusEl.style.color = 'var(--a)';
-  else if (info.status === 'completed') statusEl.style.color = 'var(--a3)';
-  else if (info.status === 'failed') statusEl.style.color = 'var(--a5)';
-  else statusEl.style.color = 'var(--tx2)';
 
-  // 任务完成时显示下载按钮
+  // Progress bar
+  const fill = document.getElementById('pfProgFill');
+  const lbl = document.getElementById('pfProgLbl');
+  const pct = document.getElementById('pfProgPct');
+  if (fill) fill.style.width = (info.progressPercent || 0) + '%';
+  if (lbl) lbl.textContent = info.progress || '等待中...';
+  if (pct) pct.textContent = (info.progressPercent || 0) + '%';
+
+  // Stop button
+  const stopBtn = document.getElementById('pfStopBtn');
+  if (stopBtn) {
+    stopBtn.style.display = (info.status === 'running' || info.status === 'starting') ? 'inline-flex' : 'none';
+  }
+
+  // Start button state
+  const startBtn = document.getElementById('pfBtn');
+  if (startBtn) {
+    const isRunning = info.status === 'running' || info.status === 'starting';
+    startBtn.disabled = isRunning;
+    startBtn.classList.toggle('running', isRunning);
+  }
+
+  // Download button
   const downloadWrap = document.getElementById('pfInfoDownloadWrap');
   const downloadBtn = document.getElementById('pfInfoDownloadBtn');
   if (downloadWrap && downloadBtn) {
     if (info.status === 'completed') {
       downloadWrap.style.display = 'inline';
-      // 优先通过 task_id 下载（支持权限校验），备选通过文件名下载
       if (info.taskId) {
         const fname = info.outputFile || `profiler-${info.taskId}.html`;
         downloadBtn.onclick = () => downloadProfilerTask(info.taskId, fname);
@@ -4733,9 +4734,15 @@ function updatePfTaskInfo() {
 
 // 隐藏任务信息面板
 function hidePfTaskInfo() {
-  const el = document.getElementById('pfTaskInfo');
-  if (el) el.style.display = 'none';
+  const panel = document.getElementById('pfStatusPanel');
+  if (panel) panel.style.display = 'none';
   _pfTaskInfo = { type: '-', event: '-', duration: 0, status: '-' };
+  // Re-enable start button
+  const startBtn = document.getElementById('pfBtn');
+  if (startBtn) {
+    startBtn.disabled = false;
+    startBtn.classList.remove('running');
+  }
 }
 
 // 安全下载文件（带认证）
@@ -4770,6 +4777,13 @@ async function safeDownload(url, filename) {
 // 下载采样任务结果
 async function downloadProfilerTask(taskId, filename) {
   await safeDownload(`/profile/${taskId}/download`, filename || `profiler-${taskId}.html`);
+}
+
+// ✅ 停止当前采样任务（从状态面板调用）
+function pfStop() {
+  if (_pfTaskId) {
+    cancelProfilerTask(_pfTaskId);
+  }
 }
 
 // ✅ 中断运行中的 Profiler 任务
@@ -4853,9 +4867,26 @@ async function pfPoll() {
       const now = Date.now();
       if (d.status === 'running' && !_isQuickTask() && now - _pfLastProgressLog >= 5000) {
         const elapsed = Math.round(el);
-        const remain = Math.max(0, totalDur - elapsed);
-        await pfLog(`⏳ 采样进行中 ${elapsed}s / ${totalDur}s  剩余 ~${remain}s`, 'dim');
+        if (overtime) {
+          await pfLog(`⏳ 后端处理中 ${elapsed}s（已超过预计 ${totalDur}s）`, 'dim');
+        } else {
+          const remain = Math.max(0, totalDur - elapsed);
+          await pfLog(`⏳ 采样进行中 ${elapsed}s / ${totalDur}s  剩余 ~${remain}s`, 'dim');
+        }
         _pfLastProgressLog = now;
+      }
+
+      // ── 客户端超时保护：超过 duration * 3 或 180 秒后自动停止轮询 ──
+      const clientTimeout = Math.max(totalDur * 3, 180);
+      if (d.status === 'running' && el > clientTimeout) {
+        clearInterval(_pfPollTimer); _pfPollTimer = null; _pfLL = 0;
+        _pfPollingForConn = null;
+        _pfTaskInfo.status = 'timeout';
+        _pfTaskInfo.progress = `超时（已运行 ${Math.round(el)}s）`;
+        updatePfTaskInfo();
+        await pfLog(`✗ 任务超时：已运行 ${Math.round(el)}s，超过上限 ${clientTimeout}s`, 'err');
+        toast('采样超时，请检查后端日志', 'error');
+        return;
       }
 
       // 更新任务信息面板
@@ -4864,20 +4895,21 @@ async function pfPoll() {
       if (d.event) _pfTaskInfo.event = d.event;
       if (overtime && d.status === 'running') {
         _pfTaskInfo.progress = `采样完成，下载中 (${Math.round(el)}s)`;
+        _pfTaskInfo.progressPercent = 95;
       } else {
         _pfTaskInfo.progress = `${Math.round(el)}s / ${_pfDur}s`;
+        _pfTaskInfo.progressPercent = Math.round(pct);
       }
       updatePfTaskInfo();
 
       if(d.status==='completed'||d.status==='failed') {
         clearInterval(_pfPollTimer); _pfPollTimer = null; _pfLL = 0;
         _pfPollingForConn = null;
-        const pfBtn = document.getElementById('pfBtn');
-        if(pfBtn) pfBtn.disabled = false;
         if(d.status==='completed') {
           if(pfFill) pfFill.style.width='100%';
           if(pfPct) pfPct.textContent='100%';
           _pfTaskInfo.progress = '100%';
+          _pfTaskInfo.progressPercent = 100;
           _pfTaskInfo.status = 'completed';
           _pfTaskInfo.outputFile = d.output_file;
           updatePfTaskInfo();
@@ -5929,35 +5961,60 @@ async function loadLocalFiles() {
     document.getElementById('cntDlFiles').textContent = files.length;
     const el = document.getElementById('hist-panel-files');
     if(!el) return;
-    if(!files.length) { el.innerHTML='<div style="color:var(--tx3);text-align:center;padding:40px">暂无下载记录</div>'; return; }
-    const icon = n => n.endsWith('.html')?'🔥':n.endsWith('.jfr')?'📊':n.endsWith('.log')?'📄':'💾';
-    const showUser = typeof isAdmin === 'function' && isAdmin();  // 只有 admin 显示用户名
+    if(!files.length) {
+      el.innerHTML = `<div class="hist-empty">
+        <svg class="hist-empty-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <div class="hist-empty-title">暂无下载记录</div>
+        <div class="hist-empty-sub">采样完成后可在此下载结果文件</div>
+      </div>`;
+      return;
+    }
+
+    // SVG icon by file type
+    const fileIcon = (name) => {
+      if (name.endsWith('.html')) return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/></svg>`;
+      if (name.endsWith('.jfr')) return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>`;
+      if (name.endsWith('.log')) return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>`;
+      return `<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>`;
+    };
+
+    const fileTypeClass = (name) => {
+      if (name.endsWith('.html')) return 'html';
+      if (name.endsWith('.jfr')) return 'jfr';
+      if (name.endsWith('.log')) return 'log';
+      return 'other';
+    };
+
+    const showUser = typeof isAdmin === 'function' && isAdmin();
     
-    // 根据是否 admin 显示不同表头
     let headerHtml = '';
     if (showUser) {
-      headerHtml = `<div style="font-size:11px;color:var(--tx2);margin-bottom:10px;display:flex;align-items:center;gap:8px">
-        <span>包含：JProfiler 采样报告 + 文件浏览器下载的文件</span>
-        <span style="color:var(--a);background:rgba(122,162,247,0.1);padding:2px 6px;border-radius:3px;font-size:10px">按用户隔离</span>
+      headerHtml = `<div class="hist-files-header">
+        <span>包含：采样报告 + 文件浏览器下载的文件</span>
+        <span style="color:var(--a);background:rgba(0,122,255,.1);padding:2px 6px;border-radius:3px;font-size:10px">按用户隔离</span>
       </div>`;
     } else {
-      headerHtml = `<div style="font-size:11px;color:var(--tx2);margin-bottom:10px">
-        包含：JProfiler 采样报告 + 文件浏览器下载的文件（均保存在 <code>profiler_output/</code>）
+      headerHtml = `<div class="hist-files-header">
+        <span>包含：采样报告 + 文件浏览器下载的文件（保存在 <code>profiler_output/</code>）</span>
       </div>`;
     }
     
-    el.innerHTML = headerHtml + files.map(f => {
-      // meta 信息：大小 · 时间 · 用户（admin 才显示）
+    el.innerHTML = headerHtml + `<div class="hist-files-list">` + files.map(f => {
       const metaParts = [fmtSz(f.size), fmtTs(f.modified)];
       if (showUser && f.username) {
-        metaParts.push(`<span style="color:var(--a)">@${esc(f.username)}</span>`);
+        metaParts.push(`<span class="user">@${esc(f.username)}</span>`);
       }
-      return `<div class="frow">
-        <div style="font-size:16px">${icon(f.name)}</div>
-        <div class="fi-info"><div class="fi-nm">${esc(f.name)}</div><div class="fi-meta">${metaParts.join(' · ')}</div></div>
-        <button class="btn btn-dl" style="padding:5px 10px;font-size:11px;cursor:pointer" onclick="downloadOutputFile('${esc(f.name)}')">↓</button>
+      return `<div class="hist-file-row">
+        <div class="hist-file-icon ${fileTypeClass(f.name)}">${fileIcon(f.name)}</div>
+        <div class="hist-file-info">
+          <div class="hist-file-name">${esc(f.name)}</div>
+          <div class="hist-file-meta">${metaParts.join('<span>·</span>')}</div>
+        </div>
+        <button class="hist-file-dl" onclick="downloadOutputFile('${esc(f.name)}')" title="下载">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        </button>
       </div>`;
-    }).join('');
+    }).join('') + `</div>`;
   } catch {}
 }
 
