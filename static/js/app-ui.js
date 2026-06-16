@@ -86,8 +86,18 @@ function navigateTo(tabId) {
   }
 }
 
+window.showWorkspace = function() {
+  var tabs = document.getElementById('workspaceTabs');
+  if (tabs) tabs.style.display = 'flex';
+  var oldTabbar = document.querySelector('.tabbar');
+  if (oldTabbar) oldTabbar.style.display = 'none';
+  switchWorkspaceTab('connect');
+};
+
 window.switchWorkspaceTab = function(tabId) {
-  // Tab-to-panel mapping
+  var tabs = document.getElementById('workspaceTabs');
+  if (tabs) tabs.style.display = 'flex';
+
   var tabPanelMap = {
     'connect':    ['panel-connections'],
     'sampling':   ['panel-profiler'],
@@ -2562,10 +2572,14 @@ async function _restoreActiveConnection(conn, savedLevel) {
 }
 
 function switchTab(n) {
-  // 支持数字索引和字符串索引
-  // 新 tab 顺序: connections, profiler, console, hotfix, terminal, monitor, filebrowser, ai, model-config, mcp-center, task-center, toolchain-center, history, diag, skill-management, user-management, audit-logs
   const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'hotfix', 4:'terminal', 5:'monitor', 6:'filebrowser', 7:'ai', 8:'model-config', 9:'mcp-center', 10:'task-center', 11:'toolchain-center', 12:'history', 13:'diag', 14:'skill-management', 15:'user-management', 16:'audit-logs', 17:'alerts'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
+
+  var workspaceTabs = document.getElementById('workspaceTabs');
+  var isWorkspaceTab = ['connections','profiler','console','hotfix','terminal','monitor','filebrowser','ai','diag','diagnosis-cap','history'].includes(tab);
+  if (workspaceTabs) {
+    workspaceTabs.style.display = isWorkspaceTab ? 'flex' : 'none';
+  }
 
   // Record previous tab for history panel "back" button
   if (tab === 'history') {

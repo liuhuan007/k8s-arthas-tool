@@ -170,7 +170,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <span>工作台</span><span class="side-nav-arrow">▾</span>
       </button>
       <div class="side-nav-items" style="display:block;">
-        <button class="side-nav-item primary" data-nav-tab="workspace" onclick="switchWorkspaceTab('connect')">
+        <button class="side-nav-item primary" data-nav-tab="workspace" onclick="showWorkspace()">
           <span>🏠</span><span>工作台</span>
         </button>
       </div>
@@ -241,7 +241,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="workspace-actions" id="workspaceActions"></div>
   </div>
 
-  <div class="workspace-tabs" id="workspaceTabs">
+  <div class="workspace-tabs" id="workspaceTabs" style="display:none">
     <button class="ws-tab active" data-ws-tab="connect" onclick="switchWorkspaceTab('connect')">🔌 连接</button>
     <button class="ws-tab" data-ws-tab="sampling" onclick="switchWorkspaceTab('sampling')">🔥 采样</button>
     <button class="ws-tab" data-ws-tab="diagnosis" onclick="switchWorkspaceTab('diagnosis')">🩺 诊断</button>
