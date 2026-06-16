@@ -87,30 +87,58 @@ function navigateTo(tabId) {
 }
 
 window.switchWorkspaceTab = function(tabId) {
-  document.querySelectorAll('.ws-panel').forEach(function(p) {
+  // Tab-to-panel mapping
+  var tabPanelMap = {
+    'connect':    ['panel-connections'],
+    'sampling':   ['panel-profiler'],
+    'diagnosis':  ['panel-diag'],
+    'tools':      ['panel-terminal', 'panel-filebrowser', 'panel-monitor', 'panel-toolchain-center'],
+    'history':    ['panel-history'],
+  };
+
+  // Hide ALL .panel elements
+  document.querySelectorAll('.panel').forEach(function(p) {
     p.style.display = 'none';
     p.classList.remove('on');
   });
-  var target = document.getElementById('ws-' + tabId);
-  if (target) {
-    target.style.display = 'flex';
-    target.classList.add('on');
+
+  // Show panels for this tab
+  var panels = tabPanelMap[tabId] || [];
+  panels.forEach(function(panelId) {
+    var el = document.getElementById(panelId);
+    if (el) {
+      el.style.display = 'flex';
+      el.classList.add('on');
+    }
+  });
+
+  // For tools tab, show first panel prominently
+  if (tabId === 'tools' && panels.length) {
+    var first = document.getElementById(panels[0]);
+    if (first) { first.style.display = 'flex'; first.classList.add('on'); }
   }
+
+  // Update tab active state
   document.querySelectorAll('.ws-tab').forEach(function(t) { t.classList.remove('active'); });
   var tab = document.querySelector('[data-ws-tab="' + tabId + '"]');
   if (tab) tab.classList.add('active');
+
+  // Update workspace title
   var titles = {
-    connect: ['Connection', '连接配置'],
-    sampling: ['Sampling', '采样工具'],
-    diagnosis: ['Diagnosis', '诊断中心'],
-    tools: ['Tools', '工具箱'],
-    history: ['History', '历史记录'],
+    connect:    ['Connection', '连接配置'],
+    sampling:   ['Sampling', '采样工具'],
+    diagnosis:  ['Diagnosis', '诊断中心'],
+    tools:      ['Tools', '工具箱'],
+    history:    ['History', '历史记录'],
   };
   var pair = titles[tabId] || ['', ''];
   var kicker = document.getElementById('workspaceKicker');
   var title = document.getElementById('workspaceTitle');
   if (kicker) kicker.textContent = pair[0];
   if (title) title.textContent = pair[1];
+
+  // Update connection bar visibility
+  updateConnectionBarVisibility(tabId === 'connect' ? 'connections' : tabId);
 };
 
 // 任务中心子面板导航
