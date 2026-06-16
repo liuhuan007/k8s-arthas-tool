@@ -2570,7 +2570,11 @@ function switchTab(n) {
   
   // ✅ 新增: 工具箱面板初始化
   if (tab === 'toolchain-center') {
-    loadToolchainCenter();
+    if (typeof renderToolbox === 'function') {
+      renderToolbox();
+    } else {
+      loadToolchainCenter();
+    }
   }
 
   // 连接引导检查：允许切 Tab，但不满足要求时显示引导面板 + 禁用操作区

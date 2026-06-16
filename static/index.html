@@ -734,163 +734,53 @@ document.addEventListener('DOMContentLoaded', function() {
           <div>
             <div class="ops-kicker">Toolbox</div>
             <h2>诊断工具箱</h2>
-            <p>管理 Arthas JAR 等离线工具，提供诊断能力快捷入口</p>
+            <p>管理二进制工具、脚本工具和快捷操作，支持单个和批量分发到 Pod</p>
           </div>
           <div class="toolchain-hero-actions">
-            <button class="btn btn-g" onclick="loadToolchainCenter()">刷新</button>
-            <button class="btn btn-p" onclick="uploadToolPackageFromForm()">上传工具</button>
+            <button class="btn btn-g" onclick="renderToolbox()">刷新</button>
+            <button class="btn btn-p" onclick="toolboxOpenBatchDistribute()">📦 批量分发</button>
           </div>
         </div>
-    
-        <div class="task-summary toolchain-summary" id="toolchainSummary">
-          <div class="task-stat"><span>工具包</span><b>-</b></div>
-          <div class="task-stat"><span>可用</span><b>-</b></div>
-          <div class="task-stat"><span>Arthas</span><b>-</b></div>
-          <div class="task-stat"><span>已上传</span><b>-</b></div>
-        </div>
-    
-        <!-- 双栏布局 -->
-        <div class="toolchain-dual-layout">
-          <!-- 左栏：工具包管理 -->
-          <div class="toolchain-left-panel">
-            <section class="task-card">
-              <div class="task-card-hd">
-                <div>
-                  <div class="task-card-title">工具包管理</div>
-                  <div class="task-card-sub">上传、校验、分发 Arthas 等离线工具</div>
-                </div>
-              </div>
-                  
-              <div id="toolPackageList" class="tool-package-list"><div class="sb-empty">加载中...</div></div>
-                  
-              <!-- 上传表单 -->
-              <div class="tool-upload-form" style="margin-top:20px;padding-top:20px;border-top:1px solid var(--border-color)">
-                <div class="task-card-title" style="font-size:14px;margin-bottom:12px">上传离线工具</div>
-                <label class="fl">工具名称</label>
-                <input id="toolPackageName" class="inp" placeholder="例如：arthas-boot-3.7.2">
-                <div class="task-row">
-                  <div><label class="fl">工具类型</label><select id="toolPackageType" class="inp"><option value="arthas">Arthas</option><option value="async-profiler">async-profiler</option><option value="jattach">jattach</option><option value="generic">通用工具</option></select></div>
-                  <div><label class="fl">版本</label><input id="toolPackageVersion" class="inp" placeholder="例如：3.7.2"></div>
-                </div>
-                <label class="fl">默认安装路径</label>
-                <input id="toolPackageInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
-                <label class="fl">二进制文件</label>
-                <div class="toolchain-file-picker">
-                  <input id="toolPackageFile" class="inp toolchain-file-input" type="file" onchange="document.getElementById('toolPackageFileName').textContent = this.files?.[0]?.name || '未选择文件'">
-                  <button class="btn btn-g" type="button" onclick="document.getElementById('toolPackageFile')?.click()">选择文件</button>
-                  <span id="toolPackageFileName">未选择文件</span>
-                </div>
-                <label class="fl">描述</label>
-                <textarea id="toolPackageDesc" class="inp" rows="2" placeholder="说明工具来源、用途"></textarea>
-                <div class="task-form-footer">
-                  <button class="btn btn-g" onclick="createToolPackageFromForm()">仅登记</button>
-                  <button class="btn btn-p" onclick="uploadToolPackageFromForm()">上传并登记</button>
-                </div>
-              </div>
-            </section>
-                
-            <!-- Arthas 分发 -->
-            <section class="task-card" style="margin-top:16px">
-              <div class="task-card-hd">
-                <div>
-                  <div class="task-card-title">Arthas 离线分发</div>
-                  <div class="task-card-sub">将工具包分发到目标 Pod</div>
-                </div>
-                <span class="task-status running">离线 JAR → Pod</span>
-              </div>
-              <div class="toolchain-distribute-box">
-                <div class="task-row">
-                  <div><label class="fl">集群</label><input id="toolTargetCluster" class="inp" placeholder="cluster name"></div>
-                  <div><label class="fl">命名空间</label><input id="toolTargetNamespace" class="inp" value="default"></div>
-                </div>
-                <div class="task-row">
-                  <div><label class="fl">Pod</label><input id="toolTargetPod" class="inp" placeholder="pod name"></div>
-                  <div><label class="fl">容器</label><input id="toolTargetContainer" class="inp" placeholder="可选"></div>
-                </div>
-                <label class="fl">Pod 安装路径</label>
-                <input id="toolTargetInstallPath" class="inp" value="/tmp/arthas/arthas-boot.jar">
-                <button class="btn btn-g task-fill-btn" type="button" onclick="fillToolchainPodTargetFromCurrent()">从当前 Pod 连接填充</button>
-                <div class="task-help">工具包列表中的"分发到 Pod"会调用 distributeToolPackage(packageId)，使用上方目标信息。</div>
-              </div>
-            </section>
 
-            <!-- 分发历史 -->
-            <section class="task-card" style="margin-top:16px">
-              <div class="task-card-hd">
-                <div>
-                  <div class="task-card-title">分发历史</div>
-                  <div class="task-card-sub">最近工具包分发记录</div>
-                </div>
-                <button class="btn btn-g" onclick="loadDistributionHistory()">刷新</button>
-              </div>
-              <div id="distributionHistory" class="distribution-history-list">
-                <div class="sb-empty">暂无分发记录</div>
-              </div>
-            </section>
-          </div>
-                    
-          <!-- 右栏：诊断能力目录 + 脚本模板 -->
-          <div class="toolchain-right-panel">
-            <section class="task-card">
-              <div class="task-card-hd">
-                <div>
-                  <div class="task-card-title">诊断能力目录</div>
-                  <div class="task-card-sub">快速执行诊断任务</div>
-                </div>
-                <button class="btn btn-g" onclick="switchTab('diagnosis-cap')">查看全部 →</button>
-              </div>
-                                      
-              <div id="toolchainDiagCaps" class="toolchain-diag-caps">
-                <div class="sb-empty">加载中...</div>
-              </div>
-            </section>
-                                
-            <!-- 脚本模板管理 -->
-            <section class="task-card" style="margin-top:16px">
-              <div class="task-card-hd">
-                <div>
-                  <div class="task-card-title">脚本模板</div>
-                  <div class="task-card-sub">创建脚本模板，关联诊断能力，支持参数化配置</div>
-                </div>
-                <button class="btn btn-p" onclick="openCreateScriptTemplateModal()">+ 新建模板</button>
-              </div>
-              <div id="scriptTemplateList" class="script-template-list">
-                <div class="sb-empty">加载中...</div>
-              </div>
-            </section>
-                      
-            <!-- 快速工具规划 -->
-            <section class="task-card" style="margin-top:16px">
-              <div class="task-card-hd">
-                <div>
-                  <div class="task-card-title">快速工具规划</div>
-                  <div class="task-card-sub">常用一次性工具：jad/retransform 热更新、上传源码覆盖、Pod Python 文件下载服务。</div>
-                </div>
-              </div>
-              <div id="toolQuickPlanList" class="tool-quick-plan-list"><div class="sb-empty">加载任务模板后展示快速工具规划</div></div>
-              <div class="toolchain-source-upload">
-                <div class="task-card-title">上传 Java 源码到 Pod</div>
-                <div class="task-card-sub">把修改后的 .java 上传到 /tmp/arthas-sources，随后在 Arthas 中执行 mc + retransform。</div>
-                <div class="task-row">
-                  <div><label class="fl">源码目录</label><input id="arthasSourceDir" class="inp" value="/tmp/arthas-sources"></div>
-                  <div><label class="fl">Java 源码</label><input id="arthasSourceFile" class="inp toolchain-file-input" type="file" accept=".java"></div>
-                </div>
-                <button class="btn btn-p" onclick="uploadArthasSourceFromForm()">上传源码到当前 Pod</button>
-              </div>
-            </section>
-                
-            <!-- Arthas 最佳实践 -->
-            <section class="task-card" style="margin-top:16px">
-              <div class="task-card-hd">
-                <div>
-                  <div class="task-card-title">Arthas 最佳实践</div>
-                  <div class="task-card-sub">来自 GitHub user-case 的诊断能力</div>
-                </div>
-              </div>
-              <div id="arthasUserCaseList" class="arthas-user-case-list"><div class="sb-empty">正在加载</div></div>
-            </section>
-          </div>
+        <div class="task-summary toolchain-summary" id="toolchainSummary">
+          <div class="task-stat"><span>二进制工具</span><b id="statBinary">-</b></div>
+          <div class="task-stat"><span>脚本工具</span><b id="statScript">-</b></div>
+          <div class="task-stat"><span>快捷操作</span><b id="statQuick">-</b></div>
+          <div class="task-stat"><span>分发次数</span><b id="statDist">-</b></div>
         </div>
+
+        <!-- 二进制工具卡片组 -->
+        <section class="toolbox-section">
+          <div class="toolbox-section-header">
+            <h3>📦 二进制工具</h3>
+            <button class="btn btn-p btn-sm" onclick="toolboxUploadBinary()">上传工具</button>
+          </div>
+          <div id="toolboxBinaryTools" class="toolbox-card-grid">
+            <div class="sb-empty">加载中...</div>
+          </div>
+        </section>
+
+        <!-- 脚本工具卡片组 -->
+        <section class="toolbox-section">
+          <div class="toolbox-section-header">
+            <h3>🐍 脚本工具</h3>
+            <button class="btn btn-p btn-sm" onclick="toolboxCreateScript()">+ 新建</button>
+          </div>
+          <div id="toolboxScriptTools" class="toolbox-card-grid">
+            <div class="sb-empty">加载中...</div>
+          </div>
+        </section>
+
+        <!-- 快捷操作卡片组 -->
+        <section class="toolbox-section">
+          <div class="toolbox-section-header">
+            <h3>⚡ 快捷操作</h3>
+            <button class="btn btn-p btn-sm" onclick="toolboxCreateQuick()">+ 新建</button>
+          </div>
+          <div id="toolboxQuickActions" class="toolbox-card-grid">
+            <div class="sb-empty">加载中...</div>
+          </div>
+        </section>
       </div>
     </div>
 
