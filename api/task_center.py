@@ -1730,6 +1730,81 @@ def delete_script_tool(tool_id: int):
     return jsonify({'ok': True})
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 快捷操作 API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@task_bp.route('/quick-actions', methods=['GET'])
+@login_required
+def list_quick_actions():
+    """查询快捷操作列表"""
+    category_filter = request.args.get('category')
+    where_clauses = []
+    params = []
+    if category_filter:
+        where_clauses.append('category = ?')
+        params.append(category_filter)
+    where_sql = ' AND '.join(where_clauses) if where_clauses else '1=1'
+    rows = db.fetch_all(
+        f'SELECT * FROM quick_actions WHERE {where_sql} ORDER BY category, id',
+        tuple(params)
+    )
+    return jsonify({'actions': [dict(r) for r in rows]})
+
+
+@task_bp.route('/quick-actions', methods=['POST'])
+@login_required
+def create_quick_action():
+    """创建快捷操作"""
+    data = request.get_json(force=True)
+    name = data.get('name', '').strip()
+    command_template = data.get('command_template', '').strip()
+    if not name or not command_template:
+        return _error('名称和命令模板不能为空')
+    action_id = db.insert('quick_actions', {
+        'name': name,
+        'category': data.get('category'),
+        'command_template': command_template,
+        'risk_level': data.get('risk_level', 'low'),
+        'parameters_schema': data.get('parameters_schema'),
+        'description': data.get('description', ''),
+        'arthas_doc_url': data.get('arthas_doc_url'),
+        'created_by': current_user.id if hasattr(current_user, 'id') else None,
+    })
+    row = db.fetch_one('SELECT * FROM quick_actions WHERE id = ?', (action_id,))
+    return jsonify({'ok': True, 'action': dict(row)}), 201
+
+
+@task_bp.route('/quick-actions/<int:action_id>', methods=['PUT'])
+@login_required
+def update_quick_action(action_id: int):
+    """更新快捷操作"""
+    row = db.fetch_one('SELECT * FROM quick_actions WHERE id = ?', (action_id,))
+    if not row:
+        return _error('快捷操作不存在', 404)
+    data = request.get_json(force=True)
+    updates = {}
+    for key in ('name', 'category', 'command_template', 'risk_level', 'parameters_schema', 'description', 'arthas_doc_url'):
+        if key in data:
+            updates[key] = data[key]
+    if updates:
+        updates['updated_at'] = _now_text()
+        db.update('quick_actions', updates, 'id = ?', (action_id,))
+    row = db.fetch_one('SELECT * FROM quick_actions WHERE id = ?', (action_id,))
+    return jsonify({'ok': True, 'action': dict(row)})
+
+
+@task_bp.route('/quick-actions/<int:action_id>', methods=['DELETE'])
+@login_required
+def delete_quick_action(action_id: int):
+    """删除快捷操作"""
+    row = db.fetch_one('SELECT * FROM quick_actions WHERE id = ?', (action_id,))
+    if not row:
+        return _error('快捷操作不存在', 404)
+    db.execute('DELETE FROM quick_actions WHERE id = ?', (action_id,))
+    return jsonify({'ok': True})
+
+
 @task_bp.route('/arthas/source-upload', methods=['POST'])
 @login_required
 def upload_arthas_source():
