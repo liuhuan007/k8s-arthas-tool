@@ -893,35 +893,8 @@ function initTwoStepConnection() {
 }
 
 // ── 全局函数暴露 ──────────────────────────────────────────────────────────────
-// ✅ 延迟到 DOMContentLoaded 后暴露,避免与 ConnectionState 等依赖冲突
-// 使用 getter/setter 拦截 window._connState,确保外部赋值也能更新内部状态
-(function() {
-  Object.defineProperty(window, '_connState', {
-    get() { return _connState; },
-    set(v) {
-      // 外部赋值时同步到内部状态
-      if (typeof ConnectionState !== 'undefined') {
-        if (v === 'pod_connected' || v === ConnectionState.POD_CONNECTED) {
-          _connState = ConnectionState.POD_CONNECTED;
-        } else if (v === 'arthas_ready' || v === ConnectionState.ARTHAS_READY) {
-          _connState = ConnectionState.ARTHAS_READY;
-        } else if (v === 'disconnected' || v === ConnectionState.DISCONNECTED) {
-          _connState = ConnectionState.DISCONNECTED;
-        } else {
-          _connState = v;
-        }
-      } else {
-        _connState = v;
-      }
-    },
-    configurable: true
-  });
-  Object.defineProperty(window, '_runtimeInfo', {
-    get() { return _runtimeInfo; },
-    set(v) { _runtimeInfo = v; },
-    configurable: true
-  });
-})();
+// _connState, _runtimeInfo, _podConnId, _podPhase 已在 app-ui.js 中声明为全局变量
+// 无需 defineProperty 拦截，直接使用即可
 
 // ✅ 初始化 ConnectionStore (DOM Ready 后)
 if (document.readyState === 'loading') {
