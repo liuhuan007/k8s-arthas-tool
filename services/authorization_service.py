@@ -65,8 +65,7 @@ class AuthorizationService:
 
     @staticmethod
     def can_access_namespace(user: Any, cluster_id: str, namespace: str) -> bool:
-        if AuthorizationService._is_admin(user):
-            return True
+        # admin 不再跳过 namespace 检查，需在 user_namespaces 中有授权
         if not user or not cluster_id or not namespace:
             return False
         user_id = getattr(user, 'id', None)
@@ -82,8 +81,7 @@ class AuthorizationService:
     @staticmethod
     def filter_namespaces(user: Any, cluster_id: str, namespaces: Iterable[str]) -> List[str]:
         ns_list = list(namespaces or [])
-        if AuthorizationService._is_admin(user):
-            return ns_list
+        # admin 不再跳过 namespace 检查
         if not user or not cluster_id:
             return []
         namespace_rows = []
