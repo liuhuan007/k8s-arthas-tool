@@ -168,7 +168,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <!-- 连接管理 -->
     <div class="side-nav-group side-nav-group-expanded" data-side-group="connection">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
-        <span>连接管理</span><span class="side-nav-arrow">▾</span>
+        <span>连接</span><span class="side-nav-arrow">▾</span>
       </button>
       <div class="side-nav-items" style="display:block;">
         <button class="side-nav-item primary" data-nav-tab="connections" onclick="navigateTo('connections')">
@@ -177,7 +177,7 @@ document.addEventListener('DOMContentLoaded', function() {
       </div>
     </div>
 
-    <!-- 诊断 -->
+    <!-- 诊断（合并所有诊断相关） -->
     <div class="side-nav-group side-nav-group-expanded" data-side-group="diagnosis">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
         <span>诊断</span><span class="side-nav-arrow">▾</span>
@@ -192,22 +192,30 @@ document.addEventListener('DOMContentLoaded', function() {
         <button class="side-nav-item" data-nav-tab="diagnosis-ai" onclick="navigateToDiagnosis('ai')">
           <span>🤖</span><span>AI 诊断</span>
         </button>
-        <button class="side-nav-item" data-nav-tab="diagnosis-history" onclick="navigateToDiagnosis('history')">
-          <span>📊</span><span>历史记录</span>
-        </button>
         <button class="side-nav-item" data-nav-tab="dashboard" onclick="navigateTo('dashboard')">
           <span>📈</span><span>控制面板</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="profiler" onclick="navigateTo('profiler')">
+          <span>🔥</span><span>采样工具</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="hotfix" onclick="navigateTo('hotfix')">
+          <span>🔧</span><span>在线修复</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="thread-diagnosis" onclick="navigateTo('thread-diagnosis')">
+          <span>🧵</span><span>线程诊断</span>
+        </button>
+        <button class="side-nav-item" data-nav-tab="diagnosis-history" onclick="navigateToDiagnosis('history')">
+          <span>📊</span><span>历史记录</span>
         </button>
       </div>
     </div>
 
-    <!-- 实时操作 -->
+    <!-- 工具 -->
     <div class="side-nav-group" data-side-group="tools">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
-        <span>实时操作</span><span class="side-nav-arrow">▾</span>
+        <span>工具</span><span class="side-nav-arrow">▾</span>
       </button>
       <div class="side-nav-items">
-        <div class="side-nav-subgroup side-nav-subgroup-label">Pod 基础</div>
         <button class="side-nav-item" data-nav-tab="terminal" onclick="navigateTo('terminal')">
           <span>🖥️</span><span>终端</span>
         </button>
@@ -217,35 +225,16 @@ document.addEventListener('DOMContentLoaded', function() {
         <button class="side-nav-item" data-nav-tab="monitor" onclick="navigateTo('monitor')">
           <span>📊</span><span>Pod 监控</span>
         </button>
-        <div class="side-nav-subgroup side-nav-subgroup-label">JVM 诊断</div>
-        <button class="side-nav-item" data-nav-tab="profiler" onclick="navigateTo('profiler')">
-          <span>🔥</span><span>采样工具</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="hotfix" onclick="navigateTo('hotfix')">
-          <span>🔧</span><span>在线修复</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="thread-dump" onclick="navigateTo('thread-dump')">
-          <span>🧵</span><span>线程诊断</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- 工具箱 -->
-    <div class="side-nav-group" data-side-group="toolbox">
-      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
-        <span>工具箱</span><span class="side-nav-arrow">▾</span>
-      </button>
-      <div class="side-nav-items">
         <button class="side-nav-item" data-nav-tab="toolchain-center" onclick="navigateTo('toolchain-center')">
-          <span>🧰</span><span>工具管理</span>
+          <span>🧰</span><span>工具箱</span>
         </button>
       </div>
     </div>
 
-    <!-- 任务中心 -->
+    <!-- 任务 -->
     <div class="side-nav-group" data-side-group="task">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
-        <span>任务中心</span><span class="side-nav-arrow">▾</span>
+        <span>任务</span><span class="side-nav-arrow">▾</span>
       </button>
       <div class="side-nav-items">
         <button class="side-nav-item" data-nav-tab="task-center" onclick="navigateToTaskCenter('tasks')">
@@ -263,7 +252,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <!-- 系统管理 -->
     <div class="side-nav-group admin-only collapsed" data-side-group="system">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
-        <span>系统管理</span><span class="side-nav-arrow">▾</span>
+        <span>系统</span><span class="side-nav-arrow">▾</span>
       </button>
       <div class="side-nav-items">
         <button class="side-nav-item" data-nav-tab="skill-management" onclick="navigateTo('skill-management')">
@@ -287,7 +276,7 @@ document.addEventListener('DOMContentLoaded', function() {
       </div>
     </div>
 
-    <!-- 外部系统（保留动态加载） -->
+    <!-- 外部系统 -->
     <div class="side-nav-group collapsed" data-side-group="external">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
         <span>外部系统</span><span class="side-nav-arrow">▾</span>
