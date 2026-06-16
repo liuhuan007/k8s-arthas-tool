@@ -530,6 +530,72 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_packages_status ON tool_packages(status)")
             log.info("Schema initialized: tool_packages table created")
 
+            # script_tools 表（脚本工具）
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS script_tools (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    runtime TEXT NOT NULL DEFAULT 'python',
+                    script_body TEXT NOT NULL,
+                    risk_level TEXT DEFAULT 'low',
+                    parameters_schema TEXT,
+                    capability_id INTEGER,
+                    description TEXT,
+                    created_by INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE SET NULL,
+                    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_script_tools_runtime ON script_tools(runtime)")
+            log.info("Schema initialized: script_tools table created")
+
+            # quick_actions 表（快捷操作）
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS quick_actions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    category TEXT,
+                    command_template TEXT NOT NULL,
+                    parameters_schema TEXT,
+                    risk_level TEXT DEFAULT 'low',
+                    description TEXT,
+                    arthas_doc_url TEXT,
+                    created_by INTEGER,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_quick_actions_category ON quick_actions(category)")
+            log.info("Schema initialized: quick_actions table created")
+
+            # tool_distributions 表（分发记录）
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS tool_distributions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    tool_type TEXT NOT NULL,
+                    tool_id INTEGER NOT NULL,
+                    tool_name TEXT,
+                    target_cluster TEXT,
+                    target_namespace TEXT,
+                    target_pod TEXT,
+                    target_container TEXT,
+                    install_path TEXT,
+                    status TEXT DEFAULT 'pending',
+                    error_message TEXT,
+                    duration_ms INTEGER,
+                    distributed_by INTEGER,
+                    distributed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (distributed_by) REFERENCES users(id) ON DELETE SET NULL
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_dist_type ON tool_distributions(tool_type, tool_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_dist_pod ON tool_distributions(target_cluster, target_namespace, target_pod)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_tool_dist_status ON tool_distributions(status)")
+            log.info("Schema initialized: tool_distributions table created")
+
             # ── Knowledge Base: 诊断案例 & 案例匹配 ─────────────────────────
             # diagnosis_cases 表（诊断案例库）
             cursor.execute('''
