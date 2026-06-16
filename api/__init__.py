@@ -99,6 +99,7 @@ def register_blueprints(app: Flask):
     from api.arthas_routes import arthas_bp
     from api.mcp_standard import mcp_std_bp
     from api.scheduler_routes import scheduler_bp
+    from api.cli_api import cli_bp
 
     app.register_blueprint(auth_bp)
     app.register_blueprint(users_bp)
@@ -119,4 +120,5 @@ def register_blueprints(app: Flask):
     app.register_blueprint(knowledge_bp)
     app.register_blueprint(arthas_bp)
     app.register_blueprint(scheduler_bp)
+    app.register_blueprint(cli_bp)
     app.register_blueprint(mcp_std_bp)
