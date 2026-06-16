@@ -316,9 +316,9 @@ def mcp_proxy(token):
 def list_availableconnections():
     """列出当前用户可绑定 MCP Token 的活跃 Arthas 连接。
 
-    MCP 代理依赖 Arthas HTTP/MCP port-forward，因此这里只返回当前内存中
-    属于当前用户、仍存活且具备本地端口的 Arthas 连接；不再混入数据库历史记录，
-    避免 Token 绑定到已经不存在的 Pod 或断开的连接。
+    MCP 代理依赖 Arthas HTTP/MCP port-forward，因此这里优先返回当前内存中
+    属于当前用户、仍存活且具备本地端口的 Arthas 连接；
+    内存为空时回退到数据库（兼容重启后连接未恢复的场景）。
     """
     from backend.app_context import connections, connections_lock
 
@@ -359,6 +359,45 @@ def list_availableconnections():
                 "arthas_address": getattr(conn, 'arthas_address', None),
                 "mcp_available": entry.get('mcp_available', False),
             })
+
+    # 内存为空时回退到数据库
+    if not available:
+        try:
+            from models.db import db
+            if current_user.is_admin:
+                rows = db.fetch_all(
+                    "SELECT id, cluster_name, namespace, pod_name, local_port, "
+                    "java_pid, arthas_version, user_id FROM connections "
+                    "WHERE level = 'arthas' AND status = 'ready' AND local_port IS NOT NULL"
+                )
+            else:
+                rows = db.fetch_all(
+                    "SELECT id, cluster_name, namespace, pod_name, local_port, "
+                    "java_pid, arthas_version, user_id FROM connections "
+                    "WHERE level = 'arthas' AND status = 'ready' AND local_port IS NOT NULL "
+                    "AND user_id = ?",
+                    (current_user.id,)
+                )
+            for row in (rows or []):
+                available.append({
+                    "id": row['id'],
+                    "alive": False,
+                    "pod_exists": True,
+                    "local_port": row.get('local_port'),
+                    "cluster": row.get('cluster_name', ''),
+                    "cluster_name": row.get('cluster_name', ''),
+                    "namespace": row.get('namespace', ''),
+                    "pod": row.get('pod_name', ''),
+                    "pod_name": row.get('pod_name', ''),
+                    "status": "db_only",
+                    "level": "arthas",
+                    "java_pid": row.get('java_pid'),
+                    "arthas_version": row.get('arthas_version'),
+                    "arthas_address": None,
+                    "mcp_available": False,
+                })
+        except Exception:
+            pass
 
     return jsonify({"connections": available})
 

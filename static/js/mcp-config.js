@@ -88,7 +88,7 @@ function normalizeMcpConnections(connections, healthMap = {}) {
       const id = c.id || c.connection_id;
       const h = healthMap[id] || {};
       const level = inferMcpConnLevel(c);
-      const alive = h.alive ?? c.alive ?? c.status === 'connected';
+      const alive = h.alive ?? c.alive ?? c.status === 'connected' || c.status === 'db_only';
       const podExists = h.pod_exists ?? c.pod_exists;
       return {
         id,
@@ -107,7 +107,7 @@ function normalizeMcpConnections(connections, healthMap = {}) {
     .filter(c => c.id)
     .filter(c => c.level === 'arthas')
     .filter(c => c.pod_exists !== false)
-    .filter(c => c.alive !== false)
+    .filter(c => c.alive !== false || c.status === 'db_only')
     .filter(c => Boolean(c.local_port));
 }
 
