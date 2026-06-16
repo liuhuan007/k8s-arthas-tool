@@ -14,6 +14,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -1803,6 +1804,71 @@ def delete_quick_action(action_id: int):
         return _error('快捷操作不存在', 404)
     db.execute('DELETE FROM quick_actions WHERE id = ?', (action_id,))
     return jsonify({'ok': True})
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Pod 能力检测 API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@task_bp.route('/detect-capability', methods=['POST'])
+@login_required
+def detect_pod_capability():
+    """检测 Pod 能力（Java/Go/Python，Arthas 状态）"""
+    data = request.get_json(force=True)
+    cluster = data.get('cluster')
+    namespace = data.get('namespace', 'default')
+    pod = data.get('pod')
+    container = data.get('container', '')
+    if not cluster or not pod:
+        return _error('cluster 和 pod 不能为空')
+
+    result = {
+        'has_java': False,
+        'java_version': None,
+        'has_arthas': False,
+        'arthas_version': None,
+        'has_exec': True,
+        'capability_level': 'unknown',
+    }
+
+    try:
+        cmd_parts = ['kubectl', 'exec', '-n', namespace, pod]
+        if container:
+            cmd_parts.extend(['-c', container])
+        cmd_parts.extend(['--', 'java', '-version'])
+
+        proc = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=10)
+        if proc.returncode == 0:
+            result['has_java'] = True
+            version_match = re.search(r'"(\d+\.\d+\.\d+)', proc.stderr or proc.stdout)
+            if version_match:
+                result['java_version'] = version_match.group(1)
+
+            arthas_paths = ['/app/arthas/arthas-boot.jar', '/opt/arthas/arthas-boot.jar',
+                           '/arthas/arthas-boot.jar', '/home/admin/arthas-boot.jar']
+            for arthas_path in arthas_paths:
+                check_cmd = cmd_parts[:-3] + ['--', 'ls', '-la', arthas_path]
+                check_proc = subprocess.run(check_cmd, capture_output=True, text=True, timeout=5)
+                if check_proc.returncode == 0 and 'arthas-boot.jar' in (check_proc.stdout or ''):
+                    result['has_arthas'] = True
+                    break
+        elif 'exec' in (proc.stderr or '').lower() or 'forbidden' in (proc.stderr or '').lower():
+            result['has_exec'] = False
+    except subprocess.TimeoutExpired:
+        result['has_exec'] = False
+    except Exception as e:
+        log.warning(f"能力检测失败: {e}")
+
+    if result['has_java'] and result['has_arthas']:
+        result['capability_level'] = 'pod+arthas'
+    elif result['has_java']:
+        result['capability_level'] = 'pod-only'
+    elif result['has_exec']:
+        result['capability_level'] = 'non-java'
+    else:
+        result['capability_level'] = 'no-exec'
+
+    return jsonify(result)
 
 
 @task_bp.route('/arthas/source-upload', methods=['POST'])
