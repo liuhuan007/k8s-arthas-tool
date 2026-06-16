@@ -333,8 +333,11 @@
     try {
       const r = await fetch(`${API}/api/ai/config`, {credentials: 'include'});
       const d = await r.json();
+      console.log('[AI] Config loaded:', d);
       window._aiConfigured = !!d.config;
+      console.log('[AI] _aiConfigured:', window._aiConfigured);
     } catch(e) {
+      console.log('[AI] Config load error:', e);
       window._aiConfigured = false;
     }
   }
@@ -498,6 +501,7 @@
   // ═══════════════════════════════════════════════════════════════
 
   window.aiSend = async function() {
+    console.log('[AI] aiSend called, _aiStreaming:', _aiStreaming, '_aiConfigured:', window._aiConfigured);
     if (_aiStreaming) return;
 
     const input = document.getElementById('aiInput');
@@ -506,6 +510,7 @@
 
     // 检查是否配置了 AI
     if (!window._aiConfigured) {
+      console.log('[AI] Not configured, showing settings');
       aiAddSystemMessage('⚠️ 请先配置 AI 模型，点击顶部「⚙️ 配置大模型」');
       aiOpenSettings();
       return;
@@ -532,6 +537,7 @@
     const assistantEl = aiAddMessage('assistant', '', true);
 
     try {
+      console.log('[AI] Sending request to /api/ai/chat');
       const r = await fetch(`${API}/api/ai/chat`, {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
@@ -543,8 +549,10 @@
         }),
       });
 
+      console.log('[AI] Response status:', r.status);
       if (!r.ok) {
         const err = await r.json().catch(() => ({error: `HTTP ${r.status}`}));
+        console.log('[AI] Error response:', err);
         throw new Error(err.error || `HTTP ${r.status}`);
       }
 
@@ -568,6 +576,7 @@
 
           try {
             const data = JSON.parse(dataStr);
+            console.log('[AI] SSE event:', data.type || data.error ? 'error' : 'content');
 
             if (data.type === 'content') {
               fullContent += data.content;
@@ -582,15 +591,19 @@
               fullContent += `✓ 工具执行完成\n\n`;
               aiUpdateMessage(assistantEl, fullContent, true);
             } else if (data.type === 'done') {
-              // 完成
+              console.log('[AI] Stream done');
             } else if (data.error) {
+              console.log('[AI] Error in stream:', data.error);
               fullContent += `\n\n❌ 错误: ${data.error}`;
               aiUpdateMessage(assistantEl, fullContent, true);
             }
-          } catch(e) {}
+          } catch(e) {
+            console.log('[AI] Parse error:', e);
+          }
         }
       }
 
+      console.log('[AI] Stream complete, fullContent length:', fullContent.length);
       aiUpdateMessage(assistantEl, fullContent, false);
       _aiMessages.push({role: 'assistant', content: fullContent});
       saveChatToStorage();
