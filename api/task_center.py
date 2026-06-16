@@ -1871,6 +1871,111 @@ def detect_pod_capability():
     return jsonify(result)
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 批量分发 API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@task_bp.route('/batch-distribute', methods=['POST'])
+@login_required
+def batch_distribute():
+    """批量分发工具到多个 Pod"""
+    data = request.get_json(force=True)
+    tool_ids = data.get('tool_ids', [])
+    tool_type = data.get('tool_type', 'binary')
+    targets = data.get('targets', [])
+    install_path = data.get('install_path', '/tmp/arthas/arthas-boot.jar')
+
+    if not tool_ids or not targets:
+        return _error('请选择工具和目标 Pod')
+
+    batch_id = f"batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+    results = []
+
+    for tool_id in tool_ids:
+        tool_row = db.fetch_one('SELECT * FROM tool_packages WHERE id = ?', (tool_id,))
+        if not tool_row:
+            continue
+        tool_name = tool_row.get('name', f'tool-{tool_id}')
+
+        for target in targets:
+            cluster = target.get('cluster', '')
+            namespace = target.get('namespace', 'default')
+            pod = target.get('pod', '')
+            container = target.get('container', '')
+
+            dist_id = db.insert('tool_distributions', {
+                'tool_type': tool_type,
+                'tool_id': tool_id,
+                'tool_name': tool_name,
+                'target_cluster': cluster,
+                'target_namespace': namespace,
+                'target_pod': pod,
+                'target_container': container,
+                'install_path': install_path,
+                'status': 'pending',
+                'distributed_by': current_user.id if hasattr(current_user, 'id') else None,
+            })
+
+            # 执行分发
+            try:
+                start_time = time.time()
+                _do_distribute(tool_row, cluster, namespace, pod, container, install_path)
+                duration_ms = int((time.time() - start_time) * 1000)
+                db.update('tool_distributions', {
+                    'status': 'success',
+                    'duration_ms': duration_ms,
+                }, 'id = ?', (dist_id,))
+                results.append({
+                    'tool': tool_name,
+                    'pod': pod,
+                    'status': 'success',
+                    'duration_ms': duration_ms,
+                })
+            except Exception as e:
+                db.update('tool_distributions', {
+                    'status': 'failed',
+                    'error_message': str(e),
+                }, 'id = ?', (dist_id,))
+                results.append({
+                    'tool': tool_name,
+                    'pod': pod,
+                    'status': 'failed',
+                    'error': str(e),
+                })
+
+    success_count = sum(1 for r in results if r['status'] == 'success')
+    failed_count = sum(1 for r in results if r['status'] == 'failed')
+
+    return jsonify({
+        'batch_id': batch_id,
+        'total': len(results),
+        'results': results,
+        'summary': {
+            'success': success_count,
+            'failed': failed_count,
+            'skipped': 0,
+        }
+    })
+
+
+def _do_distribute(tool_row, cluster, namespace, pod, container, install_path):
+    """执行单次分发（从现有 distribute 逻辑提取）"""
+    file_path = tool_row.get('file_path', '')
+    if not file_path or not os.path.exists(file_path):
+        raise ValueError(f"工具文件不存在: {file_path}")
+
+    # 构建 kubectl cp 命令
+    cmd_parts = ['kubectl', 'cp', '-n', namespace]
+    if container:
+        cmd_parts.extend(['-c', container])
+    target = f"{cluster}/{pod}:{install_path}" if cluster else f"{pod}:{install_path}"
+    cmd_parts.extend([file_path, target])
+
+    proc = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=120)
+    if proc.returncode != 0:
+        raise RuntimeError(f"kubectl cp 失败: {proc.stderr}")
+
+
 @task_bp.route('/arthas/source-upload', methods=['POST'])
 @login_required
 def upload_arthas_source():
