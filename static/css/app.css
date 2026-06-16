@@ -3083,3 +3083,32 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
   color: var(--tx3);
   margin-left: auto;
 }
+
+.conn-batch-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--bg1);
+  border-bottom: 1px solid var(--ln);
+  font-size: 13px;
+}
+
+.conn-batch-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.conn-batch-select-all {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  cursor: pointer;
+}
+
+.conn-checkbox {
+  margin-right: 8px;
+  cursor: pointer;
+  accent-color: var(--a2);
+}

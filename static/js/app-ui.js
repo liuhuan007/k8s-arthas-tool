@@ -1478,6 +1478,7 @@ function renderConnList() {
 
     html += `
       <div class="conn-itm ${isActive?'on':''}" onclick="switchConnection('${c.id}')" title="集群: ${esc(c.cluster_name)}\n环境: ${c.namespace}\nPod: ${c.pod_name}\n连接类型: ${level === 'arthas' ? 'Arthas连接' : 'Pod连接'}${c.local_port ? '\n端口: ' + c.local_port : ''}${c.arthas_version ? '\nArthas: ' + c.arthas_version : ''}${c.arthas_address ? '\n地址: ' + c.arthas_address : ''}${statusHint ? '\n' + statusHint : ''}">
+        <input type="checkbox" class="conn-checkbox" onclick="event.stopPropagation();updateSelectedCount()">
         <div class="conn-info">
           <div class="conn-cluster">${statusIcon ? `<span style="font-size:9px;${statusStyle};margin-right:3px" title="${statusHint}">${statusIcon}</span>` : `<span style="font-size:11px">${levelIcon}</span>`} ${esc(c.cluster_name)}${levelBadge}</div>
           <div class="conn-pod"><span class="conn-ns">${c.namespace}</span><span class="conn-slash">/</span><span class="conn-name">${esc(c.pod_name)}</span></div>
@@ -1490,6 +1491,7 @@ function renderConnList() {
     `;
   });
   el.innerHTML = html;
+  if (typeof renderConnectionBatchActions === 'function') renderConnectionBatchActions();
 }
 
 async function loadConnectionCommands(connId) {

@@ -251,6 +251,52 @@ if (typeof module !== 'undefined' && module.exports) {
   };
 }
 
+// ── 批量操作 ─────────────────────────────────────────────────────────────
+
+/**
+ * 在连接记录表格上方添加批量操作栏
+ */
+function renderConnectionBatchActions() {
+  const container = document.getElementById('connList');
+  if (!container) return;
+  if (container.querySelector('.conn-batch-bar')) return;
+
+  const batchBar = document.createElement('div');
+  batchBar.className = 'conn-batch-bar';
+  batchBar.innerHTML = `
+    <div class="conn-batch-left">
+      <label class="conn-batch-select-all">
+        <input type="checkbox" id="connSelectAll" onchange="toggleAllConnections(this.checked)">
+        全选
+      </label>
+      <span id="connSelectedCount" style="font-size:12px;color:var(--tx2)">已选 0 个</span>
+    </div>
+    <div class="conn-batch-actions">
+      <button class="btn btn-g btn-sm" onclick="batchDistributeFromConnections()">📦 批量分发工具</button>
+    </div>
+  `;
+  container.insertBefore(batchBar, container.firstChild);
+}
+
+window.toggleAllConnections = function(checked) {
+  const checkboxes = document.querySelectorAll('.conn-checkbox');
+  checkboxes.forEach(cb => { cb.checked = checked; });
+  updateSelectedCount();
+};
+
+window.updateSelectedCount = function() {
+  const checked = document.querySelectorAll('.conn-checkbox:checked').length;
+  const el = document.getElementById('connSelectedCount');
+  if (el) el.textContent = `已选 ${checked} 个`;
+};
+
+window.batchDistributeFromConnections = function() {
+  const checked = document.querySelectorAll('.conn-checkbox:checked');
+  if (checked.length === 0) { toast('请先选择连接', 'warn'); return; }
+  navigateTo('toolchain-center');
+  setTimeout(() => { if (typeof toolboxOpenBatchDistribute === 'function') toolboxOpenBatchDistribute(); }, 300);
+};
+
 // 全局暴露（供 HTML onclick 调用）
 window.upgradeConnectionFromList = upgradeConnectionFromList;
 window.inferConnLevel = inferConnLevel;
@@ -258,6 +304,7 @@ window.getConnRuntime = getConnRuntime;
 window.canUpgradeConnection = canUpgradeConnection;
 window.confirmModal = confirmModal;
 window.hasActiveDiagnosis = hasActiveDiagnosis;
+window.renderConnectionBatchActions = renderConnectionBatchActions;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Phase 5: 自定义确认对话框 (不用原生 alert/confirm)
