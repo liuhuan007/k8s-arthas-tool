@@ -1655,6 +1655,81 @@ def list_distributions():
     })
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# 脚本工具 API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@task_bp.route('/script-tools', methods=['GET'])
+@login_required
+def list_script_tools():
+    """查询脚本工具列表"""
+    runtime_filter = request.args.get('runtime')
+    where_clauses = []
+    params = []
+    if runtime_filter:
+        where_clauses.append('runtime = ?')
+        params.append(runtime_filter)
+    where_sql = ' AND '.join(where_clauses) if where_clauses else '1=1'
+    rows = db.fetch_all(
+        f'SELECT * FROM script_tools WHERE {where_sql} ORDER BY id DESC',
+        tuple(params)
+    )
+    return jsonify({'tools': [dict(r) for r in rows]})
+
+
+@task_bp.route('/script-tools', methods=['POST'])
+@login_required
+def create_script_tool():
+    """创建脚本工具"""
+    data = request.get_json(force=True)
+    name = data.get('name', '').strip()
+    script_body = data.get('script_body', '').strip()
+    if not name or not script_body:
+        return _error('名称和脚本内容不能为空')
+    tool_id = db.insert('script_tools', {
+        'name': name,
+        'runtime': data.get('runtime', 'python'),
+        'script_body': script_body,
+        'risk_level': data.get('risk_level', 'low'),
+        'parameters_schema': data.get('parameters_schema'),
+        'capability_id': data.get('capability_id'),
+        'description': data.get('description', ''),
+        'created_by': current_user.id if hasattr(current_user, 'id') else None,
+    })
+    row = db.fetch_one('SELECT * FROM script_tools WHERE id = ?', (tool_id,))
+    return jsonify({'ok': True, 'tool': dict(row)}), 201
+
+
+@task_bp.route('/script-tools/<int:tool_id>', methods=['PUT'])
+@login_required
+def update_script_tool(tool_id: int):
+    """更新脚本工具"""
+    row = db.fetch_one('SELECT * FROM script_tools WHERE id = ?', (tool_id,))
+    if not row:
+        return _error('脚本工具不存在', 404)
+    data = request.get_json(force=True)
+    updates = {}
+    for key in ('name', 'runtime', 'script_body', 'risk_level', 'parameters_schema', 'capability_id', 'description'):
+        if key in data:
+            updates[key] = data[key]
+    if updates:
+        updates['updated_at'] = _now_text()
+        db.update('script_tools', updates, 'id = ?', (tool_id,))
+    row = db.fetch_one('SELECT * FROM script_tools WHERE id = ?', (tool_id,))
+    return jsonify({'ok': True, 'tool': dict(row)})
+
+
+@task_bp.route('/script-tools/<int:tool_id>', methods=['DELETE'])
+@login_required
+def delete_script_tool(tool_id: int):
+    """删除脚本工具"""
+    row = db.fetch_one('SELECT * FROM script_tools WHERE id = ?', (tool_id,))
+    if not row:
+        return _error('脚本工具不存在', 404)
+    db.execute('DELETE FROM script_tools WHERE id = ?', (tool_id,))
+    return jsonify({'ok': True})
+
+
 @task_bp.route('/arthas/source-upload', methods=['POST'])
 @login_required
 def upload_arthas_source():
