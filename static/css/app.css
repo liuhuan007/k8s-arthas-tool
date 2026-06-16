@@ -3112,3 +3112,44 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
   cursor: pointer;
   accent-color: var(--a2);
 }
+
+.workspace-tabs {
+  display: flex;
+  gap: 0;
+  border-bottom: 1px solid var(--ln);
+  background: var(--bg1);
+  padding: 0 16px;
+}
+
+.ws-tab {
+  padding: 10px 16px;
+  border: none;
+  background: none;
+  color: var(--tx2);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all 0.2s;
+}
+
+.ws-tab:hover {
+  color: var(--tx);
+  background: var(--bg2);
+}
+
+.ws-tab.active {
+  color: var(--a);
+  border-bottom-color: var(--a);
+}
+
+.ws-panel {
+  display: none;
+  flex: 1;
+  overflow: auto;
+}
+
+.ws-panel.on {
+  display: flex;
+  flex-direction: column;
+}

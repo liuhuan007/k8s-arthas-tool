@@ -86,6 +86,33 @@ function navigateTo(tabId) {
   }
 }
 
+window.switchWorkspaceTab = function(tabId) {
+  document.querySelectorAll('.ws-panel').forEach(function(p) {
+    p.style.display = 'none';
+    p.classList.remove('on');
+  });
+  var target = document.getElementById('ws-' + tabId);
+  if (target) {
+    target.style.display = 'flex';
+    target.classList.add('on');
+  }
+  document.querySelectorAll('.ws-tab').forEach(function(t) { t.classList.remove('active'); });
+  var tab = document.querySelector('[data-ws-tab="' + tabId + '"]');
+  if (tab) tab.classList.add('active');
+  var titles = {
+    connect: ['Connection', '连接配置'],
+    sampling: ['Sampling', '采样工具'],
+    diagnosis: ['Diagnosis', '诊断中心'],
+    tools: ['Tools', '工具箱'],
+    history: ['History', '历史记录'],
+  };
+  var pair = titles[tabId] || ['', ''];
+  var kicker = document.getElementById('workspaceKicker');
+  var title = document.getElementById('workspaceTitle');
+  if (kicker) kicker.textContent = pair[0];
+  if (title) title.textContent = pair[1];
+};
+
 // 任务中心子面板导航
 function navigateToTaskCenter(panel) {
   var isIndexPage = (window.location.pathname === '/' || window.location.pathname === '/index.html');
@@ -1202,6 +1229,7 @@ const WORKSPACE_META = {
   'user-management': { kicker: 'System Management', title: '用户管理', sub: '管理账号、角色、状态与集群授权' },
   'skill-management': { kicker: 'Skill Management', title: 'Skill 管理', sub: '管理诊断 Skill 的导入、校验、发布与归档' },
   'audit-logs': { kicker: 'Audit Logs', title: '审计日志', sub: '查看登录、连接、诊断与资源变更操作记录' },
+  'alerts': { kicker: 'Alert Center', title: '告警中心', sub: '实时异常检测与告警管理' },
 };
 
 function updateWorkspaceHead(tab) {

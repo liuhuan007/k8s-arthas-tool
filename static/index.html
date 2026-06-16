@@ -165,73 +165,17 @@ document.addEventListener('DOMContentLoaded', function() {
 <!-- ── Sidebar ── -->
 <div class="sidebar">
   <div class="side-nav">
-    <!-- 连接管理 -->
-    <div class="side-nav-group side-nav-group-expanded" data-side-group="connection">
+    <div class="side-nav-group side-nav-group-expanded" data-side-group="workspace">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
-        <span>连接</span><span class="side-nav-arrow">▾</span>
+        <span>工作台</span><span class="side-nav-arrow">▾</span>
       </button>
       <div class="side-nav-items" style="display:block;">
-        <button class="side-nav-item primary" data-nav-tab="connections" onclick="navigateTo('connections')">
-          <span>🔌</span><span>连接中心</span>
+        <button class="side-nav-item primary" data-nav-tab="workspace" onclick="navigateTo('workspace')">
+          <span>🏠</span><span>工作台</span>
         </button>
       </div>
     </div>
 
-    <!-- 诊断（合并所有诊断相关） -->
-    <div class="side-nav-group side-nav-group-expanded" data-side-group="diagnosis">
-      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
-        <span>诊断</span><span class="side-nav-arrow">▾</span>
-      </button>
-      <div class="side-nav-items" style="display:block;">
-        <button class="side-nav-item" data-nav-tab="diagnosis-quick" onclick="navigateToDiagnosis('quick')">
-          <span>⚡</span><span>快捷诊断</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="diagnosis-scenario" onclick="navigateToDiagnosis('scenario')">
-          <span>📋</span><span>场景方案</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="diagnosis-ai" onclick="navigateToDiagnosis('ai')">
-          <span>🤖</span><span>AI 诊断</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="dashboard" onclick="navigateTo('dashboard')">
-          <span>📈</span><span>控制面板</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="profiler" onclick="navigateTo('profiler')">
-          <span>🔥</span><span>采样工具</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="hotfix" onclick="navigateTo('hotfix')">
-          <span>🔧</span><span>在线修复</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="thread-diagnosis" onclick="navigateTo('thread-diagnosis')">
-          <span>🧵</span><span>线程诊断</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="diagnosis-history" onclick="navigateToDiagnosis('history')">
-          <span>📊</span><span>历史记录</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- 工具 -->
-    <div class="side-nav-group" data-side-group="tools">
-      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
-        <span>工具</span><span class="side-nav-arrow">▾</span>
-      </button>
-      <div class="side-nav-items">
-        <button class="side-nav-item" data-nav-tab="terminal" onclick="navigateTo('terminal')">
-          <span>🖥️</span><span>终端</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="filebrowser" onclick="navigateTo('filebrowser')">
-          <span>📂</span><span>文件下载</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="monitor" onclick="navigateTo('monitor')">
-          <span>📊</span><span>Pod 监控</span>
-        </button>
-        <button class="side-nav-item" data-nav-tab="toolchain-center" onclick="navigateTo('toolchain-center')">
-          <span>🧰</span><span>工具箱</span>
-        </button>
-      </div>
-    </div>
-
-    <!-- 任务 -->
     <div class="side-nav-group" data-side-group="task">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
         <span>任务</span><span class="side-nav-arrow">▾</span>
@@ -249,10 +193,9 @@ document.addEventListener('DOMContentLoaded', function() {
       </div>
     </div>
 
-    <!-- 系统管理 -->
     <div class="side-nav-group admin-only collapsed" data-side-group="system">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
-        <span>系统</span><span class="side-nav-arrow">▾</span>
+        <span>系统管理</span><span class="side-nav-arrow">▾</span>
       </button>
       <div class="side-nav-items">
         <button class="side-nav-item" data-nav-tab="skill-management" onclick="navigateTo('skill-management')">
@@ -276,7 +219,6 @@ document.addEventListener('DOMContentLoaded', function() {
       </div>
     </div>
 
-    <!-- 外部系统 -->
     <div class="side-nav-group collapsed" data-side-group="external">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
         <span>外部系统</span><span class="side-nav-arrow">▾</span>
@@ -297,6 +239,14 @@ document.addEventListener('DOMContentLoaded', function() {
       <div class="workspace-sub" id="workspaceSub">管理 Pod 连接、Arthas 升级与最近连接记录</div>
     </div>
     <div class="workspace-actions" id="workspaceActions"></div>
+  </div>
+
+  <div class="workspace-tabs" id="workspaceTabs">
+    <button class="ws-tab active" data-ws-tab="connect" onclick="switchWorkspaceTab('connect')">🔌 连接</button>
+    <button class="ws-tab" data-ws-tab="sampling" onclick="switchWorkspaceTab('sampling')">🔥 采样</button>
+    <button class="ws-tab" data-ws-tab="diagnosis" onclick="switchWorkspaceTab('diagnosis')">🩺 诊断</button>
+    <button class="ws-tab" data-ws-tab="tools" onclick="switchWorkspaceTab('tools')">🛠 工具</button>
+    <button class="ws-tab" data-ws-tab="history" onclick="switchWorkspaceTab('history')">📋 历史</button>
   </div>
 
   <!-- 原主区页签已降级为隐藏的兼容锚点，左侧菜单是唯一主导航 -->
@@ -334,6 +284,13 @@ document.addEventListener('DOMContentLoaded', function() {
   </div>
 
   <div class="panels">
+
+    <!-- Workspace Tab Panels -->
+    <div class="ws-panel on" id="ws-connect"></div>
+    <div class="ws-panel" id="ws-sampling" style="display:none"></div>
+    <div class="ws-panel" id="ws-diagnosis" style="display:none"></div>
+    <div class="ws-panel" id="ws-tools" style="display:none"></div>
+    <div class="ws-panel" id="ws-history" style="display:none"></div>
 
     <!-- ✅ 新增: 外部系统 iframe 面板 -->
     <div class="panel" id="panel-external-system">
