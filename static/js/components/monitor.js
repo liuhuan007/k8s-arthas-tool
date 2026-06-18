@@ -4,11 +4,8 @@
  */
 
 // ── 工具函数 ───────────────────────────────────────────────────────────────
-if (typeof esc === 'undefined') {
-  function esc(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
-}
-if (typeof fmtSz === 'undefined') {
-  function fmtSz(b) { if(!b||b<0) return '0B'; const u=['B','KB','MB','GB','TB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++;} return b.toFixed(i?1:0)+u[i]; }
+if (typeof window.fmtSz === 'undefined') {
+  window.fmtSz = function fmtSz(b) { if(!b||b<0) return '0B'; const u=['B','KB','MB','GB','TB']; let i=0; while(b>=1024&&i<u.length-1){b/=1024;i++;} return b.toFixed(i?1:0)+u[i]; };
 }
 
 // ── State ─────────────────────────────────────────────────────────────────

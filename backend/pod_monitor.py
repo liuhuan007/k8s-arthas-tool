@@ -364,24 +364,27 @@ def collect_container_metrics(runner: KubectlRunner, ns: str, pod: str, containe
     import concurrent.futures
     result = {}
 
-    # ps 多级降级脚本：ps aux → ps -ef → ps -A → /proc 扫描
-    # 即使 ps 存在但输出为空，也会走 /proc 兜底
-    ps_fallback_script = (
-        "_ps_out=$(ps aux 2>/dev/null); "
-        "[ -z \"$_ps_out\" ] && _ps_out=$(ps -ef 2>/dev/null); "
-        "[ -z \"$_ps_out\" ] && _ps_out=$(ps -A 2>/dev/null); "
-        "if [ -n \"$_ps_out\" ]; then "
-        "echo \"$_ps_out\"; "
-        "else "
-        "echo 'USER       PID %CPU %MEM    STAT COMMAND'; "
-        "for p in /proc/[0-9]*/stat; do "
-        "pid=$(echo $p | grep -o '[0-9]*'); "
-        "if [ -r \"$p\" ]; then "
-        "comm=$(cat /proc/$pid/cmdline 2>/dev/null | tr '\\0' ' ' | head -c 80); "
-        "if [ -z \"$comm\" ]; then comm=$(cat \"$p\" 2>/dev/null | awk '{print $2}' | tr -d '()'); fi; "
-        "echo \"root $pid 0.0 0.0 S $comm\"; "
-        "fi; done; "
-        "fi"
+    # 通过 /proc 文件系统获取进程列表（通用方案，兼容所有 Linux 容器）
+    # /proc 是内核标准接口，不依赖 ps 命令的格式
+    proc_script = (
+        "echo '===PROC==='; "
+        "for pid in /proc/[0-9]*/; do "
+        "p=$(basename $pid); "
+        "if [ -f /proc/$p/status ]; then "
+        "name=$(awk '/^Name:/{print $2}' /proc/$p/status 2>/dev/null); "
+        "state=$(awk '/^State:/{print $2}' /proc/$p/status 2>/dev/null); "
+        "ppid=$(awk '/^PPid:/{print $2}' /proc/$p/status 2>/dev/null); "
+        "threads=$(awk '/^Threads:/{print $2}' /proc/$p/status 2>/dev/null); "
+        "cmd=$(cat /proc/$p/cmdline 2>/dev/null | tr '\\0' ' ' | head -c 120); "
+        "if [ -z \"$cmd\" ]; then cmd=$name; fi; "
+        "utime=0; stime=0; "
+        "if [ -f /proc/$p/stat ]; then "
+        "stat_line=$(cat /proc/$p/stat 2>/dev/null); "
+        "utime=$(echo $stat_line | awk '{print $14}'); "
+        "stime=$(echo $stat_line | awk '{print $15}'); "
+        "fi; "
+        "echo \"$p|$name|$state|$ppid|$threads|$utime|$stime|$cmd\"; "
+        "fi; done"
     )
 
     def _exec1():
@@ -413,7 +416,7 @@ def collect_container_metrics(runner: KubectlRunner, ns: str, pod: str, containe
     def _exec2():
         """进程列表 + 网络"""
         rc, out, err = runner.exec_pod(ns, pod, container,
-            f"echo '===PS==='; {ps_fallback_script}; echo '===NET==='; cat /proc/net/dev 2>/dev/null || true",
+            f"{proc_script}; echo '===NET==='; cat /proc/net/dev 2>/dev/null || true",
             timeout=15)
         if rc != 0:
             import logging as _log
@@ -441,19 +444,14 @@ def collect_container_metrics(runner: KubectlRunner, ns: str, pod: str, containe
     # ── 兜底：如果 exec2 (ps+net) 失败，尝试单独采集 ───────────────────────
     if rc2 != 0:
         import logging as _log
-        _log.getLogger(__name__).info("exec2 fallback: trying standalone ps and /proc/net")
-        # 单独采集 ps（含 /proc 兜底）
+        _log.getLogger(__name__).info("exec2 fallback: trying /proc and /proc/net")
+        # 通过 /proc 获取进程列表
         rc_ps, out_ps, _ = runner.exec_pod(ns, pod, container,
-            f"echo '===PS==='; {ps_fallback_script}; echo '===NET==='",
-            timeout=10)
+            f"{proc_script}; echo '===NET==='; cat /proc/net/dev 2>/dev/null || echo ''",
+            timeout=15)
         if rc_ps == 0 and out_ps.strip():
-            out2 = "===PS===\n" + out_ps + "\n===NET===\n"
+            out2 = out_ps
             rc2 = 0
-            # 单独采集网络
-            rc_net, out_net, _ = runner.exec_pod(ns, pod, container,
-                "cat /proc/net/dev 2>/dev/null || echo ''", timeout=5)
-            if rc_net == 0 and out_net.strip():
-                out2 += out_net
 
     # ── 解析第一次 exec：内存 + CPU + 磁盘 + FD ───────────────────────────
     if rc1 == 0 and out1:
@@ -555,106 +553,82 @@ def collect_container_metrics(runner: KubectlRunner, ns: str, pod: str, containe
 
     # ── 解析第二次 exec：进程列表 + 网络 ───────────────────────────────────
     if rc2 == 0 and out2:
-        sections = out2.split('===PS===')
-        body = sections[-1] if len(sections) > 1 else out2
+        # 统一行尾符
+        out2 = out2.replace('\r\n', '\n').replace('\r', '\n')
 
-        ps_parts = body.split('===NET===')
+        # 分离进程数据和网络数据
+        proc_section = ''
+        net_section = ''
+        if '===PROC===' in out2:
+            proc_net_parts = out2.split('===NET===')
+            proc_section = proc_net_parts[0].replace('===PROC===', '').strip()
+            net_section = proc_net_parts[-1].strip() if len(proc_net_parts) > 1 else ''
+        elif '===NET===' in out2:
+            net_section = out2.split('===NET===')[-1].strip()
 
-        # 进程列表
-        ps_output = ps_parts[0].strip()
-        if ps_output:
-            lines = ps_output.splitlines()
-            processes = []
-            # 检测 ps 输出格式：标准 ps aux 有 11 列，BusyBox ps 只有 4-5 列
-            # 判断首行是否为表头：同时检查关键字 + 第二列不是纯数字（PID）
-            header = lines[0] if lines else ''
-            header_parts = header.split()
-            second_is_pid = len(header_parts) >= 2 and header_parts[1].isdigit()
-            is_full_ps = ('STAT' in header or 'VSZ' in header or 'TTY' in header) and not second_is_pid
-            start_idx = 1 if is_full_ps else 0  # 标准 ps 有 header 行需跳过
-
-            for line in lines[start_idx:51]:  # skip header for full ps, max 50
-                parts = line.split(None, 10)
-                if len(parts) < 2:
+        # 解析 /proc 格式进程数据: pid|name|state|ppid|threads|utime|stime|cmd
+        processes = []
+        if proc_section:
+            for line in proc_section.splitlines():
+                line = line.strip()
+                if not line or '|' not in line:
                     continue
-                # 统一按列数分级解析，不再依赖 is_full_ps 门控
-                if len(parts) >= 11:
-                    # 标准 ps aux 格式: USER PID %CPU %MEM VSZ RSS TTY STAT START TIME COMMAND
-                    processes.append({
-                        "user": parts[0], "pid": parts[1], "cpu": parts[2], "mem": parts[3],
-                        "stat": parts[7], "cmd": parts[10][:80],
-                    })
-                elif len(parts) >= 9:
-                    # 缺少某些列的标准 ps
-                    processes.append({
-                        "user": parts[0], "pid": parts[1], "cpu": parts[2], "mem": parts[3],
-                        "stat": parts[7] if len(parts) > 7 else '?', "cmd": parts[-1][:80],
-                    })
-                elif len(parts) >= 5:
-                    # BusyBox ps 或自定义格式: USER PID %CPU %MEM STAT COMMAND (或类似)
-                    # 或简化 /proc 解析: USER PID %CPU %MEM STAT COMMAND
-                    processes.append({
-                        "user": parts[0],
-                        "pid": parts[1],
-                        "cpu": parts[2] if len(parts) > 2 else '0',
-                        "mem": parts[3] if len(parts) > 3 else '0',
-                        "stat": parts[4] if len(parts) > 4 else '?',
-                        "cmd": parts[5][:80] if len(parts) > 5 else (parts[4][:80] if len(parts) > 4 else '?'),
-                    })
-                elif len(parts) >= 3:
-                    # BusyBox 极简格式: PID USER TIME COMMAND
-                    # 尝试识别 PID（数字）在哪个位置
-                    pid_idx = 0
-                    for i, p in enumerate(parts):
-                        if p.isdigit():
-                            pid_idx = i
-                            break
-                    processes.append({
-                        "user": parts[0] if pid_idx != 0 else '?',
-                        "pid": parts[pid_idx],
-                        "cpu": '0',
-                        "mem": '0',
-                        "stat": '?',
-                        "cmd": parts[-1][:80],
-                    })
-            try:
-                processes.sort(key=lambda p: float(p.get('cpu', '0').replace(',', '.')), reverse=True)
-            except (ValueError, TypeError):
-                pass
-            result["processes"] = processes
-            if not processes:
-                result["processes_error"] = f"ps 输出为空或解析失败 (raw_len={len(ps_output)}, lines={len(lines)})"
+                parts = line.split('|', 7)
+                if len(parts) < 8:
+                    continue
+                pid, name, state, ppid, threads, utime, stime, cmd = parts
+                # 计算 CPU 占用（简化：utime + stime 的 tick 数）
+                try:
+                    cpu_ticks = int(utime or 0) + int(stime or 0)
+                except (ValueError, TypeError):
+                    cpu_ticks = 0
+                processes.append({
+                    "pid": pid,
+                    "name": name,
+                    "stat": state,
+                    "ppid": ppid,
+                    "threads": threads,
+                    "cpu_ticks": cpu_ticks,
+                    "cmd": cmd[:120] if cmd else name,
+                })
+            # 按 CPU tick 数降序排列
+            processes.sort(key=lambda p: p.get('cpu_ticks', 0), reverse=True)
+
+        result["processes"] = processes
+        if not processes:
+            result["processes_error"] = f"进程数据为空 (proc_len={len(proc_section)})"
+
+        # 存储网络原始数据供后续解析
+        if net_section:
+            result["_net_raw"] = net_section
     else:
-        # exec 失败或无输出
         result["processes"] = []
         result["processes_error"] = f"容器内命令执行失败 (rc={rc2})" if rc2 != 0 else "无输出"
 
-    # 网络（独立于进程解析，不因 ps 失败而跳过）
-    if rc2 == 0 and out2:
-        ps_parts_net = out2.split('===NET===') if '===NET===' in out2 else []
-        net_output = ps_parts_net[-1].strip() if ps_parts_net else ''
-        if net_output:
-            net_ifaces = []
-            for line in net_output.splitlines()[2:]:
-                line = line.strip()
-                if not line or "lo:" in line:
-                    continue
-                parts = line.split()
-                if len(parts) >= 10:
-                    iface = parts[0].rstrip(":")
-                    try:
-                        net_ifaces.append({
-                            "iface": iface,
-                            "rx_bytes": int(parts[1]),
-                            "rx_packets": int(parts[2]),
-                            "rx_errors": int(parts[3]),
-                            "tx_bytes": int(parts[9]),
-                            "tx_packets": int(parts[10]),
-                            "tx_errors": int(parts[11]),
-                        })
-                    except Exception:
-                        pass
-            result["network"] = net_ifaces
+    # 网络（使用已提取的 _net_raw）
+    net_output = result.pop('_net_raw', '')
+    if net_output:
+        net_ifaces = []
+        for line in net_output.splitlines()[2:]:  # 跳过前两行标题
+            line = line.strip()
+            if not line or "lo:" in line:
+                continue
+            parts = line.split()
+            if len(parts) >= 10:
+                iface = parts[0].rstrip(":")
+                try:
+                    net_ifaces.append({
+                        "iface": iface,
+                        "rx_bytes": int(parts[1]),
+                        "rx_packets": int(parts[2]),
+                        "rx_errors": int(parts[3]),
+                        "tx_bytes": int(parts[9]),
+                        "tx_packets": int(parts[10]),
+                        "tx_errors": int(parts[11]),
+                    })
+                except Exception:
+                    pass
+        result["network"] = net_ifaces
 
     # ── 解析第三次 exec：挂载详情 ──────────────────────────────────────────
     if result.get("disk_mounts") and rc3 == 0 and out3 and out3.strip():

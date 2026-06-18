@@ -74,9 +74,7 @@ var NAV_ROUTES = {
 };
 
 function navigateTo(tabId) {
-  // 在 index.html 上使用 switchTab（原地切换面板）
-  var isIndexPage = (window.location.pathname === '/' || window.location.pathname === '/index.html');
-  if (isIndexPage && typeof switchTab === 'function') {
+  if (typeof switchTab === 'function' && document.getElementById('panel-' + tabId)) {
     switchTab(tabId);
   } else {
     var route = NAV_ROUTES[tabId];
@@ -94,15 +92,36 @@ window.showWorkspace = function() {
   switchWorkspaceTab('connect');
 };
 
+window.showToolbox = function() {
+  var tabs = document.getElementById('workspaceTabs');
+  if (tabs) tabs.style.display = 'none';
+  var oldTabbar = document.querySelector('.tabbar');
+  if (oldTabbar) oldTabbar.style.display = 'none';
+  document.querySelectorAll('.panel').forEach(function(p) {
+    p.style.display = 'none';
+    p.classList.remove('on');
+  });
+  var panel = document.getElementById('panel-toolchain-center');
+  if (panel) {
+    panel.style.display = 'flex';
+    panel.classList.add('on');
+  }
+  var kickerEl = document.getElementById('workspaceKicker');
+  var titleEl = document.getElementById('workspaceTitle');
+  if (kickerEl) kickerEl.textContent = 'Toolbox';
+  if (titleEl) titleEl.textContent = '工具箱';
+  if (typeof renderToolbox === 'function') renderToolbox();
+};
+
 window.switchWorkspaceTab = function(tabId) {
   var tabs = document.getElementById('workspaceTabs');
   if (tabs) tabs.style.display = 'flex';
 
   var tabPanelMap = {
     'connect':    ['panel-connections'],
+    'monitor':    ['panel-monitor'],
     'sampling':   ['panel-profiler'],
     'diagnosis':  ['panel-diag'],
-    'tools':      ['panel-terminal', 'panel-filebrowser', 'panel-monitor', 'panel-toolchain-center'],
     'history':    ['panel-history'],
   };
 
@@ -122,12 +141,6 @@ window.switchWorkspaceTab = function(tabId) {
     }
   });
 
-  // For tools tab, show first panel prominently
-  if (tabId === 'tools' && panels.length) {
-    var first = document.getElementById(panels[0]);
-    if (first) { first.style.display = 'flex'; first.classList.add('on'); }
-  }
-
   // Update tab active state
   document.querySelectorAll('.ws-tab').forEach(function(t) { t.classList.remove('active'); });
   var tab = document.querySelector('[data-ws-tab="' + tabId + '"]');
@@ -136,9 +149,9 @@ window.switchWorkspaceTab = function(tabId) {
   // Update workspace title
   var titles = {
     connect:    ['Connection', '连接配置'],
+    monitor:    ['Monitor', 'Pod 监控'],
     sampling:   ['Sampling', '采样工具'],
     diagnosis:  ['Diagnosis', '诊断中心'],
-    tools:      ['Tools', '工具箱'],
     history:    ['History', '历史记录'],
   };
   var pair = titles[tabId] || ['', ''];
@@ -149,12 +162,16 @@ window.switchWorkspaceTab = function(tabId) {
 
   // Update connection bar visibility
   updateConnectionBarVisibility(tabId === 'connect' ? 'connections' : tabId);
+
+  // Load monitor data when switching to monitor tab
+  if (tabId === 'monitor' && typeof loadSnap === 'function') {
+    setTimeout(function() { loadSnap(); }, 100);
+  }
 };
 
 // 任务中心子面板导航
 function navigateToTaskCenter(panel) {
-  var isIndexPage = (window.location.pathname === '/' || window.location.pathname === '/index.html');
-  if (isIndexPage) {
+  if (typeof switchTab === 'function' && document.getElementById('panel-task-center')) {
     switchTab('task-center');
   } else {
     window.location.href = '/tasks#task-center';
@@ -166,8 +183,7 @@ function navigateToTaskCenter(panel) {
 
 // 诊断中心子面板导航（侧边栏导航模式）
 function navigateToDiagnosis(section) {
-  var isIndexPage = (window.location.pathname === '/' || window.location.pathname === '/index.html');
-  if (isIndexPage) {
+  if (typeof switchTab === 'function' && document.getElementById('panel-diagnosis-cap')) {
     switchTab('diagnosis-cap');
   } else {
     window.location.href = '/diagnosis-center';
@@ -2576,7 +2592,7 @@ function switchTab(n) {
   const tab = typeof n === 'number' ? tabMap[n] : n;
 
   var workspaceTabs = document.getElementById('workspaceTabs');
-  var isWorkspaceTab = ['connections','profiler','console','hotfix','terminal','monitor','filebrowser','ai','diag','diagnosis-cap','history'].includes(tab);
+  var isWorkspaceTab = ['connections','profiler','console','hotfix','ai','diag','diagnosis-cap','history'].includes(tab);
   if (workspaceTabs) {
     workspaceTabs.style.display = isWorkspaceTab ? 'flex' : 'none';
   }
@@ -2590,17 +2606,16 @@ function switchTab(n) {
     }
   }
 
-  if (['user-management', 'audit-logs', 'skill-management', 'alerts'].includes(tab) && !(typeof isAdmin === 'function' && isAdmin())) {
-    toast('只有管理员可以访问此页面', 'warn');
-    return;
-  }
-
   // 先切 Tab（允许切换到任何 Tab）
   const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','external-system','history','diag','diagnosis-cap','skill-management','user-management','audit-logs','alerts'];
   
   allTabs.forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
-    document.getElementById('panel-'+x)?.classList.toggle('on', x===tab);
+    var pnl = document.getElementById('panel-'+x);
+    if (pnl) {
+      pnl.style.display = '';
+      pnl.classList.toggle('on', x===tab);
+    }
     document.querySelectorAll(`[data-nav-tab="${x}"]`).forEach(el => el.classList.toggle('on', x === tab));
     if (x !== tab) {
       document.getElementById('panel-'+x)?.classList.remove('panel-locked');
@@ -2744,7 +2759,7 @@ function switchHistTab(name) {
 
 
 function switchPm(n) {
-  const tabs = ['ov','mt','pr','nw','dk','ev','lg','cf'];
+  const tabs = ['ov','mt','pr','nw','dk','ev','lg','cf','tr','fb'];
   tabs.forEach(x => {
     document.getElementById('pms-'+x)?.classList.toggle('on', x===n);
     const p = document.getElementById('pmp-'+x);
@@ -2755,6 +2770,16 @@ function switchPm(n) {
   if(lg && n==='lg') lg.style.display = 'flex'; // override block
   if(n==='mt' && _snap) renderMetrics(_snap);
   if(n==='dk' && _snap) renderDisk(_snap);
+  // Terminal tab: show terminal panel
+  if(n==='tr') {
+    const termPanel = document.getElementById('panel-terminal');
+    if(termPanel) { termPanel.style.display = 'flex'; termPanel.classList.add('on'); }
+    if(typeof termInit === 'function') termInit();
+  } else {
+    // Hide terminal panel when switching away from terminal tab
+    const termPanel = document.getElementById('panel-terminal');
+    if(termPanel && !termPanel.classList.contains('ws-active')) { termPanel.style.display = 'none'; termPanel.classList.remove('on'); }
+  }
 }
 
 // ── Server health ──────────────────────────────────────────────────────────────
@@ -5391,14 +5416,17 @@ function renderProcs(snap) {
     mem: p.mem ?? p.mem_percent ?? 0,
     stat: p.stat || p.status || '—',
     cmd: p.cmd || p.name || '—',
+    name: p.name || '',
+    threads: p.threads || '',
+    cpu_ticks: p.cpu_ticks || 0,
   });
   // 调试：打印进程数据结构
   console.log('[renderProcs] processes data:', procs.slice(0, 2));
   el.innerHTML = `<div style="background:var(--bg2);border:1px solid var(--ln);border-radius:7px;overflow:hidden;margin-bottom:8px">
-    <table class="ptbl"><thead><tr><th>PID</th><th>USER</th><th>%CPU</th><th>%MEM</th><th>STAT</th><th>命令</th></tr></thead>
-    <tbody>${procs.map(raw=>{ const p = normProc(raw); return `<tr><td class="ppid">${esc(p.pid)}</td><td style="color:var(--tx2)">${esc(p.user)}</td><td class="pc">${esc(p.cpu)}%</td><td class="pmem">${esc(p.mem)}%</td><td class="ps-${(p.stat||'S')[0]}">${esc(p.stat)}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.cmd)}">${esc(p.cmd)}</td></tr>`; }).join('')}</tbody>
+    <table class="ptbl"><thead><tr><th>PID</th><th>进程名</th><th>状态</th><th>线程</th><th>CPU ticks</th><th>命令</th></tr></thead>
+    <tbody>${procs.map(raw=>{ const p = normProc(raw); return `<tr><td class="ppid">${esc(p.pid)}</td><td style="color:var(--a)">${esc(p.name)}</td><td class="ps-${(p.stat||'S')[0]}">${esc(p.stat)}</td><td>${esc(p.threads)}</td><td>${esc(p.cpu_ticks)}</td><td style="max-width:300px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.cmd)}">${esc(p.cmd)}</td></tr>`; }).join('')}</tbody>
     </table></div>
-  <div style="font-size:10px;color:var(--tx3)">STAT: <code>R</code>=运行中 <code>S</code>=睡眠 <code>D</code>=不可中断 <code>Z</code>=僵尸</div>`;
+  <div style="font-size:10px;color:var(--tx3)">状态: <code>R</code>=运行中 <code>S</code>=睡眠 <code>D</code>=不可中断 <code>Z</code>=僵尸 <code>T</code>=停止</div>`;
 }
 
 function renderNetwork(snap) {
@@ -5750,6 +5778,151 @@ async function fbPreview() {
     if(d.error) { box.textContent = '✗ ' + d.error; return; }
     box.textContent = d.content || '(空文件)';
   } catch(e) { box.textContent = '✗ ' + e.message; }
+}
+
+// ── Monitor Terminal ──────────────────────────────────────────────────────────
+let _monitorTerminalInitialized = false;
+function initMonitorTerminal() {
+  if (_monitorTerminalInitialized) return;
+  const container = document.getElementById('terminal-container');
+  if (!container) return;
+  // Reuse the existing terminal
+  if (typeof createTerminal === 'function') {
+    createTerminal(container);
+    _monitorTerminalInitialized = true;
+  } else {
+    container.innerHTML = '<div style="color:var(--tx3);padding:40px;text-align:center">终端加载中...</div>';
+  }
+}
+
+// ── Monitor File Browser ──────────────────────────────────────────────────────
+let _fbMonSelected = null;
+async function fbListMon() {
+  // Use ConnectionStore to get current connection
+  var conn = null;
+  if (window.ConnectionStore && typeof ConnectionStore.getCurrentConnection === 'function') {
+    conn = ConnectionStore.getCurrentConnection();
+  }
+  if (!conn) { toast('请先连接 Pod', 'warn'); return; }
+  var t = {
+    cluster_name: conn.cluster || conn.cluster_name || '',
+    namespace: conn.namespace || 'default',
+    pod_name: conn.pod || conn.pod_name || '',
+    container: conn.container || '',
+  };
+  if (!t.pod_name) { toast('请先连接 Pod', 'warn'); return; }
+  const path = document.getElementById('fbPathMon')?.value || '/tmp';
+  const listEl = document.getElementById('fbListMon');
+  if (!listEl) return;
+  listEl.innerHTML = '<div style="color:var(--tx3);padding:20px;text-align:center">加载中...</div>';
+  try {
+    const d = await safePost(`${API}/pod/files`, {...t, path});
+    if (d.error) { listEl.innerHTML = `<div style="color:var(--red);padding:20px;text-align:center">✗ ${d.error}</div>`; return; }
+    const files = d.files || [];
+    if (!files.length) { listEl.innerHTML = '<div style="color:var(--tx3);padding:20px;text-align:center">空目录</div>'; return; }
+    // 添加上级目录链接
+    let html = '';
+    if (path !== '/') {
+      html = `<div class="fb-item fb-dir" onclick="fbUpMon()">
+        <span>📁</span>
+        <span>..</span>
+        <span style="margin-left:auto;color:var(--tx3);font-size:10px">上级目录</span>
+      </div>`;
+    }
+    html += files.map(f => {
+      const isDir = f.is_dir || f.type === 'dir';
+      const icon = isDir ? '📁' : '📄';
+      const type = isDir ? 'dir' : 'file';
+      return `
+        <div class="fb-item ${_fbMonSelected===f.path?'on':''} ${isDir?'fb-dir':''}" data-path="${esc(f.path)}" data-type="${type}" onclick="fbSelectMon(this,'${esc(f.path)}','${type}')">
+          <span>${icon}</span>
+          <span>${esc(f.name)}</span>
+          <span style="margin-left:auto;color:var(--tx3);font-size:10px">${isDir?'':(f.size||'')}</span>
+        </div>
+      `;
+    }).join('');
+    listEl.innerHTML = html;
+    document.getElementById('fbCurPathMon').textContent = path;
+    document.getElementById('fbCountMon').textContent = ` (${files.length} 项)`;
+  } catch(e) { listEl.innerHTML = `<div style="color:var(--red);padding:20px;text-align:center">✗ ${e.message}</div>`; }
+}
+function fbSelectMon(el, path, type) {
+  _fbMonSelected = path;
+  document.querySelectorAll('#fbListMon .fb-item').forEach(i => i.classList.remove('on'));
+  el.classList.add('on');
+  // 启用下载和预览按钮
+  const dlBtn = document.getElementById('fbDlBtnMon');
+  const pvBtn = document.getElementById('fbPreviewBtnMon');
+  const selInfo = document.getElementById('fbSelInfoMon');
+  if (type === 'dir') {
+    // 目录：点击进入，不启用下载/预览
+    if (dlBtn) dlBtn.disabled = true;
+    if (pvBtn) pvBtn.disabled = true;
+    if (selInfo) selInfo.textContent = '';
+    document.getElementById('fbPathMon').value = path;
+    fbListMon();
+  } else {
+    // 文件：启用下载/预览
+    if (dlBtn) dlBtn.disabled = false;
+    if (pvBtn) pvBtn.disabled = false;
+    if (selInfo) selInfo.textContent = path.split('/').pop();
+  }
+}
+function fbUpMon() {
+  const path = document.getElementById('fbPathMon')?.value || '/tmp';
+  const parts = path.split('/').filter(Boolean);
+  parts.pop();
+  document.getElementById('fbPathMon').value = '/' + parts.join('/');
+  fbListMon();
+}
+async function fbDownloadMon() {
+  if (!_fbMonSelected) return;
+  var conn = null;
+  if (window.ConnectionStore && typeof ConnectionStore.getCurrentConnection === 'function') {
+    conn = ConnectionStore.getCurrentConnection();
+  }
+  if (!conn) { toast('请先连接 Pod', 'warn'); return; }
+  var t = {
+    cluster_name: conn.cluster || conn.cluster_name || '',
+    namespace: conn.namespace || 'default',
+    pod_name: conn.pod || conn.pod_name || '',
+    container: conn.container || '',
+  };
+  try {
+    const r = await fetch(`${API}/pod/files/download`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, credentials: 'include',
+      body: JSON.stringify({...t, path: _fbMonSelected})
+    });
+    if (!r.ok) throw new Error('下载失败');
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = _fbMonSelected.split('/').pop(); a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) { toast('下载失败: ' + e.message, 'err'); }
+}
+async function fbPreviewMon() {
+  if (!_fbMonSelected) return;
+  var conn = null;
+  if (window.ConnectionStore && typeof ConnectionStore.getCurrentConnection === 'function') {
+    conn = ConnectionStore.getCurrentConnection();
+  }
+  if (!conn) { toast('请先连接 Pod', 'warn'); return; }
+  var t = {
+    cluster_name: conn.cluster || conn.cluster_name || '',
+    namespace: conn.namespace || 'default',
+    pod_name: conn.pod || conn.pod_name || '',
+    container: conn.container || '',
+  };
+  const pane = document.getElementById('fbPreviewPaneMon');
+  const content = document.getElementById('fbPreviewContentMon');
+  if (!pane || !content) return;
+  pane.style.display = 'flex';
+  content.textContent = '加载中...';
+  try {
+    const d = await safePost(`${API}/pod/files/tail`, {...t, path: _fbMonSelected, lines: 200});
+    if (d.error) { content.textContent = '✗ ' + d.error; return; }
+    content.textContent = d.content || '(空文件)';
+  } catch(e) { content.textContent = '✗ ' + e.message; }
 }
 
 // ── Cluster management ─────────────────────────────────────────────────────────
@@ -6158,6 +6331,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     loadConnections();
   }
   
+  // 初始化工作台：显示 Tab 栏并切换到连接 Tab
+  showWorkspace();
+
   renderCmdPal();
   checkHealth();
   setInterval(checkHealth, 8000);

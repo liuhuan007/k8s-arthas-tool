@@ -58,7 +58,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <script>console.log('🔍 script-check: API=' + typeof API + ', safePost=' + typeof safePost + ', diagQuickTool=' + typeof window.diagQuickTool + ', diagSelectScene=' + typeof window.diagSelectScene + ', diagStart=' + typeof window.diagStart);</script>
 
 <!-- 应用入口 -->
-<script src="js/app-ui.js?v=20260522a"></script>
+<script src="js/app-ui.js?v=20260618x"></script>
 <script src="js/app.js"></script>
 
 <!-- ✅ 新增: 统一状态管理 -->
@@ -176,6 +176,17 @@ document.addEventListener('DOMContentLoaded', function() {
       </div>
     </div>
 
+    <div class="side-nav-group" data-side-group="toolbox">
+      <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
+        <span>工具箱</span><span class="side-nav-arrow">▾</span>
+      </button>
+      <div class="side-nav-items">
+        <button class="side-nav-item" data-nav-tab="toolchain-center" onclick="showToolbox()">
+          <span>🧰</span><span>工具管理</span>
+        </button>
+      </div>
+    </div>
+
     <div class="side-nav-group" data-side-group="task">
       <button class="side-nav-title" type="button" onclick="toggleSideNavGroup(this)">
         <span>任务</span><span class="side-nav-arrow">▾</span>
@@ -243,9 +254,9 @@ document.addEventListener('DOMContentLoaded', function() {
 
   <div class="workspace-tabs" id="workspaceTabs" style="display:none">
     <button class="ws-tab active" data-ws-tab="connect" onclick="switchWorkspaceTab('connect')">🔌 连接</button>
+    <button class="ws-tab" data-ws-tab="monitor" onclick="switchWorkspaceTab('monitor')">📊 监控</button>
     <button class="ws-tab" data-ws-tab="sampling" onclick="switchWorkspaceTab('sampling')">🔥 采样</button>
     <button class="ws-tab" data-ws-tab="diagnosis" onclick="switchWorkspaceTab('diagnosis')">🩺 诊断</button>
-    <button class="ws-tab" data-ws-tab="tools" onclick="switchWorkspaceTab('tools')">🛠 工具</button>
     <button class="ws-tab" data-ws-tab="history" onclick="switchWorkspaceTab('history')">📋 历史</button>
   </div>
 
@@ -284,13 +295,6 @@ document.addEventListener('DOMContentLoaded', function() {
   </div>
 
   <div class="panels">
-
-    <!-- Workspace Tab Panels -->
-    <div class="ws-panel on" id="ws-connect"></div>
-    <div class="ws-panel" id="ws-sampling" style="display:none"></div>
-    <div class="ws-panel" id="ws-diagnosis" style="display:none"></div>
-    <div class="ws-panel" id="ws-tools" style="display:none"></div>
-    <div class="ws-panel" id="ws-history" style="display:none"></div>
 
     <!-- ✅ 新增: 外部系统 iframe 面板 -->
     <div class="panel" id="panel-external-system">
@@ -1197,6 +1201,8 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="pm-st"    id="pms-ev" onclick="switchPm('ev')">🔔 事件 <span id="evBdg"></span></div>
           <div class="pm-st"    id="pms-lg" onclick="switchPm('lg')">📄 日志</div>
           <div class="pm-st"    id="pms-cf" onclick="switchPm('cf')">🔧 配置</div>
+          <div class="pm-st"    id="pms-tr" onclick="switchPm('tr')">🖥️ 终端</div>
+          <div class="pm-st"    id="pms-fb" onclick="switchPm('fb')">📂 文件</div>
           <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding-right:10px;flex-shrink:0">
             <span id="pmTs" style="font-size:10px;color:var(--tx3)"></span>
             <select id="pmAutoRefresh" style="font-size:10px;padding:2px 4px;background:var(--bg);border:1px solid var(--border);color:var(--fg);border-radius:3px" onchange="toggleAutoRefresh(this.value)">
@@ -1232,12 +1238,52 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
           </div>
           <div class="pm-panel" id="pmp-cf"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
+          <div class="pm-panel" id="pmp-tr" style="padding:0;display:none">
+            <div id="terminal-container" style="height:100%;width:100%"></div>
+          </div>
+          <div class="pm-panel" id="pmp-fb" style="padding:0;display:none">
+            <div class="fb-wrap">
+              <div style="margin-bottom:8px;padding:8px 12px">
+                <div style="font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:8px;font-family:var(--sans);font-weight:700">📂 Pod 文件下载 — 通过 kubectl cp 下载 Pod 内任意文件</div>
+              </div>
+              <div class="fb-tb">
+                <span style="font-size:11px;color:var(--tx2);flex-shrink:0">路径</span>
+                <input class="fb-path" id="fbPathMon" value="/tmp" placeholder="/tmp 或其他路径" onkeydown="if(event.key==='Enter')fbListMon()">
+                <button class="btn btn-p" onclick="fbListMon()">🔍 列出文件</button>
+                <button class="btn btn-g" onclick="fbUpMon()">⬆ 上级</button>
+                <span id="fbStatusMon" style="font-size:11px;color:var(--tx2)"></span>
+              </div>
+              <div style="display:flex;gap:10px;flex:1;overflow:hidden;min-height:0;padding:0 12px">
+                <div style="flex:1;display:flex;flex-direction:column;overflow:hidden">
+                  <div style="font-size:10px;color:var(--tx3);margin-bottom:5px;padding:0 2px">
+                    <span id="fbCurPathMon" style="color:var(--a)"></span>
+                    <span id="fbCountMon" style="color:var(--tx3)"></span>
+                  </div>
+                  <div class="fb-list" id="fbListMon">
+                    <div style="color:var(--tx3);padding:30px;text-align:center;font-size:12px">输入路径后点击「列出文件」</div>
+                  </div>
+                  <div class="fb-actions">
+                    <button class="btn btn-dl" id="fbDlBtnMon" onclick="fbDownloadMon()" disabled>↓ 下载选中文件</button>
+                    <button class="btn btn-g" id="fbPreviewBtnMon" onclick="fbPreviewMon()" disabled>👁 预览 (文本)</button>
+                    <span id="fbSelInfoMon" style="font-size:11px;color:var(--tx2);align-self:center"></span>
+                  </div>
+                </div>
+                <div id="fbPreviewPaneMon" style="width:40%;display:none;flex-direction:column;border-left:1px solid var(--ln);padding-left:10px">
+                  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px">
+                    <span style="font-size:10px;color:var(--tx3)">预览</span>
+                    <button class="ib" onclick="document.getElementById('fbPreviewPaneMon').style.display='none'" title="关闭">✕</button>
+                  </div>
+                  <pre id="fbPreviewContentMon" style="flex:1;overflow:auto;font-size:11px;color:var(--tx2);background:var(--bg);padding:8px;border-radius:4px;border:1px solid var(--ln);white-space:pre-wrap;word-break:break-all"></pre>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
 
-    <!-- File Browser -->
-    <div class="panel" id="panel-filebrowser">
+    <!-- File Browser (standalone, hidden) -->
+    <div class="panel" id="panel-filebrowser" style="display:none">
       <div class="fb-wrap">
         <div style="margin-bottom:8px">
           <div style="font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:1.2px;margin-bottom:8px;font-family:var(--sans);font-weight:700">📂 Pod 文件下载 — 通过 kubectl cp 下载 Pod 内任意文件</div>
