@@ -427,7 +427,7 @@ function renderToolPackages() {
     return `<div class="toolchain-package-item">
       <div class="toolchain-package-main">
         <div>
-          <div class="task-item-name">${escapeHtml(p.name)} ${p.is_builtin ? '<span class="task-status running">内置</span>' : ''}</div>
+          <div class="task-item-name">${escapeHtml(p.file_name || p.name)} ${p.is_builtin ? '<span class="task-status running">内置</span>' : ''}</div>
           <div class="task-item-meta">类型：${toolTypeLabel(p.tool_type)} · 版本：${escapeHtml(p.version || '-')} · 文件：${escapeHtml(p.file_name || p.file_path || '-')} · 大小：${size} · 模板：${p.template_count || 0}</div>
           <div class="toolchain-hash">SHA256 ${sha} · Pod 安装路径 ${escapeHtml(p.install_path || '-')}</div>
         </div>
