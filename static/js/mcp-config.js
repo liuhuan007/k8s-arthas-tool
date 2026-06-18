@@ -88,7 +88,7 @@ function normalizeMcpConnections(connections, healthMap = {}) {
       const id = c.id || c.connection_id;
       const h = healthMap[id] || {};
       const level = inferMcpConnLevel(c);
-      const alive = h.alive ?? c.alive ?? c.status === 'connected' || c.status === 'db_only';
+      const alive = h.alive ?? c.alive ?? (c.status === 'connected' || c.status === 'db_only');
       const podExists = h.pod_exists ?? c.pod_exists;
       return {
         id,

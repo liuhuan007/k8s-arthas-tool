@@ -160,8 +160,10 @@ async function viewSkill(id) {
         }
 
         if (s.parameters_schema && (typeof s.parameters_schema === 'object' ? Object.keys(s.parameters_schema).length : s.parameters_schema)) {
+            var ps = s.parameters_schema;
+            if (typeof ps === 'string') { try { ps = JSON.parse(ps); } catch(e) {} }
             html += '<div class="detail-section"><h3>参数定义</h3>';
-            html += '<div class="detail-json">' + esc(JSON.stringify(s.parameters_schema, null, 2)) + '</div></div>';
+            html += '<div class="detail-json">' + esc(typeof ps === 'string' ? ps : JSON.stringify(ps, null, 2)) + '</div></div>';
         }
 
         if (s.steps && Array.isArray(s.steps) && s.steps.length) {

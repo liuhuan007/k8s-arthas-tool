@@ -25,11 +25,13 @@ var NAV_ROUTES = {
 };
 
 // ── 导航函数 ────────────────────────────────────────────────────────────────
-function navigateTo(tabId) {
-  var route = NAV_ROUTES[tabId];
-  if (route) {
-    window.location.href = route;
-  }
+if (typeof window.navigateTo !== 'function') {
+  window.navigateTo = function(tabId) {
+    var route = NAV_ROUTES[tabId];
+    if (route) {
+      window.location.href = route;
+    }
+  };
 }
 
 // ── 侧边栏分组折叠 ──────────────────────────────────────────────────────────

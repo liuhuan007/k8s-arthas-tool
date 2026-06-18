@@ -62,12 +62,16 @@
   // ═══════════════════════════════════════════════════════════════
 
   window.aiInit = function() {
+    console.log('[AI] aiInit called');
     const input = document.getElementById('aiInput');
     if (input) {
+      console.log('[AI] aiInput found, adding event listener');
       input.addEventListener('input', function() {
         this.style.height = 'auto';
         this.style.height = Math.min(this.scrollHeight, 120) + 'px';
       });
+    } else {
+      console.log('[AI] aiInput NOT found');
     }
     aiLoadConfig();
     aiRefreshConnSelect();
@@ -330,14 +334,16 @@
   };
 
   async function aiLoadConfig() {
+    console.log('[AI] Loading config...');
     try {
       const r = await fetch(`${API}/api/ai/config`, {credentials: 'include'});
+      console.log('[AI] Config response status:', r.status);
       const d = await r.json();
-      console.log('[AI] Config loaded:', d);
+      console.log('[AI] Config data:', JSON.stringify(d).substring(0, 200));
       window._aiConfigured = !!d.config;
       console.log('[AI] _aiConfigured:', window._aiConfigured);
     } catch(e) {
-      console.log('[AI] Config load error:', e);
+      console.log('[AI] Config load error:', e.message);
       window._aiConfigured = false;
     }
   }
@@ -502,11 +508,23 @@
 
   window.aiSend = async function() {
     console.log('[AI] aiSend called, _aiStreaming:', _aiStreaming, '_aiConfigured:', window._aiConfigured);
-    if (_aiStreaming) return;
+    if (_aiStreaming) {
+      console.log('[AI] Already streaming, returning');
+      return;
+    }
 
     const input = document.getElementById('aiInput');
+    if (!input) {
+      console.log('[AI] aiInput not found!');
+      return;
+    }
     const msg = input.value.trim();
-    if (!msg) return;
+    if (!msg) {
+      console.log('[AI] Empty message, returning');
+      return;
+    }
+
+    console.log('[AI] Message:', msg);
 
     // 检查是否配置了 AI
     if (!window._aiConfigured) {
@@ -518,23 +536,31 @@
 
     // 清空欢迎页
     const welcome = document.querySelector('.ai-welcome');
-    if (welcome) welcome.remove();
+    if (welcome) {
+      console.log('[AI] Removing welcome');
+      welcome.remove();
+    }
 
     // 添加用户消息
     input.value = '';
     input.style.height = 'auto';
-    aiAddMessage('user', msg);
+    console.log('[AI] Adding user message');
+    const userMsgEl = aiAddMessage('user', msg);
+    console.log('[AI] User message element:', userMsgEl);
     _aiMessages.push({role: 'user', content: msg});
     saveChatToStorage();
 
     // 获取连接 ID：优先使用下拉选择，否则使用左侧面板当前连接
     const connId = document.getElementById('aiConnSelect')?.value || window._currentConnId || '';
+    console.log('[AI] Connection ID:', connId);
 
     // 开始流式对话
     _aiStreaming = true;
     document.getElementById('aiSendBtn').disabled = true;
 
+    console.log('[AI] Creating assistant message element');
     const assistantEl = aiAddMessage('assistant', '', true);
+    console.log('[AI] Assistant element:', assistantEl);
 
     try {
       console.log('[AI] Sending request to /api/ai/chat');
@@ -560,12 +586,21 @@
       const decoder = new TextDecoder();
       let fullContent = '';
       let buffer = '';
+      let chunkCount = 0;
+
+      console.log('[AI] Starting to read stream');
 
       while (true) {
         const {done, value} = await reader.read();
-        if (done) break;
+        if (done) {
+          console.log('[AI] Stream ended');
+          break;
+        }
 
-        buffer += decoder.decode(value, {stream: true});
+        chunkCount++;
+        const chunk = decoder.decode(value, {stream: true});
+        console.log('[AI] Chunk', chunkCount, ':', chunk.substring(0, 100));
+        buffer += chunk;
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
 
@@ -576,10 +611,11 @@
 
           try {
             const data = JSON.parse(dataStr);
-            console.log('[AI] SSE event:', data.type || data.error ? 'error' : 'content');
+            console.log('[AI] SSE event type:', data.type, 'error:', data.error);
 
             if (data.type === 'content') {
               fullContent += data.content;
+              console.log('[AI] Content update, length:', fullContent.length);
               aiUpdateMessage(assistantEl, fullContent, true);
             } else if (data.type === 'tool_start') {
               fullContent += `\n\n🔧 执行工具: **${data.name}**\n`;
@@ -598,12 +634,13 @@
               aiUpdateMessage(assistantEl, fullContent, true);
             }
           } catch(e) {
-            console.log('[AI] Parse error:', e);
+            console.log('[AI] Parse error:', e.message);
           }
         }
       }
 
       console.log('[AI] Stream complete, fullContent length:', fullContent.length);
+      console.log('[AI] Full content:', fullContent.substring(0, 200));
       aiUpdateMessage(assistantEl, fullContent, false);
       _aiMessages.push({role: 'assistant', content: fullContent});
       saveChatToStorage();
@@ -617,10 +654,16 @@
   };
 
   window.aiQuickAsk = function(question) {
+    console.log('[AI] aiQuickAsk called:', question);
     const input = document.getElementById('aiInput');
+    if (!input) {
+      console.log('[AI] aiInput not found!');
+      return;
+    }
     input.value = question;
     input.style.height = 'auto';
     input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+    console.log('[AI] aiInput value set, calling aiSend');
     aiSend();
   };
 
@@ -659,9 +702,17 @@
   // ═══════════════════════════════════════════════════════════════
 
   function aiAddMessage(role, content, streaming = false) {
+    console.log('[AI] aiAddMessage called, role:', role, 'content length:', content.length);
     const container = document.getElementById('aiMessages');
+    console.log('[AI] Container:', container);
+    if (!container) {
+      console.log('[AI] ERROR: aiMessages container not found!');
+      return null;
+    }
+
     const div = document.createElement('div');
     div.className = `ai-msg ai-msg-${role}`;
+    console.log('[AI] Created message div:', div.className);
 
     if (role === 'user') {
       div.innerHTML = `
@@ -673,18 +724,30 @@
         <div class="ai-msg-body"><div class="ai-msg-text">${renderMd(content)}${streaming ? '<span class="ai-cursor">▊</span>' : ''}</div></div>`;
     }
 
+    console.log('[AI] Appending message to container');
     container.appendChild(div);
     container.scrollTop = container.scrollHeight;
+    console.log('[AI] Message appended, container children:', container.children.length);
     return div;
   }
 
   function aiUpdateMessage(el, content, streaming) {
+    console.log('[AI] aiUpdateMessage called, content length:', content.length);
     const textEl = el.querySelector('.ai-msg-text');
     if (textEl) {
-      textEl.innerHTML = renderMd(content) + (streaming ? '<span class="ai-cursor">▊</span>' : '');
+      const html = renderMd(content) + (streaming ? '<span class="ai-cursor">▊</span>' : '');
+      textEl.innerHTML = html;
     }
     const container = document.getElementById('aiMessages');
-    container.scrollTop = container.scrollHeight;
+    if (container) {
+      const panel = container.closest('.panel');
+      const aiContainer = container.closest('.ai-container');
+      console.log('[AI] panel display:', panel ? panel.style.display : 'no panel');
+      console.log('[AI] panel class:', panel ? panel.className : 'no panel');
+      console.log('[AI] aiContainer:', aiContainer ? aiContainer.offsetHeight : 'no aiContainer');
+      console.log('[AI] container:', container.offsetHeight);
+      container.scrollTop = container.scrollHeight;
+    }
   }
 
   function aiAddSystemMessage(msg) {
@@ -751,7 +814,9 @@
 
   // 页面加载时初始化
   document.addEventListener('DOMContentLoaded', () => {
+    console.log('[AI] DOMContentLoaded fired');
     setTimeout(() => {
+      console.log('[AI] Calling aiInit...');
       aiInit();
       loadChatFromStorage();  // 恢复聊天历史
     }, 500);
