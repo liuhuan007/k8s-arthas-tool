@@ -39,11 +39,12 @@
       const sha = p.sha256 ? `${p.sha256.slice(0, 12)}...` : '未校验';
       const statusClass = p.status === 'active' ? 'running' : 'stopped';
       const statusText = p.status === 'active' ? '可用' : '停用';
+      const displayName = p.file_name || p.name;
       return `
         <div class="toolbox-card toolbox-card-binary" data-id="${p.id}">
           <div class="toolbox-card-header">
             <span class="toolbox-card-icon">📦</span>
-            <span class="toolbox-card-name">${esc(p.name)}</span>
+            <span class="toolbox-card-name">${esc(displayName)}</span>
             ${p.is_builtin ? '<span class="badge badge-low">内置</span>' : ''}
             <span class="badge ${statusClass}">${statusText}</span>
           </div>
@@ -142,6 +143,143 @@
       </div>
     `).join('');
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // 新建/上传弹窗
+  // ═══════════════════════════════════════════════════════════════
+
+  function _openModal(title, bodyHtml, footerHtml) {
+    const modal = document.createElement('div');
+    modal.className = 'capability-modal-overlay';
+    modal.innerHTML = `
+      <div class="capability-modal" style="max-width:560px">
+        <div class="modal-header">
+          <h3>${title}</h3>
+          <button class="btn-close" onclick="this.closest('.capability-modal-overlay').remove()">✕</button>
+        </div>
+        <div class="modal-body" style="padding:20px">${bodyHtml}</div>
+        ${footerHtml ? `<div class="modal-footer" style="padding:16px 20px;border-top:1px solid var(--border-color);display:flex;justify-content:flex-end;gap:8px">${footerHtml}</div>` : ''}
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) modal.remove(); });
+    return modal;
+  }
+
+  window.toolboxUploadBinary = function() {
+    const body = `
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div><label class="fl">工具名称</label><input id="tbUpName" class="inp" placeholder="例如：arthas-boot-3.7.2"></div>
+        <div><label class="fl">工具类型</label><select id="tbUpType" class="inp"><option value="arthas">Arthas</option><option value="async-profiler">async-profiler</option><option value="generic">通用</option></select></div>
+        <div><label class="fl">版本</label><input id="tbUpVer" class="inp" placeholder="可选"></div>
+        <div><label class="fl">安装路径</label><input id="tbUpPath" class="inp" value="/tmp/arthas/arthas-boot.jar"></div>
+        <div><label class="fl">说明</label><input id="tbUpDesc" class="inp" placeholder="可选"></div>
+        <div>
+          <label class="fl">二进制文件</label>
+          <div class="toolchain-file-picker">
+            <input id="tbUpFile" class="inp toolchain-file-input" type="file" onchange="document.getElementById('tbUpFileName').textContent=this.files?.[0]?.name||'未选择文件'">
+            <button class="btn btn-g" type="button" onclick="document.getElementById('tbUpFile')?.click()">选择文件</button>
+            <span id="tbUpFileName">未选择文件</span>
+          </div>
+        </div>
+      </div>
+    `;
+    const footer = `
+      <button class="btn btn-g" onclick="this.closest('.capability-modal-overlay').remove()">取消</button>
+      <button class="btn btn-p" id="tbUpSubmitBtn">上传并登记</button>
+    `;
+    const modal = _openModal('上传二进制工具', body, footer);
+    modal.querySelector('#tbUpSubmitBtn').onclick = async () => {
+      const fileEl = modal.querySelector('#tbUpFile');
+      const file = fileEl?.files?.[0];
+      if (!file) { toast('请选择文件', 'warn'); return; }
+      const form = new FormData();
+      form.append('file', file);
+      form.append('name', modal.querySelector('#tbUpName')?.value?.trim() || file.name);
+      form.append('tool_type', modal.querySelector('#tbUpType')?.value || 'arthas');
+      form.append('version', modal.querySelector('#tbUpVer')?.value?.trim() || '');
+      form.append('install_path', modal.querySelector('#tbUpPath')?.value?.trim() || '/tmp/arthas/arthas-boot.jar');
+      form.append('description', modal.querySelector('#tbUpDesc')?.value?.trim() || '');
+      try {
+        await safeUploadToolPackage('/tasks/tool-packages/upload', form, 300000);
+        toast('工具已上传', 'ok');
+        modal.remove();
+        loadBinaryTools();
+      } catch (e) { toast(`上传失败：${e.message}`, 'err'); }
+    };
+  };
+
+  window.toolboxCreateScript = function() {
+    const body = `
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div><label class="fl">脚本名称</label><input id="tbScrName" class="inp" placeholder="例如：GC日志分析"></div>
+        <div><label class="fl">运行时</label><select id="tbScrRuntime" class="inp"><option value="python">Python</option><option value="shell">Shell</option><option value="node">Node.js</option></select></div>
+        <div><label class="fl">风险等级</label><select id="tbScrRisk" class="inp"><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option></select></div>
+        <div><label class="fl">说明</label><input id="tbScrDesc" class="inp" placeholder="可选"></div>
+        <div><label class="fl">脚本内容</label><textarea id="tbScrBody" class="inp" rows="8" placeholder="#!/usr/bin/env python\nimport sys\n..." style="font-family:monospace;font-size:12px;resize:vertical"></textarea></div>
+      </div>
+    `;
+    const footer = `
+      <button class="btn btn-g" onclick="this.closest('.capability-modal-overlay').remove()">取消</button>
+      <button class="btn btn-p" id="tbScrSubmitBtn">创建</button>
+    `;
+    const modal = _openModal('新建脚本工具', body, footer);
+    modal.querySelector('#tbScrSubmitBtn').onclick = async () => {
+      const name = modal.querySelector('#tbScrName')?.value?.trim();
+      const script_body = modal.querySelector('#tbScrBody')?.value?.trim();
+      if (!name) { toast('请填写脚本名称', 'warn'); return; }
+      if (!script_body) { toast('请填写脚本内容', 'warn'); return; }
+      try {
+        await safePost('/tasks/script-tools', {
+          name,
+          runtime: modal.querySelector('#tbScrRuntime')?.value || 'python',
+          risk_level: modal.querySelector('#tbScrRisk')?.value || 'low',
+          description: modal.querySelector('#tbScrDesc')?.value?.trim() || '',
+          script_body,
+        });
+        toast('脚本工具已创建', 'ok');
+        modal.remove();
+        loadScriptTools();
+      } catch (e) { toast(`创建失败：${e.message}`, 'err'); }
+    };
+  };
+
+  window.toolboxCreateQuick = function() {
+    const body = `
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div><label class="fl">操作名称</label><input id="tbQkName" class="inp" placeholder="例如：查看线程堆栈"></div>
+        <div><label class="fl">分类</label><input id="tbQkCat" class="inp" placeholder="例如：诊断、GC、线程"></div>
+        <div><label class="fl">风险等级</label><select id="tbQkRisk" class="inp"><option value="low">低风险</option><option value="medium">中风险</option><option value="high">高风险</option></select></div>
+        <div><label class="fl">说明</label><input id="tbQkDesc" class="inp" placeholder="可选"></div>
+        <div><label class="fl">命令模板</label><textarea id="tbQkCmd" class="inp" rows="4" placeholder="thread -n 3" style="font-family:monospace;font-size:12px;resize:vertical"></textarea></div>
+        <div><label class="fl">Arthas 文档链接</label><input id="tbQkUrl" class="inp" placeholder="可选，https://arthas.aliyun.com/..."></div>
+      </div>
+    `;
+    const footer = `
+      <button class="btn btn-g" onclick="this.closest('.capability-modal-overlay').remove()">取消</button>
+      <button class="btn btn-p" id="tbQkSubmitBtn">创建</button>
+    `;
+    const modal = _openModal('新建快捷操作', body, footer);
+    modal.querySelector('#tbQkSubmitBtn').onclick = async () => {
+      const name = modal.querySelector('#tbQkName')?.value?.trim();
+      const command_template = modal.querySelector('#tbQkCmd')?.value?.trim();
+      if (!name) { toast('请填写操作名称', 'warn'); return; }
+      if (!command_template) { toast('请填写命令模板', 'warn'); return; }
+      try {
+        await safePost('/tasks/quick-actions', {
+          name,
+          category: modal.querySelector('#tbQkCat')?.value?.trim() || '',
+          risk_level: modal.querySelector('#tbQkRisk')?.value || 'low',
+          description: modal.querySelector('#tbQkDesc')?.value?.trim() || '',
+          command_template,
+          arthas_doc_url: modal.querySelector('#tbQkUrl')?.value?.trim() || '',
+        });
+        toast('快捷操作已创建', 'ok');
+        modal.remove();
+        loadQuickActions();
+      } catch (e) { toast(`创建失败：${e.message}`, 'err'); }
+    };
+  };
 
   // ═══════════════════════════════════════════════════════════════
   // 单个分发

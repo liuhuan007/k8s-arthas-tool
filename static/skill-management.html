@@ -1,0 +1,316 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Skill 管理 - K8s Arthas Tool</title>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/app.css">
+    <style>
+        body { background:var(--bg); color:var(--tx); font-family:var(--mono); margin:0; overflow:auto }
+        .admin-page { display:flex; flex-direction:column; min-height:100vh }
+
+        /* ── Topbar ── */
+        .topbar{height:44px;background:var(--bg1);border-bottom:1px solid var(--ln);display:flex;align-items:center;flex-shrink:0}
+        .tb-logo{display:flex;align-items:center;gap:10px;padding:0 16px;border-right:1px solid var(--ln);height:100%;flex-shrink:0}
+        .tb-hex{width:24px;height:24px;background:var(--a);clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)}
+        .tb-title{font-family:var(--sans);font-weight:800;font-size:14px;letter-spacing:-.5px}
+        .tb-title em{color:var(--a);font-style:normal}
+        .tb-links{display:flex;align-items:center;height:100%;flex:1;padding:0 10px;gap:4px}
+        .tb-lnk{padding:3px 9px;border-radius:3px;font-size:11px;border:1px solid var(--ln2);color:var(--tx2);cursor:pointer;transition:all.15s;text-decoration:none}
+        .tb-lnk:hover{border-color:var(--a);color:var(--a);background:rgba(56,189,248,.06)}
+        .tb-right{display:flex;align-items:center;height:100%;margin-left:auto}
+        .tb-srv{display:flex;align-items:center;gap:6px;padding:0 14px;border-left:1px solid var(--ln);font-size:11px;color:var(--tx2)}
+
+        /* ── Content ── */
+        .admin-content{flex:1;padding:24px 30px;max-width:1400px;margin:0 auto;width:100%}
+        .admin-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;padding-bottom:14px;border-bottom:1px solid var(--ln)}
+        .admin-header h1{font-family:var(--sans);font-size:18px;font-weight:700;color:var(--tx);margin:0}
+        .admin-header h1 span{color:var(--a)}
+
+        /* ── Stats bar ── */
+        .stats-bar{display:flex;gap:12px;margin-bottom:16px;flex-wrap:wrap}
+        .stat-card{background:var(--bg1);border:1px solid var(--ln);border-radius:6px;padding:10px 16px;min-width:120px}
+        .stat-val{font-family:var(--sans);font-size:20px;font-weight:700;color:var(--a)}
+        .stat-lbl{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.8px;margin-top:2px}
+
+        /* ── Filters ── */
+        .filter-bar{display:flex;gap:8px;margin-bottom:14px;align-items:center;flex-wrap:wrap}
+        .filter-bar .fi,.filter-bar .fs{width:auto;min-width:130px;padding:6px 10px;font-size:11px}
+        .filter-bar .search-input{min-width:220px}
+
+        /* ── Buttons ── */
+        .btn-row{display:flex;gap:8px}
+        .ab{padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-family:var(--mono);border:none;transition:all.15s;font-weight:500}
+        .ab-p{background:var(--a);color:#0b0f18;font-weight:600}.ab-p:hover{filter:brightness(1.1)}
+        .ab-g{background:none;color:var(--tx2);border:1px solid var(--ln)}.ab-g:hover{border-color:var(--a);color:var(--a)}
+        .ab-d{background:rgba(248,113,113,.12);color:var(--a5);border:1px solid rgba(248,113,113,.25)}.ab-d:hover{background:rgba(248,113,113,.2)}
+        .ab-sm{padding:4px 10px;font-size:11px}
+        .ab-w{background:rgba(251,191,36,.12);color:#fbbf24;border:1px solid rgba(251,191,36,.25)}.ab-w:hover{background:rgba(251,191,36,.2)}
+
+        /* ── Table ── */
+        .tbl-wrap{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;overflow:hidden}
+        .tbl{width:100%;border-collapse:collapse}
+        .tbl th{background:var(--bg2);color:var(--tx2);padding:11px 14px;text-align:left;font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--ln)}
+        .tbl td{padding:10px 14px;border-bottom:1px solid var(--ln);color:var(--tx);font-size:12px}
+        .tbl tr:last-child td{border-bottom:none}
+        .tbl tr:hover td{background:rgba(255,255,255,.02)}
+        .tbl .actions{display:flex;gap:4px;flex-wrap:wrap}
+
+        /* ── Badges ── */
+        .badge{padding:3px 9px;border-radius:10px;font-size:10px;font-weight:600;display:inline-block}
+        .bg-published{background:rgba(52,211,153,.12);color:var(--a3);border:1px solid rgba(52,211,153,.25)}
+        .bg-draft{background:rgba(107,127,160,.12);color:var(--tx2);border:1px solid rgba(107,127,160,.25)}
+        .bg-validated{background:rgba(56,189,248,.12);color:var(--a);border:1px solid rgba(56,189,248,.25)}
+        .bg-testing{background:rgba(251,191,36,.12);color:#fbbf24;border:1px solid rgba(251,191,36,.25)}
+        .bg-archived{background:rgba(248,113,113,.12);color:var(--a5);border:1px solid rgba(248,113,113,.25)}
+        .bg-cat{background:rgba(167,139,250,.12);color:var(--a2);border:1px solid rgba(167,139,250,.25)}
+
+        /* ── Modal ── */
+        .modal-bg{position:fixed;inset:0;background:rgba(11,15,24,.88);display:none;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(4px)}
+        .modal-bg.open{display:flex}
+        .modal{background:var(--bg1);border:1px solid var(--ln2);border-radius:8px;width:520px;max-width:96vw;box-shadow:0 20px 60px rgba(0,0,0,.7);animation:mi .2s ease}
+        .modal.wide{width:680px}
+        @keyframes mi{from{transform:translateY(-10px);opacity:0}to{transform:translateY(0);opacity:1}}
+        .mhd{padding:15px 18px 12px;border-bottom:1px solid var(--ln);display:flex;align-items:center;justify-content:space-between}
+        .m-tt{font-family:var(--sans);font-size:14px;font-weight:700;color:var(--tx)}
+        .m-cl{background:none;border:none;color:var(--tx2);cursor:pointer;font-size:16px}.m-cl:hover{color:var(--tx)}
+        .mbd{padding:18px;max-height:60vh;overflow-y:auto}
+        .mft{padding:12px 18px;border-top:1px solid var(--ln);display:flex;gap:8px;justify-content:flex-end}
+
+        /* ── Form ── */
+        .fg{margin-bottom:14px}
+        .fl{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;display:block}
+        .fi,.fs,.ft{width:100%;padding:8px 10px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-family:var(--mono);font-size:12px;outline:none;transition:border-color.15s;box-sizing:border-box}
+        .fi:focus,.fs:focus,.ft:focus{border-color:var(--a)}.fi::placeholder{color:var(--tx3)}
+        .ft{min-height:80px;resize:vertical}
+
+        /* ── Detail panel ── */
+        .detail-section{background:var(--bg2);border:1px solid var(--ln);border-radius:6px;padding:12px;margin-bottom:10px}
+        .detail-section h3{font-size:11px;color:var(--a);margin:0 0 8px;font-weight:600;text-transform:uppercase;letter-spacing:.8px}
+        .detail-row{display:flex;gap:8px;margin-bottom:6px;font-size:12px}
+        .detail-row .lbl{color:var(--tx3);min-width:80px;flex-shrink:0}
+        .detail-row .val{color:var(--tx)}
+        .detail-json{background:var(--bg);border:1px solid var(--ln);border-radius:4px;padding:8px;font-size:11px;max-height:200px;overflow:auto;white-space:pre-wrap;word-break:break-all}
+
+        .empty-msg{text-align:center;padding:40px;color:var(--tx3);font-size:12px}
+        .err-box{color:var(--a5);background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.25);border-radius:6px;padding:10px 14px;font-size:11px;display:none;margin-top:8px}
+        .err-box.show{display:block}
+        .ok-box{color:var(--a3);background:rgba(52,211,153,.06);border:1px solid rgba(52,211,153,.25);border-radius:6px;padding:10px 14px;font-size:11px;display:none;margin-top:8px}
+        .ok-box.show{display:block}
+
+        /* ── Toast ── */
+        .toast-container{position:fixed;top:16px;right:16px;z-index:9999;display:flex;flex-direction:column;gap:8px}
+        .toast{padding:10px 16px;border-radius:6px;font-size:12px;font-family:var(--mono);animation:toast-in .2s ease;max-width:360px;box-shadow:0 4px 20px rgba(0,0,0,.5)}
+        .toast-success{background:rgba(52,211,153,.15);color:var(--a3);border:1px solid rgba(52,211,153,.3)}
+        .toast-error{background:rgba(248,113,113,.15);color:var(--a5);border:1px solid rgba(248,113,113,.3)}
+        .toast-info{background:rgba(56,189,248,.15);color:var(--a);border:1px solid rgba(56,189,248,.3)}
+        @keyframes toast-in{from{transform:translateX(40px);opacity:0}to{transform:translateX(0);opacity:1}}
+
+        /* ── File upload ── */
+        .file-drop{border:2px dashed var(--ln);border-radius:6px;padding:24px;text-align:center;color:var(--tx3);font-size:12px;cursor:pointer;transition:all .15s}
+        .file-drop:hover,.file-drop.dragover{border-color:var(--a);color:var(--a);background:rgba(56,189,248,.04)}
+        .file-drop input{display:none}
+
+        body.embed { overflow:hidden }
+        body.embed .admin-page{min-height:100vh}
+        body.embed .topbar{display:none}
+        body.embed .admin-content{max-width:none;padding:18px 20px}
+    </style>
+</head>
+<body>
+    <script>
+        if (new URLSearchParams(window.location.search).get('embed') === '1') {
+            document.body.classList.add('embed');
+        }
+    </script>
+    <div class="toast-container" id="toastContainer"></div>
+    <div class="admin-page">
+        <!-- Topbar -->
+        <div class="topbar">
+            <div class="tb-logo"><div class="tb-hex"></div><span class="tb-title">Arthas <em>K8s</em></span></div>
+            <div class="tb-links">
+                <a class="tb-lnk" href="/">← 返回主页</a>
+                <a class="tb-lnk" href="user-management.html">用户管理</a>
+                <a class="tb-lnk" href="audit-logs.html">审计日志</a>
+            </div>
+            <div class="tb-right">
+                <div class="tb-srv"><span id="currentUser">—</span></div>
+            </div>
+        </div>
+
+        <!-- Content -->
+        <div class="admin-content">
+            <div class="admin-header">
+                <h1>⚡ <span>Skill 管理</span></h1>
+                <div class="btn-row">
+                    <button class="ab ab-g" onclick="loadSkills()">↻ 刷新</button>
+                    <button class="ab ab-w" onclick="showImportModal()">⬆ 导入</button>
+                    <button class="ab ab-p" onclick="showCreateModal()">＋ 创建 Skill</button>
+                </div>
+            </div>
+
+            <!-- Stats -->
+            <div class="stats-bar" id="statsBar">
+                <div class="stat-card"><div class="stat-val" id="statTotal">—</div><div class="stat-lbl">总计</div></div>
+                <div class="stat-card"><div class="stat-val" id="statDraft">—</div><div class="stat-lbl">草稿</div></div>
+                <div class="stat-card"><div class="stat-val" id="statPublished">—</div><div class="stat-lbl">已发布</div></div>
+                <div class="stat-card"><div class="stat-val" id="statArchived">—</div><div class="stat-lbl">已归档</div></div>
+            </div>
+
+            <!-- Filters -->
+            <div class="filter-bar">
+                <input class="fi search-input" id="searchInput" placeholder="搜索 Skill 名称/描述..." onkeyup="onSearchKeyup(event)">
+                <select class="fs" id="filterCategory" onchange="loadSkills()">
+                    <option value="">所有分类</option>
+                    <option value="quick">快速诊断</option>
+                    <option value="tool">工具</option>
+                    <option value="scenario">场景方案</option>
+                    <option value="ai">智能诊断</option>
+                </select>
+                <select class="fs" id="filterStatus" onchange="loadSkills()">
+                    <option value="">所有状态</option>
+                    <option value="draft">草稿</option>
+                    <option value="validated">已校验</option>
+                    <option value="testing">测试中</option>
+                    <option value="published">已发布</option>
+                    <option value="archived">已归档</option>
+                </select>
+                <select class="fs" id="filterSource" onchange="loadSkills()">
+                    <option value="">所有来源</option>
+                    <option value="builtin">内置</option>
+                    <option value="custom">自定义</option>
+                    <option value="imported">导入</option>
+                </select>
+                <button class="ab ab-g ab-sm" onclick="clearFilters()">清除筛选</button>
+            </div>
+
+            <!-- Table -->
+            <div class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                        <tr>
+                            <th>名称</th>
+                            <th>分类</th>
+                            <th>等级</th>
+                            <th>状态</th>
+                            <th>来源</th>
+                            <th>版本</th>
+                            <th>描述</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="skillTableBody">
+                        <tr><td colspan="8" class="empty-msg">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- 导入 Skill 模态框 -->
+    <div class="modal-bg" id="importModal">
+        <div class="modal">
+            <div class="mhd"><span class="m-tt">导入 Skill</span><button class="m-cl" onclick="closeModal('importModal')">✕</button></div>
+            <div class="mbd">
+                <div class="fg">
+                    <label class="fl">从文件导入</label>
+                    <div class="file-drop" id="fileDrop" onclick="document.getElementById('fileInput').click()">
+                        <input type="file" id="fileInput" accept=".json,.yaml,.yml" onchange="onFileSelected(event)">
+                        <div id="fileDropText">点击或拖拽文件到此处（支持 JSON / YAML）</div>
+                    </div>
+                </div>
+                <div style="text-align:center;color:var(--tx3);font-size:11px;margin:8px 0">— 或者直接粘贴 JSON —</div>
+                <div class="fg">
+                    <label class="fl">Skill JSON</label>
+                    <textarea class="ft" id="importJson" placeholder='{"name":"my-skill", ...}'></textarea>
+                </div>
+                <div class="err-box" id="importError"></div>
+                <div class="ok-box" id="importOk"></div>
+            </div>
+            <div class="mft">
+                <button class="ab ab-g" onclick="closeModal('importModal')">取消</button>
+                <button class="ab ab-p" id="importBtn" onclick="importSkill()">导入</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 创建 Skill 模态框 -->
+    <div class="modal-bg" id="createModal">
+        <div class="modal wide">
+            <div class="mhd"><span class="m-tt">创建 Skill</span><button class="m-cl" onclick="closeModal('createModal')">✕</button></div>
+            <div class="mbd">
+                <div class="fg"><label class="fl">名称 *</label><input class="fi" id="createName" placeholder="Skill 名称"></div>
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                    <div class="fg"><label class="fl">分类</label><select class="fs" id="createCategory"><option value="quick">快速诊断</option><option value="tool">工具</option><option value="scenario">场景方案</option><option value="ai">智能诊断</option></select></div>
+                    <div class="fg"><label class="fl">等级</label><select class="fs" id="createLevel"><option value="1">Level 1 - 基础</option><option value="2">Level 2 - 标准</option><option value="3">Level 3 - 高级</option><option value="4">Level 4 - 智能</option></select></div>
+                </div>
+                <div class="fg"><label class="fl">描述</label><textarea class="ft" id="createDescription" placeholder="Skill 功能描述"></textarea></div>
+                <div class="fg"><label class="fl">Arthas 命令</label><input class="fi" id="createCommand" placeholder="例如: thread -n 3"></div>
+                <div class="fg"><label class="fl">版本</label><input class="fi" id="createVersion" placeholder="1.0.0" value="1.0.0"></div>
+                <div class="err-box" id="createError"></div>
+            </div>
+            <div class="mft">
+                <button class="ab ab-g" onclick="closeModal('createModal')">取消</button>
+                <button class="ab ab-p" onclick="createSkill()">创建</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Skill 详情模态框 -->
+    <div class="modal-bg" id="detailModal">
+        <div class="modal wide">
+            <div class="mhd"><span class="m-tt" id="detailTitle">Skill 详情</span><button class="m-cl" onclick="closeModal('detailModal')">✕</button></div>
+            <div class="mbd" id="detailBody">
+                <div class="empty-msg">加载中...</div>
+            </div>
+            <div class="mft">
+                <button class="ab ab-g" onclick="closeModal('detailModal')">关闭</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="js/skill-management.js"></script>
+    <script>
+    (async function() {
+      try {
+        const resp = await fetch('api/auth/current').then(r => r.json());
+        if (!resp || !resp.authenticated) {
+          window.location.href = '/login.html';
+          return;
+        }
+        if (!resp.user.is_admin) {
+          if (window.self !== window.top && window.parent && typeof window.parent.switchTab === 'function') {
+            window.parent.switchTab('connections');
+          } else {
+            window.location.href = '/';
+          }
+          return;
+        }
+        const el = document.getElementById('currentUser');
+        if (el) el.textContent = '👤 ' + (resp.user.username || '—');
+        // Init
+        loadStats();
+        loadSkills();
+      } catch (e) {
+        window.location.href = '/login.html';
+      }
+    })();
+
+    // File drag-and-drop
+    const fileDrop = document.getElementById('fileDrop');
+    if (fileDrop) {
+        fileDrop.addEventListener('dragover', e => { e.preventDefault(); fileDrop.classList.add('dragover'); });
+        fileDrop.addEventListener('dragleave', () => fileDrop.classList.remove('dragover'));
+        fileDrop.addEventListener('drop', e => {
+            e.preventDefault();
+            fileDrop.classList.remove('dragover');
+            if (e.dataTransfer.files.length) {
+                document.getElementById('fileInput').files = e.dataTransfer.files;
+                onFileSelected({target: {files: e.dataTransfer.files}});
+            }
+        });
+    }
+    </script>
+</body>
+</html>
