@@ -442,33 +442,63 @@
     }
   };
 
+  let _batchPodData = [];
+
   async function loadBatchPodList() {
     try {
       const data = await safeGet('/clusters');
       const clusters = data.clusters || [];
       const container = document.getElementById('batchPodList');
       if (!container) return;
-      let html = '';
+      _batchPodData = [];
       for (const c of clusters) {
         try {
-          const podsData = await safeGet(`/clusters/${c.name}/pods`);
-          const pods = podsData.pods || [];
-          for (const pod of pods) {
-            html += `
-              <label class="batch-item">
-                <input type="checkbox" value="${esc(c.name)}:${esc(pod.namespace)}:${esc(pod.name)}" onchange="batchUpdatePods()">
-                <span>${esc(pod.name)}</span>
-                <span class="batch-item-meta">${esc(c.name)}/${esc(pod.namespace)} · ${esc(pod.status)}</span>
-              </label>
-            `;
+          const namespaces = c.namespaces || ['default'];
+          for (const ns of namespaces) {
+            try {
+              const podsData = await safeGet(`/clusters/${c.name}/pods?namespace=${encodeURIComponent(ns)}`);
+              const pods = podsData.pods || [];
+              for (const pod of pods) {
+                _batchPodData.push({
+                  cluster: c.name,
+                  namespace: ns,
+                  pod: pod.name,
+                  phase: pod.phase || '',
+                });
+              }
+            } catch (e) { /* skip namespace */ }
           }
         } catch (e) { /* skip cluster */ }
       }
-      container.innerHTML = html || '<div class="sb-empty">无可用 Pod</div>';
+      _renderBatchPodList(_batchPodData);
     } catch (e) {
       console.error('加载 Pod 列表失败:', e);
     }
   }
+
+  function _renderBatchPodList(pods) {
+    const container = document.getElementById('batchPodList');
+    if (!container) return;
+    if (pods.length === 0) {
+      container.innerHTML = '<div class="sb-empty">无可用 Pod</div>';
+      return;
+    }
+    container.innerHTML = pods.map(p => `
+      <label class="batch-item">
+        <input type="checkbox" value="${esc(p.cluster)}:${esc(p.namespace)}:${esc(p.pod)}" onchange="batchUpdatePods()">
+        <span>${esc(p.pod)}</span>
+        <span class="batch-item-meta">${esc(p.cluster)}/${esc(p.namespace)} · ${esc(p.phase)}</span>
+      </label>
+    `).join('');
+  }
+
+  window.batchFilterPods = function(filter) {
+    if (filter === 'java') {
+      _renderBatchPodList(_batchPodData.filter(p => /java|jvm|jdk|jre/i.test(p.pod)));
+    } else {
+      _renderBatchPodList(_batchPodData);
+    }
+  };
 
   window.batchUpdatePods = function() {
     const checkboxes = document.querySelectorAll('#batchPodList input[type=checkbox]:checked');
