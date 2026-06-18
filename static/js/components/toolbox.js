@@ -403,13 +403,15 @@
       const packages = data.packages || [];
       const container = document.getElementById('batchToolList');
       if (!container) return;
-      container.innerHTML = packages.map(p => `
+      container.innerHTML = packages.map(p => {
+        const toolDisplayName = p.file_name || p.name;
+        return `
         <label class="batch-item">
-          <input type="checkbox" value="${p.id}" data-name="${esc(p.name)}" data-path="${esc(p.install_path || '')}" onchange="batchUpdateTools()">
-          <span>${esc(p.name)}</span>
+          <input type="checkbox" value="${p.id}" data-name="${esc(toolDisplayName)}" data-path="${esc(p.install_path || '')}" onchange="batchUpdateTools()">
+          <span>${esc(toolDisplayName)}</span>
           <span class="batch-item-meta">${esc(p.tool_type)} · ${esc(p.version || '-')}</span>
         </label>
-      `).join('');
+      `}).join('');
     } catch (e) {
       console.error('加载工具列表失败:', e);
     }
@@ -450,25 +452,28 @@
       const clusters = data.clusters || [];
       const container = document.getElementById('batchPodList');
       if (!container) return;
+      container.innerHTML = '<div class="sb-empty">加载中...</div>';
       _batchPodData = [];
       for (const c of clusters) {
+        let namespaces = ['default'];
         try {
-          const namespaces = c.namespaces || ['default'];
-          for (const ns of namespaces) {
-            try {
-              const podsData = await safeGet(`/clusters/${c.name}/pods?namespace=${encodeURIComponent(ns)}`);
-              const pods = podsData.pods || [];
-              for (const pod of pods) {
-                _batchPodData.push({
-                  cluster: c.name,
-                  namespace: ns,
-                  pod: pod.name,
-                  phase: pod.phase || '',
-                });
-              }
-            } catch (e) { /* skip namespace */ }
-          }
-        } catch (e) { /* skip cluster */ }
+          const nsData = await safeGet(`/clusters/${c.name}/namespaces`);
+          if (nsData.namespaces && nsData.namespaces.length) namespaces = nsData.namespaces;
+        } catch (e) { /* use default */ }
+        for (const ns of namespaces) {
+          try {
+            const podsData = await safeGet(`/clusters/${c.name}/pods?namespace=${encodeURIComponent(ns)}`);
+            const pods = podsData.pods || [];
+            for (const pod of pods) {
+              _batchPodData.push({
+                cluster: c.name,
+                namespace: ns,
+                pod: pod.name,
+                phase: pod.phase || '',
+              });
+            }
+          } catch (e) { /* skip namespace */ }
+        }
       }
       _renderBatchPodList(_batchPodData);
     } catch (e) {
