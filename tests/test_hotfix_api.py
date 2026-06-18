@@ -52,7 +52,7 @@ def test_hotfix_service_calculates_sha256():
 
 def test_hotfix_service_artifact_directory_structure():
     """HotfixService 必须使用标准产物目录结构"""
-    assert 'profiler_output/hotfix' in HOTFIX_SERVICE
+    assert 'data/hotfix' in HOTFIX_SERVICE
     assert 'connection_id' in HOTFIX_SERVICE
     assert 'timestamp' in HOTFIX_SERVICE
 

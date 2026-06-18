@@ -74,7 +74,7 @@ def get_cleanup_stats():
     
     返回:
     - 磁盘使用率
-    - profiler_output 目录统计
+    - data/profiler 目录统计
     - 连接数量统计
     """
     try:

@@ -35,6 +35,7 @@ async function loadConnections() {
     // 嵌入主工作区时，连接中心状态是权威来源；独立打开时才回退后端接口
     if (!sourceConnections.length) {
       const resp = await fetch(`${API}/mcp/connections`, { credentials: 'include' });
+      if (resp.status === 401) { window.location.replace('/login.html'); return; }
       const data = await resp.json();
       sourceConnections = data.connections || [];
       healthMap = {};
@@ -142,6 +143,7 @@ async function createToken() {
         connection_id: _selectedConn,
       }),
     });
+    if (resp.status === 401) { window.location.replace('/login.html'); return; }
     const data = await resp.json();
     if (data.error) {
       showToast(data.error, 'err');
@@ -238,6 +240,7 @@ async function loadTokens() {
   const el = document.getElementById('token-list');
   try {
     const resp = await fetch(`${API}/mcp/tokens`, { credentials: 'include' });
+    if (resp.status === 401) { window.location.replace('/login.html'); return; }
     const data = await resp.json();
     _tokens = data.tokens || [];
 

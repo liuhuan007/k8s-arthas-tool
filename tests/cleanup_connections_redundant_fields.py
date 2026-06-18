@@ -15,7 +15,7 @@ from pathlib import Path
 
 
 def cleanup():
-    db_path = Path(__file__).resolve().parents[1] / 'config' / 'db' / 'arthas.db'
+    db_path = Path(__file__).resolve().parents[1] / 'data' / 'db' / 'arthas.db'
     if not db_path.exists():
         print(f"❌ 数据库文件不存在: {db_path}")
         return

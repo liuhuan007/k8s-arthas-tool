@@ -53,7 +53,30 @@ class ProfilerWorkflow:
         """统一入口"""
         t = self.conn.target
         ex = self.conn.executor
-        Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+        # 从 Pod 的 ownerReferences 获取 Deployment 名称
+        # Pod → ReplicaSet → Deployment，ReplicaSet 名格式: {deployment}-{hash}
+        app_name = t.pod_name
+        try:
+            pod_json = ex.get_pod_json(t.namespace, t.pod_name)
+            if pod_json:
+                owners = pod_json.get('metadata', {}).get('ownerReferences', [])
+                for ref in owners:
+                    if ref.get('kind') == 'ReplicaSet':
+                        rs_name = ref.get('name', '')
+                        # ReplicaSet 名: {deployment-name}-{6位hash}，去掉最后的 hash 部分
+                        parts = rs_name.rsplit('-', 1)
+                        if len(parts) == 2 and parts[1].isalnum():
+                            app_name = parts[0]
+                        else:
+                            app_name = rs_name
+                        break
+        except Exception:
+            pass
+
+        sub_dir = Path(output_dir) / t.cluster_name / t.namespace / app_name
+        sub_dir.mkdir(parents=True, exist_ok=True)
+        output_dir = str(sub_dir)
         ts = datetime.now().strftime("%Y%m%d%H%M%S")
 
         self._log(f"目标: {t.namespace}/{t.pod_name}  模式={mode}  格式={fmt}  事件={event}  时长={duration}s", "dim")

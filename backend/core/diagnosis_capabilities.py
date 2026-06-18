@@ -605,7 +605,7 @@ def _seed_profiler_skills(conn):
     added to existing deployments without re-seeding the entire table.
     Each skill is inserted only if no record with the same name exists.
     """
-    from data.profiler_skills import PROFILER_SKILLS
+    from models.skills.profiler_skills import PROFILER_SKILLS
 
     cursor = conn.cursor()
 
@@ -659,7 +659,7 @@ def _seed_ai_skills(conn):
     entire table. Each skill is inserted only if no record with the same
     name exists.
     """
-    from data.ai_skills import AI_SKILLS
+    from models.skills.ai_skills import AI_SKILLS
 
     cursor = conn.cursor()
 
@@ -712,7 +712,7 @@ def _seed_mcp_skills(conn):
     added to existing deployments without re-seeding the entire table.
     Each skill is inserted only if no record with the same name exists.
     """
-    from data.mcp_skills import MCP_SKILLS
+    from models.skills.mcp_skills import MCP_SKILLS
 
     cursor = conn.cursor()
 

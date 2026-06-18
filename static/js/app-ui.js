@@ -2873,6 +2873,13 @@ function resetConnectionFlowForTargetChange() {
   if (runtimeEl) runtimeEl.style.display = 'none';
   setPtStat('', '');
   setConnStatus('', '');
+  // 展开 Pod 目标区，让用户能看到连接按钮
+  const podTarget = document.getElementById('podTarget');
+  if (podTarget && podTarget.classList.contains('collapsed')) {
+    podTarget.classList.remove('collapsed');
+    const arrow = document.getElementById('ptCollapseArrow');
+    if (arrow) arrow.classList.remove('up');
+  }
   const conTitle = document.getElementById('conTitle');
   if (conTitle) conTitle.innerHTML = '等待连接...';
   const verBadge = document.getElementById('arthasVerBadge');
@@ -2907,7 +2914,8 @@ async function loadPods() {
   if(!validateSelectedNamespace()) return;
   const ns = document.getElementById('ptNs').value || 'default';
   try {
-    const r = await fetch(`${API}/clusters/${encodeURIComponent(_ac)}/pods?namespace=${ns}`);
+    const r = await fetch(`${API}/clusters/${encodeURIComponent(_ac)}/pods?namespace=${ns}`, { credentials: 'include' });
+    if (r.status === 401) { window.location.replace('/login.html'); return; }
     const d = await r.json();
     const pods = d.pods || [];
     const sel = document.getElementById('ptPodSel');
@@ -4558,6 +4566,8 @@ async function pfRunDump(t) {
       _pfTaskId = d.task_id;
       _pfTaskInfo.taskId = d.task_id;
       _pfTaskInfo.status = 'running';
+      _pfStart = Date.now();
+      _pfDur = 0;
       updatePfTaskInfo();
       pfLog(`线程 Dump 任务: ${d.task_id}`, 'ok');
       pfLog('正在采集，通常 5~10 秒完成...', 'dim');
@@ -4592,6 +4602,8 @@ async function pfRunDump(t) {
       _pfTaskId = d.task_id;
       _pfTaskInfo.taskId = d.task_id;
       _pfTaskInfo.status = 'running';
+      _pfStart = Date.now();
+      _pfDur = 0;
       updatePfTaskInfo();
       pfLog(`Heap Dump 任务: ${d.task_id}`, 'ok');
       pfLog('采集中，请等待...', 'dim');
@@ -5053,9 +5065,10 @@ async function pfLog(msg, lv='info') {
   if (!el) return;  // 面板不存在时静默跳过
   if(el.children.length===1 && el.children[0].textContent==='等待启动...') el.innerHTML='';
   const cls = {info:'o-line',dim:'o-dim',ok:'o-ok',error:'o-err',warn:'o-warn',success:'o-ok'}[lv]||'o-line';
+  const ts = new Date().toLocaleTimeString('zh-CN', {hour12:false});
   const d = document.createElement('div');
   d.className = cls;
-  d.innerHTML = msg.replace(/\n/g, '<br>');
+  d.innerHTML = '<span style="color:var(--tx3);margin-right:6px">[' + ts + ']</span>' + msg.replace(/\n/g, '<br>');
   el.appendChild(d);
   el.scrollTop = el.scrollHeight;
 
@@ -5927,7 +5940,12 @@ async function fbPreviewMon() {
 
 // ── Cluster management ─────────────────────────────────────────────────────────
 async function loadClusters() {
-  try { const r = await fetch(`${API}/clusters`); const d = await r.json(); _clusters = d.clusters || d || []; } catch { _clusters = []; }
+  try {
+    const r = await fetch(`${API}/clusters`, { credentials: 'include' });
+    if (r.status === 401) { window.location.replace('/login.html'); return; }
+    const d = await r.json();
+    _clusters = d.clusters || d || [];
+  } catch { _clusters = []; }
   // 恢复上次选中的集群（或自动选中第一个）
   if (!_ac && _clusters.length) {
     const saved = (() => { try { return localStorage.getItem('arthas_ac'); } catch { return null; } })();
@@ -6244,7 +6262,7 @@ async function loadLocalFiles() {
       </div>`;
     } else {
       headerHtml = `<div class="hist-files-header">
-        <span>包含：采样报告 + 文件浏览器下载的文件（保存在 <code>profiler_output/</code>）</span>
+        <span>包含：采样报告 + 文件浏览器下载的文件（保存在 <code>data/profiler/</code>）</span>
       </div>`;
     }
     

@@ -297,7 +297,7 @@ $DO_SYSTEMD   && { do_systemd;            exit 0; }
 
 banner
 pcmd=$(check_deps | tail -1)
-mkdir -p "${SCRIPT_DIR}/profiler_output"
+mkdir -p "${SCRIPT_DIR}/data/profiler"
 
 if $DAEMON; then
   section "后台启动"

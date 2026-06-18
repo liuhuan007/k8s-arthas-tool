@@ -348,8 +348,8 @@ _ALLOWED_RUNTIMES = {'python', 'shell'}
 _ALLOWED_EXECUTION_MODES = {'node', 'pod'}
 _DEFAULT_TIMEOUT_SECONDS = 60
 _MAX_TIMEOUT_SECONDS = 600
-_OUTPUT_ROOT = Path(Config.OUTPUT_DIR) / 'task_runs'
-_TOOL_PACKAGE_ROOT = Path(Config.OUTPUT_DIR) / 'tool_packages'
+_OUTPUT_ROOT = Path('data/task_runs')
+_TOOL_PACKAGE_ROOT = Path('data/tool_packages')
 _TOOL_TYPES = {'arthas', 'async-profiler', 'jattach', 'generic'}
 _BUILTIN_ARTHAS_PATH = '/app/arthas/arthas-boot.jar'
 _DEFAULT_ARTHAS_INSTALL_PATH = '/tmp/arthas/arthas-boot.jar'
@@ -1869,6 +1869,74 @@ def detect_pod_capability():
         result['capability_level'] = 'no-exec'
 
     return jsonify(result)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 单工具分发 API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@task_bp.route('/distribute', methods=['POST'])
+@login_required
+def distribute_single_tool():
+    """分发单个工具到指定 Pod（前端 toolboxConfirmDistribute 调用）"""
+    data = request.json or {}
+    tool_id = data.get('tool_id')
+    if not tool_id:
+        return _error('缺少 tool_id')
+
+    tool_row = db.fetch_one('SELECT * FROM tool_packages WHERE id = ?', (tool_id,))
+    if not tool_row:
+        return _error('工具不存在', 404)
+    if tool_row.get('status') not in ('active', 'inactive'):
+        return _error('工具状态不可分发')
+
+    try:
+        target = _validate_pod_target(data)
+        install_path = _validate_tool_install_path(
+            data.get('install_path') or tool_row.get('install_path') or _DEFAULT_ARTHAS_INSTALL_PATH
+        )
+    except ValueError as exc:
+        return _error(str(exc))
+
+    auth_err, auth_code = AuthorizationService.require_namespace_access(
+        current_user, target['cluster_name'], target['namespace'])
+    if auth_err:
+        return _error(auth_err['error'], auth_code)
+
+    try:
+        start_time = time.time()
+        _do_distribute(tool_row, target['cluster_name'], target['namespace'],
+                       target['pod_name'], target['container'], install_path)
+        duration_ms = int((time.time() - start_time) * 1000)
+        db.insert('tool_distributions', {
+            'tool_type': tool_row.get('tool_type', 'binary'),
+            'tool_id': tool_id,
+            'tool_name': tool_row.get('name', ''),
+            'target_cluster': target['cluster_name'],
+            'target_namespace': target['namespace'],
+            'target_pod': target['pod_name'],
+            'target_container': target['container'],
+            'install_path': install_path,
+            'status': 'success',
+            'duration_ms': duration_ms,
+            'distributed_by': current_user.id if hasattr(current_user, 'id') else None,
+        })
+        return jsonify({'ok': True, 'duration_ms': duration_ms})
+    except Exception as e:
+        db.insert('tool_distributions', {
+            'tool_type': tool_row.get('tool_type', 'binary'),
+            'tool_id': tool_id,
+            'tool_name': tool_row.get('name', ''),
+            'target_cluster': target['cluster_name'],
+            'target_namespace': target['namespace'],
+            'target_pod': target['pod_name'],
+            'target_container': target['container'],
+            'install_path': install_path,
+            'status': 'failed',
+            'error_message': str(e),
+            'distributed_by': current_user.id if hasattr(current_user, 'id') else None,
+        })
+        return _error(f'分发失败: {e}', 500)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

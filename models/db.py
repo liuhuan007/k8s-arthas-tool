@@ -663,11 +663,11 @@ _db_instance: Optional['Database'] = None
 def _seed_ai_skills(cursor):
     """将 AI 技能种子数据插入 skill_registry 表。
 
-    与 data/profiler_skills.py 的模式一致：
+    与 models/skills/profiler_skills.py 的模式一致：
     通过 INSERT OR IGNORE 保证幂等，仅在首次初始化时插入。
     """
     try:
-        from data.ai_skills import AI_SKILLS
+        from models.skills.ai_skills import AI_SKILLS
     except ImportError:
         log.debug("data.ai_skills not available, skipping AI skill seeding")
         return

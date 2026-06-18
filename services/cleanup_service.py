@@ -4,7 +4,7 @@
 
 核心功能:
 1. 连接 TTL 清理 - 过期连接自动断开
-2. 产物清理 - profiler_output 定期清理
+2. 产物清理 - data/profiler 定期清理
 3. 日志清理 - profiler_logs 定期清理
 4. 磁盘水位保护 - 使用率监控和告警
 """
@@ -36,7 +36,7 @@ class CleanupService:
     def __init__(self, config=None):
         """初始化清理服务"""
         self.config = {**self.DEFAULT_CONFIG, **(config or {})}
-        self.profiler_output_dir = os.path.join(os.getcwd(), 'profiler_output')
+        self.profiler_output_dir = os.path.join(os.getcwd(), 'data', 'profiler')
 
     # ═══════════════════════════════════════════════════════════════
     # 连接 TTL 清理
@@ -123,7 +123,7 @@ class CleanupService:
         """
         清理过期产物
         
-        策略: 删除 profiler_output 中超过保留天数的文件
+        策略: 删除 data/profiler 中超过保留天数的文件
         保护: heapdump/JFR 大文件单独检查大小限制
         
         Args:
@@ -227,7 +227,7 @@ class CleanupService:
         检查磁盘使用率
         
         Args:
-            path: 可选,检查指定路径(默认检查 profiler_output 所在磁盘)
+            path: 可选,检查指定路径(默认检查 data/profiler 所在磁盘)
             
         Returns:
             dict: {'total_gb': float, 'used_gb': float, 'free_gb': float, 
@@ -276,7 +276,7 @@ class CleanupService:
         获取目录统计信息
         
         Args:
-            directory: 可选,指定目录(默认 profiler_output)
+            directory: 可选,指定目录(默认 data/profiler)
             
         Returns:
             dict: {'total_files': int, 'total_size_mb': float, 'oldest_file': str, 'newest_file': str}

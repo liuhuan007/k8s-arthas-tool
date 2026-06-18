@@ -229,6 +229,28 @@ init_mcp_tables()
 from api.ai_chat import init_ai_tables
 init_ai_tables()
 
+# 初始化 Agent Framework
+try:
+    from backend.agent.llm_client import LLMClient
+    from backend.agent.router import AgentRouter, AgentRegistry
+    from backend.agent.agents import create_arthas_agent, create_k8s_agent, create_ops_agent
+    from api.agent_framework import init_agent_framework
+
+    _llm_client = LLMClient(
+        provider=os.environ.get("LLM_PROVIDER", "openai"),
+        model=os.environ.get("LLM_MODEL", "gpt-4o-mini"),
+        api_key=os.environ.get("LLM_API_KEY", ""),
+    )
+    _agent_registry = AgentRegistry()
+    _agent_registry.register(create_arthas_agent(_llm_client))
+    _agent_registry.register(create_k8s_agent(_llm_client))
+    _agent_registry.register(create_ops_agent(_llm_client))
+    _agent_router = AgentRouter(_agent_registry, _llm_client)
+    init_agent_framework(_agent_registry, _agent_router)
+    print("[OK] Agent Framework 初始化成功")
+except Exception as e:
+    print(f"[WARN] Agent Framework 初始化失败: {e}")
+
 # 初始化任务中心数据库表
 from api.task_center import init_task_tables, start_task_scheduler
 init_task_tables()
@@ -342,7 +364,7 @@ def _start_phase5_services():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 OUTPUT_DIR = Path(Config.OUTPUT_DIR)
-OUTPUT_DIR.mkdir(exist_ok=True)
+OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def _load_clusters() -> List[Dict]:
@@ -1762,7 +1784,7 @@ def download_profiler_result(task_id: str):
     
     # output_path 为空或文件不存在，尝试多种方式查找
     # 1. 按 task_id 匹配文件名
-    for f in OUTPUT_DIR.glob(f"*{task_id}*"):
+    for f in OUTPUT_DIR.rglob(f"*{task_id}*"):
         if f.is_file():
             return send_file(str(f), as_attachment=True, download_name=f.name)
     
@@ -1786,7 +1808,7 @@ def download_profiler_result(task_id: str):
             time_min = time_max = None
         
         candidates = []
-        for f in OUTPUT_DIR.glob(f"*.{ext}"):
+        for f in OUTPUT_DIR.rglob(f"*.{ext}"):
             if f.is_file() and pod_name in f.name:
                 if time_min and time_max:
                     mtime = datetime.fromtimestamp(f.stat().st_mtime)
@@ -2396,19 +2418,29 @@ def list_local_files():
     for t in (task_files or []):
         op = t.get('output_path', '')
         if op:
-            fname = Path(op).name
-            allowed_files.add(fname)
-            file_users[fname] = t.get('username', '-')
+            # 支持新旧两种路径：新路径是相对路径(含子目录)，旧路径是绝对路径
+            p = Path(op)
+            if p.is_absolute():
+                try:
+                    rel = str(p.relative_to(OUTPUT_DIR))
+                except ValueError:
+                    rel = p.name
+            else:
+                rel = str(p)
+            allowed_files.add(rel)
+            file_users[rel] = t.get('username', '-')
     
     files = []
-    for f in sorted(OUTPUT_DIR.glob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
-        if f.is_file() and f.name in allowed_files:
-            files.append({
-                "name": f.name,
-                "size": f.stat().st_size,
-                "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
-                "username": file_users.get(f.name, '-'),  # 添加用户名
-            })
+    for f in sorted(OUTPUT_DIR.rglob("*"), key=lambda x: x.stat().st_mtime, reverse=True):
+        if f.is_file():
+            rel = str(f.relative_to(OUTPUT_DIR))
+            if rel in allowed_files:
+                files.append({
+                    "name": rel,
+                    "size": f.stat().st_size,
+                    "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+                    "username": file_users.get(rel, '-'),
+                })
     return jsonify(files)
 
 

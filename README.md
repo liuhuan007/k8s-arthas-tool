@@ -220,7 +220,7 @@ docker run -d \
   --name arthas-tool \
   -p 5001:5001 \
   -v ~/.kube:/root/.kube:ro \
-  -v $(pwd)/profiler_output:/app/profiler_output \
+  -v $(pwd)/data/profiler:/app/data/profiler \
   arthas-k8s-tool:latest
 
 # 查看日志
@@ -822,7 +822,7 @@ Step 5  watch com.example.BugClass method "{params,returnObj}" -n 3
 | GC 日志 | `gc-{pod}-{ts}.log` | `gc-udc-7cc5-20260322153847.log` |
 | 容器日志 | `logs-{pod}-{ctr}-{ts}.log` | `logs-udc-7cc5-app-20260322153847.log` |
 
-所有文件保存在 `profiler_output/` 目录，「历史记录」标签可查看和下载。
+所有文件保存在 `data/profiler/` 目录，「历史记录」标签可查看和下载。
 
 ---
 
@@ -851,7 +851,7 @@ k8s-arthas-tool/
 ├── pod_monitor.py              Pod 指标采集（580 行）
 ├── requirements.txt            Python 依赖（flask / flask-cors）
 ├── clusters.json               集群配置（自动生成）
-├── profiler_output/            采样文件（自动创建）
+├── data/profiler/              采样文件（自动创建）
 ├── deploy.sh                   主部署脚本（全功能，含 daemon/systemd/stop）
 └── deploy/
     ├── start.sh                快速启动（Linux/macOS）

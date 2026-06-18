@@ -36,7 +36,7 @@ python server.py --host 0.0.0.0
 docker build -f Dockerfile -t arthas-k8s-tool:latest .
 docker run -d --name arthas-tool -p 5001:5001 \
   -v ~/.kube:/root/.kube:ro \
-  -v $(pwd)/profiler_output:/app/profiler_output \
+  -v $(pwd)/data/profiler:/app/data/profiler \
   arthas-k8s-tool:latest
 ```
 
@@ -101,7 +101,7 @@ Tables: `users` (username/password_hash/role/status), `user_clusters` (cluster-t
 ### Key Conventions
 
 - **Arthas JAR detection priority**: `/app/arthas/arthas-boot.jar` > `/opt/arthas/` > `/arthas/` > `/home/admin/`
-- **Profiler output naming**: `{type}-{identifier}-{podName}-{YYYYMMDDHHmmss}.{ext}`, stored in `profiler_output/`
+- **Profiler output naming**: `{type}-{identifier}-{podName}-{YYYYMMDDHHmmss}.{ext}`, stored in `data/profiler/`
 - **Default admin account**: username `admin`, password `admin123` (auto-created on first DB init)
 - **All API endpoints require `@login_required`** except auth endpoints; admin endpoints use `@admin_required`
 - **Data isolation**: Non-admin users see only their assigned clusters; all queries filter by `user_id`
@@ -126,6 +126,6 @@ Python 3.10+, kubectl 1.20+, target Pod needs Java 8+ with Arthas JAR 3.7+. Pyth
 |------|---------|
 | `clusters.json` | Cluster config (auto-generated on first use) |
 | `arthas.db` | SQLite database (auto-created) |
-| `profiler_output/` | Sampling outputs (auto-created) |
+| `data/profiler/` | Sampling outputs (auto-created) |
 | `rbac.yaml` | Minimal kubectl RBAC permissions |
 | `deploy.sh` | Main deployment script (daemon/systemd/stop/install-arthas) |

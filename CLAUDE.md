@@ -58,7 +58,7 @@ docker run -d \
   --name arthas-tool \
   -p 5001:5001 \
   -v ~/.kube:/root/.kube:ro \
-  -v $(pwd)/profiler_output:/app/profiler_output \
+  -v $(pwd)/data/profiler:/app/data/profiler \
   arthas-k8s-tool:latest
 ```
 
@@ -123,7 +123,7 @@ Examples:
 - `heap-udc-7cc5-20260322153847.hprof`
 - `threaddump-udc-7cc5-20260322153847.txt`
 
-All outputs saved to `profiler_output/`.
+All outputs saved to `data/profiler/`.
 
 ### Arthas JAR Detection Priority
 
@@ -147,7 +147,7 @@ Python packages: `flask>=3.0.0`, `flask-cors>=4.0.0`
 
 - `clusters.json` - Cluster configuration (auto-generated)
 - `arthas.db` - SQLite database
-- `profiler_output/` - Sampling outputs (auto-created)
+- `data/profiler/` - Sampling outputs (auto-created)
 - `deploy/rbac.yaml` - Minimal kubectl RBAC permissions
 
 ## Testing Arthas Connection

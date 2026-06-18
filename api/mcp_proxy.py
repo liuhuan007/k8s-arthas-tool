@@ -60,19 +60,24 @@ def create_mcp_token():
     if not connection_id:
         return jsonify({"error": "请指定要绑定的连接"}), 400
 
-    # 验证连接存在且属于当前用户，并且是当前活跃的 Arthas 连接
+    # 验证连接存在且属于当前用户
     conn_entry = _get_connection_entry(connection_id)
     if not conn_entry:
-        return jsonify({"error": "连接不存在、已失效或无权访问，请先在连接中心重新连接并启动 Arthas"}), 404
+        return jsonify({"error": "连接不存在或无权访问"}), 404
 
-    conn = conn_entry.get('conn')
-    try:
-        conn_alive = conn.is_alive() if conn else False
-    except Exception:
+    # DB-only 连接：允许创建 token，但提示连接未活跃
+    if conn_entry.get('db_only'):
         conn_alive = False
+    else:
+        conn = conn_entry.get('conn')
+        try:
+            conn_alive = conn.is_alive() if conn else False
+        except Exception:
+            conn_alive = False
 
-    if not conn_alive or not getattr(conn, 'local_port', None):
-        return jsonify({"error": "当前连接不可用于 MCP，请先在连接中心启动 Arthas 并保持连接可用"}), 400
+    if not conn_alive:
+        # DB-only 或连接已断开：仍允许创建 token，标记为待激活
+        pass
 
     # 生成 Token
     token = f"mcp_{secrets.token_hex(24)}"
@@ -407,12 +412,40 @@ def list_availableconnections():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _get_connection_entry(connection_id: str):
-    """从内存中获取连接条目，验证归属"""
+    """从内存中获取连接条目，验证归属；内存无则回退到数据库"""
     from backend.app_context import connections, connections_lock
     with connections_lock:
         entry = connections.get(connection_id)
         if entry and entry.get('user_id') == current_user.id:
             return entry
+
+    # 内存无，回退数据库
+    try:
+        from models.db import db
+        if current_user.is_admin:
+            row = db.fetch_one(
+                "SELECT id, cluster_name, namespace, pod_name, local_port, user_id "
+                "FROM connections WHERE id = ? AND level = 'arthas'",
+                (connection_id,)
+            )
+        else:
+            row = db.fetch_one(
+                "SELECT id, cluster_name, namespace, pod_name, local_port, user_id "
+                "FROM connections WHERE id = ? AND level = 'arthas' AND user_id = ?",
+                (connection_id, current_user.id)
+            )
+        if row:
+            return {
+                "conn": None,
+                "user_id": row['user_id'],
+                "db_only": True,
+                "cluster": row.get('cluster_name', ''),
+                "namespace": row.get('namespace', ''),
+                "pod": row.get('pod_name', ''),
+                "local_port": row.get('local_port'),
+            }
+    except Exception:
+        pass
     return None
 
 

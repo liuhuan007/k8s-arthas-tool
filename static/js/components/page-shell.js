@@ -65,60 +65,26 @@ class PageShell {
             <div class="ai-drawer-header">
                 <h3>🤖 AI 助手</h3>
                 <div class="ai-drawer-header-actions">
-                    <button class="btn btn-icon" onclick="if(typeof aiClearChat==='function') aiClearChat()" title="清空对话">🗑️</button>
+                    <button class="btn btn-icon" onclick="if(typeof agentPanelClearChat==='function') agentPanelClearChat()" title="清空对话">🗑️</button>
                     <button id="close-ai-drawer" class="btn btn-icon" onclick="pageShell.toggleAIDrawer()">×</button>
                 </div>
             </div>
-            <div class="ai-drawer-messages" id="aiDrawerMessages">
-                <div class="ai-welcome">
-                    <div class="ai-welcome-icon">🤖</div>
-                    <div class="ai-welcome-title">Java 诊断 AI 助手</div>
-                    <div class="ai-welcome-desc">我可以帮你分析 Java 应用性能问题，通过 Arthas 命令自动诊断 Pod 中的应用。</div>
-                    <div class="ai-welcome-tips">
-                        <div class="ai-tip" onclick="if(typeof aiQuickAsk==='function') aiQuickAsk('CPU 占用很高怎么排查？')">🔥 CPU 飙高排查</div>
-                        <div class="ai-tip" onclick="if(typeof aiQuickAsk==='function') aiQuickAsk('接口响应慢如何定位？')">⏱️ 接口慢定位</div>
-                        <div class="ai-tip" onclick="if(typeof aiQuickAsk==='function') aiQuickAsk('内存泄漏怎么排查？')">💾 内存泄漏排查</div>
-                        <div class="ai-tip" onclick="if(typeof aiQuickAsk==='function') aiQuickAsk('线程死锁怎么检测？')">🔒 线程死锁检测</div>
-                    </div>
-                </div>
-            </div>
-            <div class="ai-drawer-input-area">
-                <div class="ai-drawer-input-wrap">
-                    <textarea id="aiDrawerInput" class="ai-drawer-input" placeholder="描述你的 Java 应用问题..." rows="1"
-                        onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();pageShell.sendAIMessage()}"
-                        oninput="pageShell.autoResizeInput(this)"></textarea>
-                    <button class="ai-drawer-send-btn" onclick="pageShell.sendAIMessage()">
-                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/></svg>
-                    </button>
-                </div>
-            </div>
+            <div id="agentPanelContainer" style="flex:1;overflow:hidden"></div>
         `;
         document.body.appendChild(drawer);
+        // 延迟渲染 agent panel（等 DOM 就绪）
+        setTimeout(() => {
+            if (typeof renderAgentPanel === 'function') {
+                renderAgentPanel('agentPanelContainer');
+            }
+        }, 100);
     }
     
     sendAIMessage() {
-        const input = document.getElementById('aiDrawerInput');
-        if (!input || !input.value.trim()) return;
-        
-        const message = input.value.trim();
-        input.value = '';
-        this.autoResizeInput(input);
-        
-        // 优先使用 ai-chat.js 的 aiSend（它处理流式响应和 Function Calling）
-        if (typeof aiSend === 'function') {
-            const originalInput = document.getElementById('aiInput');
-            if (originalInput) {
-                originalInput.value = message;
-                aiSend();
-                // 同步显示用户消息到抽屉
-                this._syncDrawerWithMain('user', message);
-                return;
-            }
+        // 委托给 agent panel
+        if (typeof agentPanelSend === 'function') {
+            agentPanelSend();
         }
-        
-        // 降级：直接在抽屉中显示
-        this.addAIMessage('user', message);
-        this.addAIMessage('ai', 'AI 助手功能正在初始化中，请稍候...');
     }
     
     _syncDrawerWithMain(role, content) {

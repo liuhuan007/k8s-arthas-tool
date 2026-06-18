@@ -12,11 +12,11 @@ class Config:
     BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     # 数据库
-    DB_FILE = os.environ.get('DB_FILE', os.path.join(BASE_DIR, 'config', 'db', 'arthas.db'))
+    DB_FILE = os.environ.get('DB_FILE', os.path.join(BASE_DIR, 'data', 'db', 'arthas.db'))
 
     # 配置文件
-    CLUSTERS_FILE = os.environ.get('CLUSTERS_FILE', os.path.join(BASE_DIR, 'config', 'data', 'clusters.json'))
-    EXTERNAL_LINKS_FILE = os.environ.get('EXTERNAL_LINKS_FILE', os.path.join(BASE_DIR, 'config', 'data', 'external_links.json'))
+    CLUSTERS_FILE = os.environ.get('CLUSTERS_FILE', os.path.join(BASE_DIR, 'data', 'conf', 'clusters.json'))
+    EXTERNAL_LINKS_FILE = os.environ.get('EXTERNAL_LINKS_FILE', os.path.join(BASE_DIR, 'data', 'conf', 'external_links.json'))
 
     # Flask - 未设置环境变量时自动生成随机密钥
     SECRET_KEY = os.environ.get('SECRET_KEY') or secrets.token_hex(32)
@@ -31,7 +31,7 @@ class Config:
     DEFAULT_HOST = os.environ.get('HOST', '127.0.0.1')
     
     # 输出目录
-    OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'profiler_output')
+    OUTPUT_DIR = os.environ.get('OUTPUT_DIR', 'data/profiler')
     
     # 认证
     MIN_PASSWORD_LENGTH = 6

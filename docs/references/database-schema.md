@@ -383,7 +383,7 @@ MCP 访问令牌表，由 `api/mcp_proxy.py::init_mcp_tables()` 初始化。
 | 记录对象 | 存储位置 | 说明 |
 |---|---|---|
 | `jad` / `mc` / `redefine` 命令 | `arthas_commands` | 保存命令、输出摘要、错误、执行用户和连接 ID |
-| 源码与上传文件 | 本地受控目录 | 例如 `profiler_output/hotfix/{connection_id}/{timestamp}/` |
+| 源码与上传文件 | 本地受控目录 | 例如 `data/hotfix/{connection_id}/{timestamp}/` |
 | 编译输出与 redefine 输出 | 本地受控目录 + 命令历史摘要 | 大文本落文件，数据库只保存摘要 |
 | 可选任务化展示 | `task_runs` / `task_artifacts` | 如果后续要在任务中心展示，可复用通用任务表，不新增专用热更新表 |
 

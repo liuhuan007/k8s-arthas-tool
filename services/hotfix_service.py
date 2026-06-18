@@ -67,12 +67,12 @@ class HotfixService:
         }
     ]
 
-    def __init__(self, output_base: str = "profiler_output/hotfix"):
+    def __init__(self, output_base: str = "data/hotfix"):
         self.output_base = Path(output_base)
         self.output_base.mkdir(parents=True, exist_ok=True)
 
     def _get_artifact_dir(self, connection_id: str, timestamp: Optional[str] = None) -> Path:
-        """获取产物目录: profiler_output/hotfix/{connection_id}/{timestamp}/"""
+        """获取产物目录: data/hotfix/{connection_id}/{timestamp}/"""
         if not timestamp:
             timestamp = datetime.now().strftime('%Y%m%d%H%M%S')
         artifact_dir = self.output_base / connection_id / timestamp
@@ -617,7 +617,7 @@ class HotfixService:
             context_name = None
             try:
                 import json
-                clusters_file = Path(__file__).parent.parent / 'config' / 'data' / 'clusters.json'
+                clusters_file = Path(__file__).parent.parent / 'data' / 'conf' / 'clusters.json'
                 if clusters_file.exists():
                     with open(clusters_file, 'r', encoding='utf-8') as f:
                         clusters_data = json.load(f)
@@ -862,7 +862,7 @@ class HotfixService:
             context_name = None
             try:
                 import json
-                clusters_file = PathLib(__file__).parent.parent / 'config' / 'data' / 'clusters.json'
+                clusters_file = PathLib(__file__).parent.parent / 'data' / 'conf' / 'clusters.json'
                 if clusters_file.exists():
                     with open(clusters_file, 'r', encoding='utf-8') as f:
                         clusters_data = json.load(f)

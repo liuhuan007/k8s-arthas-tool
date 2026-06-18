@@ -30,7 +30,11 @@ config/data/clusters.json
 logs/
 
 # 输出文件
-profiler_output/
+data/profiler/
+data/hotfix/
+data/task_runs/
+data/tool_packages/
+data/db/arthas.db
 *.hprof
 
 # IDE
