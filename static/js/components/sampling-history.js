@@ -281,11 +281,12 @@ const SamplingHistory = (() => {
           </div>
           <div class="sh-search" role="search">
             <span class="sh-search-icon" aria-hidden="true">${ICON.search}</span>
-            <input type="text" class="sh-search-input" id="shSearchInput"
+            <input type="search" class="sh-search-input" id="shSearchInput"
               placeholder="搜索 Pod / 命名空间 / 集群..." value=""
               spellcheck="false" autocomplete="new-password" autocorrect="off" autocapitalize="off"
               name="sh-q-${++_searchInputNonce}"
               data-lpignore="true" data-1p-ignore="true" data-bwignore="true"
+              inputmode="search" readonly onfocus="this.removeAttribute('readonly')"
               aria-label="搜索任务" />
             ${_search ? '<button class="sh-search-clear" id="shSearchClear" aria-label="清除搜索">&times;</button>' : ''}
           </div>

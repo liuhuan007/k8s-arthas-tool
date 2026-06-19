@@ -73,8 +73,23 @@ var NAV_ROUTES = {
   'alerts':           '/alerts',
 };
 
+function setMainShellMode(mode) {
+  var isWorkspace = mode === 'workspace';
+  window.__mainShellMode = isWorkspace ? 'workspace' : 'legacy';
+  var pool = document.getElementById('connectionPool');
+  var workspaceArea = document.getElementById('workspaceArea');
+  var legacyPanels = document.getElementById('legacyPanels');
+  if (pool) pool.style.display = isWorkspace ? 'flex' : 'none';
+  if (workspaceArea) workspaceArea.style.display = isWorkspace ? 'flex' : 'none';
+  if (legacyPanels) legacyPanels.style.display = isWorkspace ? 'none' : 'flex';
+  if (!isWorkspace && window.ConnectionWorkspace && typeof ConnectionWorkspace.restoreLegacyPanel === 'function') {
+    ConnectionWorkspace.restoreLegacyPanel();
+  }
+}
+
 function navigateTo(tabId) {
   if (typeof switchTab === 'function' && document.getElementById('panel-' + tabId)) {
+    setMainShellMode('legacy');
     switchTab(tabId);
   } else {
     var route = NAV_ROUTES[tabId];
@@ -85,32 +100,24 @@ function navigateTo(tabId) {
 }
 
 window.showWorkspace = function() {
-  var tabs = document.getElementById('workspaceTabs');
-  if (tabs) tabs.style.display = 'flex';
-  var oldTabbar = document.querySelector('.tabbar');
-  if (oldTabbar) oldTabbar.style.display = 'none';
-  switchWorkspaceTab('connect');
-};
-
-window.showToolbox = function() {
+  setMainShellMode('workspace');
   var tabs = document.getElementById('workspaceTabs');
   if (tabs) tabs.style.display = 'none';
   var oldTabbar = document.querySelector('.tabbar');
   if (oldTabbar) oldTabbar.style.display = 'none';
-  document.querySelectorAll('.panel').forEach(function(p) {
-    p.style.display = 'none';
-    p.classList.remove('on');
-  });
-  var panel = document.getElementById('panel-toolchain-center');
-  if (panel) {
-    panel.style.display = 'flex';
-    panel.classList.add('on');
+  if (typeof highlightActiveNav === 'function') highlightActiveNav('workspace');
+  if (window.ConnectionWorkspace && typeof ConnectionWorkspace.render === 'function') {
+    ConnectionWorkspace.render();
   }
-  var kickerEl = document.getElementById('workspaceKicker');
-  var titleEl = document.getElementById('workspaceTitle');
-  if (kickerEl) kickerEl.textContent = 'Toolbox';
-  if (titleEl) titleEl.textContent = '工具箱';
-  if (typeof renderToolbox === 'function') renderToolbox();
+};
+
+window.showToolbox = function() {
+  setMainShellMode('legacy');
+  var tabs = document.getElementById('workspaceTabs');
+  if (tabs) tabs.style.display = 'none';
+  var oldTabbar = document.querySelector('.tabbar');
+  if (oldTabbar) oldTabbar.style.display = 'none';
+  switchTab('toolchain-center');
 };
 
 window.switchWorkspaceTab = function(tabId) {
@@ -171,6 +178,7 @@ window.switchWorkspaceTab = function(tabId) {
 
 // 任务中心子面板导航
 function navigateToTaskCenter(panel) {
+  setMainShellMode('legacy');
   if (typeof switchTab === 'function' && document.getElementById('panel-task-center')) {
     switchTab('task-center');
   } else {
@@ -178,11 +186,14 @@ function navigateToTaskCenter(panel) {
   }
   setTimeout(function () {
     if (typeof scSwitchPanel === 'function') scSwitchPanel(panel);
+    var navTab = { tasks: 'task-center', schedules: 'task-schedules', runs: 'task-runs' }[panel] || 'task-center';
+    if (typeof highlightActiveNav === 'function') highlightActiveNav(navTab);
   }, 100);
 }
 
 // 诊断中心子面板导航（侧边栏导航模式）
 function navigateToDiagnosis(section) {
+  setMainShellMode('legacy');
   if (typeof switchTab === 'function' && document.getElementById('panel-diagnosis-cap')) {
     switchTab('diagnosis-cap');
   } else {
@@ -259,12 +270,35 @@ function openMcpCenter() {
   switchTab('mcp-center');
 }
 
+function syncFrameTheme(frame) {
+  if (!frame) return;
+  try {
+    const theme = (window.OpsTheme && OpsTheme.current && OpsTheme.current()) || localStorage.getItem('ops_ui_theme') || 'apm';
+    try {
+      if (frame.contentDocument && frame.contentDocument.documentElement) {
+        if (theme === 'devops') frame.contentDocument.documentElement.setAttribute('data-ops-theme', 'devops');
+        else frame.contentDocument.documentElement.removeAttribute('data-ops-theme');
+      }
+    } catch (_) {}
+    frame.contentWindow?.postMessage({ type: 'ops-ui-theme', theme }, window.location.origin);
+  } catch (e) {}
+}
+
+function bindFrameThemeSync(frame) {
+  if (!frame || frame.dataset.themeSyncBound) return;
+  frame.dataset.themeSyncBound = '1';
+  frame.addEventListener('load', function() { syncFrameTheme(frame); });
+}
+
 function loadAdminFrameIfNeeded(tab) {
-  if (!['user-management', 'audit-logs', 'skill-management', 'alerts'].includes(tab)) return;
-  if (!(typeof isAdmin === 'function' && isAdmin())) return;
-  const frame = document.querySelector(`#panel-${tab} iframe[data-src]`);
-  if (frame && !frame.getAttribute('src')) {
+  if (!['user-management', 'audit-logs', 'skill-management', 'alerts', 'mcp-center'].includes(tab)) return;
+  if (['user-management', 'audit-logs', 'skill-management', 'alerts'].includes(tab) && !(typeof isAdmin === 'function' && isAdmin())) return;
+  const frame = document.querySelector(`#panel-${tab} iframe[data-src], #panel-${tab} iframe`);
+  bindFrameThemeSync(frame);
+  if (frame && frame.dataset.src && !frame.getAttribute('src')) {
     frame.setAttribute('src', frame.dataset.src);
+  } else {
+    syncFrameTheme(frame);
   }
 }
 
@@ -1086,7 +1120,7 @@ function _initConnectionStore() {
   _currentConnId = state.currentConnId;
   _connState = state.connState;
   _runtimeInfo = state.runtimeInfo;
-  _connHealth = state.connHealth;
+  _connHealth = state.connHealth || {};
   
   // 订阅状态变化
   ConnectionStore.subscribe((newState, oldState) => {
@@ -1095,7 +1129,7 @@ function _initConnectionStore() {
     _currentConnId = newState.currentConnId;
     _connState = newState.connState;
     _runtimeInfo = newState.runtimeInfo;
-    _connHealth = newState.connHealth;
+    _connHealth = newState.connHealth || {};
     
     // 更新 UI
     if (newState.currentConnId !== oldState.currentConnId) {
@@ -1119,7 +1153,7 @@ function _mergeExternalConnectionState() {
     _currentConnId = state.currentConnId;
     _connState = state.connState;
     _runtimeInfo = state.runtimeInfo;
-    _connHealth = state.connHealth;
+    _connHealth = state.connHealth || {};
     return;
   }
   
@@ -1154,7 +1188,7 @@ function _syncState(options = {}) {
       currentConnId: _currentConnId,
       connState: _connState,
       runtimeInfo: _runtimeInfo,
-      connHealth: _connHealth,
+      connHealth: _connHealth || {},
     });
     return;
   }
@@ -1495,6 +1529,7 @@ function showArthasLogModal(logContent) {
 
 function renderConnList() {
   _mergeExternalConnectionState();
+  _connHealth = _connHealth || {};
   const el = document.getElementById('connList');
   if (!el) return;
   if (_connections.length === 0) {
@@ -2085,6 +2120,7 @@ function deleteConnection(connId) {
 // 批量检查所有连接的健康状态（区分 level）
 async function checkConnectionsHealth() {
   if (_connections.length === 0) return;
+  _connHealth = _connHealth || {};
   try {
     const podConns = _connections.filter(c => _inferLevel(c) === 'pod');
     const arthasConns = _connections.filter(c => _inferLevel(c) === 'arthas');
@@ -2196,6 +2232,7 @@ async function refreshConnectionList() {
 
 // 一键清理所有失效连接（Pod 不存在 或 集群不可用）
 async function cleanupStaleConnections() {
+  _connHealth = _connHealth || {};
   const staleIds = [];
   for (const c of _connections) {
     const h = _connHealth[c.id];
@@ -2590,6 +2627,7 @@ async function _restoreActiveConnection(conn, savedLevel) {
 function switchTab(n) {
   const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'hotfix', 4:'terminal', 5:'monitor', 6:'filebrowser', 7:'ai', 8:'model-config', 9:'mcp-center', 10:'task-center', 11:'toolchain-center', 12:'history', 13:'diag', 14:'skill-management', 15:'user-management', 16:'audit-logs', 17:'alerts'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
+  setMainShellMode('legacy');
 
   var workspaceTabs = document.getElementById('workspaceTabs');
   var isWorkspaceTab = ['connections','profiler','console','hotfix','ai','diag','diagnosis-cap','history'].includes(tab);
@@ -2759,7 +2797,7 @@ function switchHistTab(name) {
 
 
 function switchPm(n) {
-  const tabs = ['ov','mt','pr','nw','dk','ev','lg','cf','tr','fb'];
+  const tabs = ['ov','mt','pr','nw','dk','ev','lg','cf','fb'];
   tabs.forEach(x => {
     document.getElementById('pms-'+x)?.classList.toggle('on', x===n);
     const p = document.getElementById('pmp-'+x);
@@ -2770,16 +2808,6 @@ function switchPm(n) {
   if(lg && n==='lg') lg.style.display = 'flex'; // override block
   if(n==='mt' && _snap) renderMetrics(_snap);
   if(n==='dk' && _snap) renderDisk(_snap);
-  // Terminal tab: show terminal panel
-  if(n==='tr') {
-    const termPanel = document.getElementById('panel-terminal');
-    if(termPanel) { termPanel.style.display = 'flex'; termPanel.classList.add('on'); }
-    if(typeof termInit === 'function') termInit();
-  } else {
-    // Hide terminal panel when switching away from terminal tab
-    const termPanel = document.getElementById('panel-terminal');
-    if(termPanel && !termPanel.classList.contains('ws-active')) { termPanel.style.display = 'none'; termPanel.classList.remove('on'); }
-  }
 }
 
 // ── Server health ──────────────────────────────────────────────────────────────
@@ -2839,6 +2867,27 @@ function syncPodTargetFromConnection(conn) {
   if (ptArthas && t.arthas_jar) ptArthas.value = t.arthas_jar;
   _ap = t;
   return t;
+}
+
+function syncArthasConsoleFromFocus() {
+  if (window.ConnectionStore && typeof ConnectionStore.getFocusConnection === 'function') {
+    const conn = ConnectionStore.getFocusConnection();
+    const level = conn && (conn.level || conn.connection_level || '').toLowerCase();
+    const hasArthas = conn && (level === 'arthas' || conn.local_port || conn.arthas_version || conn.arthas?.port);
+    if (hasArthas) {
+      _currentConnId = conn.id;
+      window._currentConnId = conn.id;
+      _connState = 'arthas_ready';
+      window._connState = _connState;
+      _connected = true;
+      _ap = syncPodTargetFromConnection(conn) || _ap;
+      const runBtn = document.getElementById('runBtn');
+      if (runBtn) runBtn.disabled = false;
+      if (typeof setCpSt === 'function') setCpSt('ok', conn.local_port ? `✓ 已连接 (port:${conn.local_port})` : '✓ 已连接');
+      return true;
+    }
+  }
+  return _connected;
 }
 
 function getCurrentPodTarget() {
@@ -3738,6 +3787,8 @@ function selCmd(id) {
     document.getElementById('cmdTa').value = _selCmd.name;
     autoResize(document.getElementById('cmdTa'));
   }
+  const runBtn = document.getElementById('runBtn');
+  if (runBtn) runBtn.disabled = !syncArthasConsoleFromFocus();
 }
 
 function buildAndRun() {
@@ -3778,7 +3829,7 @@ function autoResize(ta) {
 
 async function runCmd() {
   if(window.ConnectionGuard && !ConnectionGuard.guard('console')) return;
-  if(!_connected) { toast('请先连接 Arthas','warn'); return; }
+  if(!syncArthasConsoleFromFocus()) { toast('请先连接 Arthas','warn'); return; }
   const ta = document.getElementById('cmdTa'); const command = ta.value.trim(); if(!command) return;
   ta.value=''; autoResize(ta); _cmdHist.push(command); _histIdx=-1;
   oSep(); clog(esc(command), 'cmd');
@@ -5199,6 +5250,9 @@ async function loadConnectionProfilerLogs(connId) {
 }
 
 // ── Pod Monitor ───────────────────────────────────────────────────────────────
+window._monitorSnapshotInflight = window._monitorSnapshotInflight || null;
+window._monitorSnapshotLast = window._monitorSnapshotLast || { key: '', at: 0 };
+
 function renderMonitorMessage(message, type = 'info') {
   const color = type === 'error' ? 'var(--a5)' : type === 'warn' ? 'var(--a4)' : 'var(--tx3)';
   const html = `<div style="color:${color};padding:30px;text-align:center;line-height:1.8"><div style="font-size:14px;margin-bottom:8px">${esc(message)}</div><div style="font-size:11px;color:var(--tx3)">请在连接中心确认当前 Pod 连接后重试</div></div>`;
@@ -5209,7 +5263,7 @@ function renderMonitorMessage(message, type = 'info') {
 }
 
 async function loadSnap(silent = false) {
-  _syncState();
+  if (!silent) _syncState();
   if(window.ConnectionGuard && !ConnectionGuard.guard('monitor')) return;
   const t = getCurrentPodTarget();
   if(!t.cluster_name || !t.pod_name) {
@@ -5218,6 +5272,10 @@ async function loadSnap(silent = false) {
     renderMonitorMessage(msg, 'warn');
     return;
   }
+  const snapKey = `${t.cluster_name}/${t.namespace}/${t.pod_name}/${t.container || ''}`;
+  const now = Date.now();
+  if (silent && window._monitorSnapshotInflight?.key === snapKey) return window._monitorSnapshotInflight.promise;
+  if (silent && window._monitorSnapshotLast.key === snapKey && now - window._monitorSnapshotLast.at < 5000) return _snap;
   // 静默刷新时不显示 loading，避免闪烁
   if (!silent) {
     const loadingHtml = `<div style="color:var(--tx3);padding:30px;text-align:center"><div style="font-size:14px;margin-bottom:8px">⏳ 加载监控数据中...</div><div style="font-size:11px">${esc(t.cluster_name)} / ${esc(t.namespace)} / ${esc(t.pod_name)}，首次加载可能需要 10-20 秒（kubectl 采集）</div></div>`;
@@ -5226,9 +5284,12 @@ async function loadSnap(silent = false) {
     document.getElementById('pmp-pr').innerHTML = loadingHtml;
     document.getElementById('pmp-nw').innerHTML = loadingHtml;
   }
+  const requestPromise = safePost(`${API}/monitor/snapshot`, t, 60000);
+  window._monitorSnapshotInflight = { key: snapKey, promise: requestPromise };
   try {
     // snapshot 接口涉及多次 kubectl 调用，超时设为 60 秒
-    _snap = await safePost(`${API}/monitor/snapshot`, t, 60000);
+    _snap = await requestPromise;
+    window._monitorSnapshotLast = { key: snapKey, at: Date.now() };
     if(_snap.error) {
       if(!silent) toast(_snap.error, 'error');
       renderMonitorMessage(_snap.error, 'error');
@@ -5253,6 +5314,10 @@ async function loadSnap(silent = false) {
     const msg = '加载失败: '+e.message;
     if(!silent) toast(msg, 'error');
     renderMonitorMessage(msg, 'error');
+  } finally {
+    if (window._monitorSnapshotInflight?.promise === requestPromise) {
+      window._monitorSnapshotInflight = null;
+    }
   }
 }
 
@@ -5803,21 +5868,6 @@ async function fbPreview() {
   } catch(e) { box.textContent = '✗ ' + e.message; }
 }
 
-// ── Monitor Terminal ──────────────────────────────────────────────────────────
-let _monitorTerminalInitialized = false;
-function initMonitorTerminal() {
-  if (_monitorTerminalInitialized) return;
-  const container = document.getElementById('terminal-container');
-  if (!container) return;
-  // Reuse the existing terminal
-  if (typeof createTerminal === 'function') {
-    createTerminal(container);
-    _monitorTerminalInitialized = true;
-  } else {
-    container.innerHTML = '<div style="color:var(--tx3);padding:40px;text-align:center">终端加载中...</div>';
-  }
-}
-
 // ── Monitor File Browser ──────────────────────────────────────────────────────
 let _fbMonSelected = null;
 async function fbListMon() {
@@ -5966,8 +6016,6 @@ async function loadClusters() {
     try { localStorage.setItem('arthas_ac', target); } catch {}
   }
   renderSidebar();
-  // 自动 ping 当前集群
-  if (_ac) pingCluster(_ac);
 }
 
 function renderSidebar() {
@@ -6380,15 +6428,6 @@ document.addEventListener('DOMContentLoaded', async function() {
   setTimeout(loadHistory, 1500);
 });
 
-// Pre-cache namespaces for all clusters
-setTimeout(async () => {
-  if (_clusters && Array.isArray(_clusters)) {
-    for (const c of _clusters) {
-      await autoLoadNs(c.name).catch(() => {});
-    }
-  }
-}, 2500);
-
 // Fix pm-lg panel: it should be hidden initially, shown by switchPm()
 const _pmLg = document.querySelector('#pmp-lg');
 if (_pmLg) _pmLg.style.display = 'none';
@@ -6420,6 +6459,10 @@ window.arthasConnect = arthasConnect;
 // 两步连接流程函数在 two-step-connection.js 中暴露
 
 // 标签页切换
+window.setMainShellMode = setMainShellMode;
+window.navigateTo = navigateTo;
+window.navigateToTaskCenter = navigateToTaskCenter;
+window.navigateToDiagnosis = navigateToDiagnosis;
 window.switchTab = switchTab;
 window.switchPm = switchPm;
 window.switchHistTab = switchHistTab;

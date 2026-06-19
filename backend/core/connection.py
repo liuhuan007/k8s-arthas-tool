@@ -459,6 +459,10 @@ class ArthasConnection:
         """检查 Pod 连接是否存活"""
         return self.pod_conn.is_alive()
 
+    def exec_command(self, command: str, timeout: int = 30):
+        """Execute a command in the Pod via the underlying PodConnection."""
+        return self.pod_conn.exec_command(command, timeout=timeout)
+
     def disconnect(self):
         """断开连接（同时断开 Pod 和 Arthas）"""
         # 断开 Arthas

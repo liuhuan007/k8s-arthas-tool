@@ -6,8 +6,144 @@
 const ConnectionWorkspace = (function() {
   'use strict';
 
+  let mountedLegacyPanel = null;
+  const legacyPanelAnchors = {};
+  let monitorSnapshotTimer = null;
+  let monitorSnapshotKey = '';
+  let monitorSnapshotAt = 0;
+
+  function firstValue(...values) {
+    for (const value of values) {
+      if (value !== undefined && value !== null && value !== '') return value;
+    }
+    return '';
+  }
+
+  function textValue(value, fallback = '—') {
+    return value === undefined || value === null || value === '' ? fallback : String(value);
+  }
+
+  function escapeHtml(value) {
+    return textValue(value, '').replace(/[&<>"]/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
+  }
+
+  function escapeJsArg(value) {
+    return textValue(value, '').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+  }
+
+  function normalizeState(state, status) {
+    const raw = textValue(firstValue(state, status), '').toLowerCase();
+    if (['connecting', 'pending', 'starting', 'arthas_upgrading'].includes(raw)) return 'connecting';
+    if (['connected', 'ready', 'running', 'ok', 'healthy', 'pod_connected', 'arthas_ready', 'degraded'].includes(raw)) return 'connected';
+    if (['dead', 'failed', 'error', 'err', 'invalid'].includes(raw)) return 'dead';
+    return 'disconnected';
+  }
+
+  function normalizeConnection(conn) {
+    const c = conn || {};
+    const idParts = typeof c.id === 'string' ? c.id.split('/') : [];
+    const runtimeObj = c.runtime && typeof c.runtime === 'object' ? c.runtime : {};
+    const arthasObj = c.arthas && typeof c.arthas === 'object' ? c.arthas : {};
+    const cluster = firstValue(c.cluster, c.cluster_name, c.clusterName, idParts.length >= 3 ? idParts[0] : '');
+    const namespace = firstValue(c.namespace, c.ns, c.namespace_name, idParts.length >= 3 ? idParts[1] : '', 'default');
+    const pod = firstValue(c.pod, c.pod_name, c.podName, idParts.length >= 3 ? idParts.slice(2).join('/') : '');
+    const container = firstValue(c.container, c.container_name, c.containerName);
+    const runtimeType = firstValue(runtimeObj.type, runtimeObj.runtime_type, c.runtime_type, typeof c.runtime === 'string' ? c.runtime : '');
+    const runtimeVersion = firstValue(runtimeObj.version, runtimeObj.runtime_version, c.runtime_version);
+    const pid = firstValue(c.pid, c.java_pid, runtimeObj.pid, runtimeObj.java_pid, arthasObj.pid, arthasObj.java_pid);
+    const arthasVersion = firstValue(arthasObj.version, arthasObj.arthas_version, c.arthas_version);
+    const arthasPort = firstValue(arthasObj.port, arthasObj.local_port, c.local_port, c.arthas_port);
+    const state = normalizeState(c.state, c.status);
+    let level = firstValue(c.level, c.connection_level);
+    const rawState = textValue(firstValue(c.state, c.status), '').toLowerCase();
+    if (!level || level === 'connected' || (level === 'disconnected' && state !== 'disconnected')) {
+      level = arthasVersion || arthasPort || rawState === 'arthas_ready' ? 'arthas' : (state === 'connected' || state === 'connecting' ? 'pod' : 'disconnected');
+    }
+    const id = firstValue(c.id, [cluster, namespace, pod].filter(Boolean).join('/'));
+    const podLabel = textValue(pod, textValue(id));
+    return {
+      raw: c,
+      id,
+      cluster: textValue(cluster),
+      namespace: textValue(namespace),
+      pod: textValue(pod),
+      container: textValue(container, ''),
+      shortName: podLabel === '—' ? podLabel : (podLabel.split('-').slice(0, -2).join('-') || podLabel),
+      runtimeType: textValue(runtimeType),
+      runtimeVersion: textValue(runtimeVersion, ''),
+      runtimeLabel: [runtimeType, runtimeVersion].filter(Boolean).join(' ') || '—',
+      pid: textValue(pid),
+      arthasVersion: textValue(arthasVersion, ''),
+      arthasPort: textValue(arthasPort, ''),
+      state,
+      level,
+      podConnId: firstValue(c.pod_conn_id, c.podConnId, c.connection_id),
+      runtimeRaw: c.runtime || null,
+    };
+  }
+
+  function syncLegacyTarget(c, vm) {
+    if (!vm || !vm.id) return;
+    const connState = vm.level === 'arthas' ? 'arthas_ready' : (vm.state === 'connected' ? 'pod_connected' : 'disconnected');
+    window._connState = connState;
+    if (typeof ConnectionStore !== 'undefined' && ConnectionStore.getState && ConnectionStore.setState) {
+      const st = ConnectionStore.getState();
+      if (st.connState !== connState || st.currentConnId !== vm.id) {
+        ConnectionStore.setState({ currentConnId: vm.id, connState, runtimeInfo: vm.runtimeRaw });
+      }
+    } else if (window._currentConnId !== vm.id) {
+      window._currentConnId = vm.id;
+    }
+    if (typeof syncPodTargetFromConnection === 'function') {
+      syncPodTargetFromConnection({
+        ...c,
+        cluster_name: vm.cluster === '—' ? '' : vm.cluster,
+        namespace: vm.namespace === '—' ? 'default' : vm.namespace,
+        pod_name: vm.pod === '—' ? '' : vm.pod,
+        container_name: vm.container,
+        java_pid: vm.pid === '—' ? '' : vm.pid,
+      });
+    }
+  }
+
+  function restoreLegacyPanel() {
+    if (!mountedLegacyPanel) return;
+    const panel = mountedLegacyPanel;
+    const anchor = legacyPanelAnchors[panel.id];
+    panel.classList.remove('ws-mounted-panel', 'on');
+    panel.style.display = 'none';
+    if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(panel, anchor.nextSibling);
+    mountedLegacyPanel = null;
+  }
+
+  function mountLegacyPanel(container, panelId, onMount) {
+    restoreLegacyPanel();
+    const panel = document.getElementById(panelId);
+    if (!container || !panel) return false;
+    if (!legacyPanelAnchors[panelId] && panel.parentNode) {
+      legacyPanelAnchors[panelId] = document.createComment('workspace legacy anchor: ' + panelId);
+      panel.parentNode.insertBefore(legacyPanelAnchors[panelId], panel);
+    }
+    container.innerHTML = '';
+    container.appendChild(panel);
+    panel.classList.add('ws-mounted-panel', 'on');
+    panel.style.display = 'flex';
+    mountedLegacyPanel = panel;
+    if (typeof onMount === 'function') onMount(panel);
+    return true;
+  }
+
+  function markLegacyTabActive(tabName) {
+    const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','external-system','history','diag','diagnosis-cap','skill-management','user-management','audit-logs','alerts'];
+    allTabs.forEach(name => {
+      const tab = document.getElementById('tab-' + name);
+      if (tab) tab.classList.toggle('on', name === tabName);
+    });
+  }
+
   function init() {
     ConnectionStore.subscribe(() => render());
+    render();
   }
 
   function render() {
@@ -25,37 +161,45 @@ const ConnectionWorkspace = (function() {
     const conn = ConnectionStore.getFocusConnection();
     if (!conn) return;
 
-    renderHead(conn);
-    renderTabs(conn);
-    renderBody(conn);
+    const vm = normalizeConnection(conn);
+    syncLegacyTarget(conn, vm);
+    renderHead(conn, vm);
+    renderTabs(conn, vm);
+    renderBody(conn, vm);
   }
 
   // ── 头部 ──────────────────────────────────────────────────────
 
-  function renderHead(c) {
-    const dotColor = c.level === 'arthas' ? 'var(--a3)' : c.state === 'connected' ? 'var(--a)' : 'var(--a6)';
+  function renderHead(c, vm) {
+    const dotColor = vm.level === 'arthas' ? 'var(--a3)' : vm.state === 'connected' ? 'var(--a)' : 'var(--a6)';
     const dot = document.getElementById('wsDot');
     if (dot) dot.style.background = dotColor;
 
-    const pod = (c.pod || '').split('-').slice(0, -2).join('-') || c.pod;
     const podEl = document.getElementById('wsPod');
-    if (podEl) podEl.textContent = pod;
+    if (podEl) {
+      podEl.textContent = vm.pod;
+      podEl.title = vm.pod;
+    }
 
     const nsEl = document.getElementById('wsNs');
-    if (nsEl) nsEl.textContent = `${c.cluster || '?'} / ${c.namespace || '?'}`;
+    if (nsEl) nsEl.textContent = `${vm.shortName} · ${vm.cluster} / ${vm.namespace}`;
 
     const rtEl = document.getElementById('wsRt');
-    if (rtEl) rtEl.textContent = `${c.runtime?.type || '?'} ${c.runtime?.version || ''} · PID:${c.pid || '?'}`;
+    if (rtEl) rtEl.textContent = [vm.runtimeLabel !== '—' ? vm.runtimeLabel : '', vm.pid !== '—' ? 'PID:' + vm.pid : ''].filter(Boolean).join(' · ');
 
     let actions = '';
-    if (c.level !== 'arthas' && c.state === 'connected') {
-      actions += `<button class="ws-btn" onclick="ConnectionPool.upgradeArthas('${c.id}')">🚀 Arthas</button>`;
+    const idArg = escapeJsArg(vm.id);
+    if (vm.state === 'disconnected' || vm.state === 'dead') {
+      actions += `<button class="ws-btn" onclick="ConnectionPool.reconnect('${idArg}')">⚡ 重连</button>`;
     }
-    if (c.level === 'arthas') {
-      actions += `<button class="ws-btn" onclick="ConnectionPool.stopArthas('${c.id}')">⏹ Arthas</button>`;
+    if (vm.level !== 'arthas' && vm.state === 'connected') {
+      actions += `<button class="ws-btn" onclick="ConnectionPool.upgradeArthas('${idArg}')">🚀 Arthas</button>`;
     }
-    if (c.state !== 'disconnected' && c.state !== 'dead') {
-      actions += `<button class="ws-btn ws-btn-danger" onclick="ConnectionPool.disconnect('${c.id}')">断开</button>`;
+    if (vm.level === 'arthas') {
+      actions += `<button class="ws-btn" onclick="ConnectionPool.stopArthas('${idArg}')">⏹ Arthas</button>`;
+    }
+    if (vm.state !== 'disconnected' && vm.state !== 'dead') {
+      actions += `<button class="ws-btn ws-btn-danger" onclick="ConnectionPool.disconnect('${idArg}')">断开</button>`;
     }
     const abEl = document.getElementById('wsActions');
     if (abEl) abEl.innerHTML = actions;
@@ -63,10 +207,10 @@ const ConnectionWorkspace = (function() {
 
   // ── Tab 栏 ────────────────────────────────────────────────────
 
-  function renderTabs(c) {
+  function renderTabs(c, vm) {
     const tabs = [{ id: 'monitor', icon: '📊', label: '监控' }];
 
-    if (c.level === 'arthas') {
+    if (vm.level === 'arthas') {
       tabs.push(
         { id: 'sampling', icon: '🔥', label: '采样' },
         { id: 'console', icon: '⚡', label: 'Arthas' },
@@ -75,7 +219,7 @@ const ConnectionWorkspace = (function() {
       );
     }
 
-    if (c.state === 'connected') {
+    if (vm.state === 'connected') {
       tabs.push(
         { id: 'terminal', icon: '🖥️', label: '终端' },
         { id: 'files', icon: '📂', label: '文件' },
@@ -87,9 +231,9 @@ const ConnectionWorkspace = (function() {
     const el = document.getElementById('wsTabs');
     if (el) {
       el.innerHTML = tabs.map(t =>
-        `<div class="ws-tab${t.id === c.tab ? ' active' : ''}"
+        `<div class="ws-tab${t.id === (c.tab || 'monitor') ? ' active' : ''}"
               onclick="ConnectionWorkspace.switchTab('${t.id}')"
-              role="tab" aria-selected="${t.id === c.tab}">${t.icon} ${t.label}</div>`
+              role="tab" aria-selected="${t.id === (c.tab || 'monitor')}">${t.icon} ${t.label}</div>`
       ).join('');
     }
   }
@@ -98,45 +242,76 @@ const ConnectionWorkspace = (function() {
     const conn = ConnectionStore.getFocusConnection();
     if (conn) {
       ConnectionStore.updateConnection(conn.id, { tab: tabId });
-      renderTabs(conn);
-      renderBody(conn);
+      const next = { ...conn, tab: tabId };
+      const vm = normalizeConnection(next);
+      syncLegacyTarget(next, vm);
+      renderTabs(next, vm);
+      renderBody(next, vm);
     }
   }
 
   // ── 内容渲染 ──────────────────────────────────────────────────
 
-  function renderBody(c) {
+  function renderBody(c, vm) {
     const el = document.getElementById('wsBody');
     if (!el) return;
     const tab = c.tab || 'monitor';
 
     switch (tab) {
-      case 'monitor': renderMonitor(el, c); break;
-      case 'sampling': renderSampling(el, c); break;
-      case 'console': renderConsole(el, c); break;
-      case 'terminal': renderTerminal(el, c); break;
-      case 'files': renderFiles(el, c); break;
-      case 'history': renderHistory(el, c); break;
-      case 'hotfix': renderHotfix(el, c); break;
-      case 'diag': renderDiag(el, c); break;
-      default: renderMonitor(el, c);
+      case 'monitor': renderMonitor(el, c, vm); break;
+      case 'sampling': renderLegacyFeature(el, 'panel-profiler', 'profiler'); break;
+      case 'console': renderLegacyFeature(el, 'panel-console', 'console'); break;
+      case 'terminal': renderLegacyFeature(el, 'panel-terminal', 'terminal'); break;
+      case 'files': renderLegacyFeature(el, 'panel-filebrowser', 'filebrowser'); break;
+      case 'history': renderLegacyFeature(el, 'panel-history', 'history'); break;
+      case 'hotfix': renderLegacyFeature(el, 'panel-hotfix', 'hotfix'); break;
+      case 'diag': renderLegacyFeature(el, 'panel-diag', 'diag'); break;
+      default: renderMonitor(el, c, vm);
     }
   }
 
-  function renderMonitor(el, c) {
-    const tabs = [
-      { i: 'ov', ic: '📊', l: '概览' }, { i: 'mt', ic: '📈', l: '指标' },
-      { i: 'pr', ic: '⚙️', l: '进程' }, { i: 'nw', ic: '🌐', l: '网络' },
-      { i: 'dk', ic: '💾', l: '磁盘' }, { i: 'ev', ic: '🔔', l: '事件' },
-      { i: 'lg', ic: '📄', l: '日志' }, { i: 'cf', ic: '🔧', l: '配置' },
-    ];
-    el.innerHTML = `
-      <div class="pm-tabs">${tabs.map(t => `<div class="pm-tab${t.i === (c.pmTab || 'ov') ? ' active' : ''}"
-        onclick="ConnectionWorkspace.switchPm('${t.i}')">${t.ic} ${t.l}</div>`).join('')}</div>
-      <div id="pmBody" style="flex:1;overflow-y:auto;padding:16px">
-        <div class="skeleton" style="height:200px;margin:16px"></div>
-      </div>`;
-    setTimeout(() => renderPmBody(el, c), 300);
+  function renderLegacyFeature(el, panelId, tabName, afterMount) {
+    const mounted = mountLegacyPanel(el, panelId, () => {
+      markLegacyTabActive(tabName);
+      if (typeof updateWorkspaceHead === 'function') updateWorkspaceHead(tabName);
+      if (typeof updateConnectionBarVisibility === 'function') updateConnectionBarVisibility(tabName);
+      if (typeof loadAdminFrameIfNeeded === 'function') loadAdminFrameIfNeeded(tabName);
+      if (typeof afterMount === 'function') afterMount();
+    });
+    if (!mounted) {
+      el.innerHTML = `<div style="padding:16px;color:var(--tx3)">该能力面板暂不可用：${escapeHtml(tabName)}</div>`;
+    }
+  }
+
+  function renderMonitor(el, c, vm) {
+    renderLegacyFeature(el, 'panel-monitor', 'monitor', () => {
+      el.querySelectorAll('.ws-upgrade-guide').forEach(node => node.remove());
+      if (vm && vm.state === 'connected' && vm.level !== 'arthas') {
+        const guide = document.createElement('div');
+        guide.className = 'ws-upgrade-guide';
+        guide.innerHTML = `<div><strong>🚀 启动 Arthas</strong><span>当前是 Pod 连接，终端 / 文件 / 监控可用；需要 JVM 诊断、采样、热修复时请启动 Arthas。</span></div><button class="ws-btn ws-btn-primary" onclick="ConnectionPool.upgradeArthas('${escapeJsArg(vm.id)}')">🚀 启动 Arthas</button>`;
+        el.insertBefore(guide, el.firstChild);
+      }
+      const currentTab = c.pmTab || 'ov';
+      if (typeof window.switchPm === 'function') window.switchPm(currentTab);
+      scheduleMonitorSnapshot(vm);
+    });
+  }
+
+  function scheduleMonitorSnapshot(vm) {
+    if (typeof loadSnap !== 'function' || !vm || vm.state !== 'connected') return;
+    const key = `${vm.id}:${vm.podConnId || ''}`;
+    const now = Date.now();
+    if (monitorSnapshotKey === key && now - monitorSnapshotAt < 30000) return;
+    monitorSnapshotKey = key;
+    monitorSnapshotAt = now;
+    if (monitorSnapshotTimer) clearTimeout(monitorSnapshotTimer);
+    monitorSnapshotTimer = setTimeout(() => {
+      const focusId = ConnectionStore.getFocusId();
+      const focusConn = ConnectionStore.getFocusConnection();
+      if (focusId !== vm.id || (focusConn && (focusConn.tab || 'monitor') !== 'monitor')) return;
+      loadSnap(true);
+    }, 80);
   }
 
   function renderPmBody(el, c) {
@@ -212,9 +387,7 @@ const ConnectionWorkspace = (function() {
     const c = ConnectionStore.getFocusConnection();
     if (c) {
       ConnectionStore.updateConnection(c.id, { pmTab: tab });
-      const tabs = { ov: '概览', mt: '指标', pr: '进程', nw: '网络', dk: '磁盘', ev: '事件', lg: '日志', cf: '配置' };
-      document.querySelectorAll('.pm-tab').forEach(x => x.classList.toggle('active', x.textContent.includes(tabs[tab])));
-      renderPmBody(document.getElementById('wsBody'), c);
+      if (typeof window.switchPm === 'function') window.switchPm(tab);
     }
   }
 
@@ -253,8 +426,10 @@ const ConnectionWorkspace = (function() {
   }
 
   function renderConsole(el, c) {
+    const vm = normalizeConnection(c);
+    const pid = vm.pid !== '?' ? vm.pid : '?';
     el.innerHTML = `<div style="padding:16px"><div class="card"><div class="card-tt">Arthas Console</div>
-      <div class="term">[arthas@${c.pid || '?'}]$ dashboard
+      <div class="term">[arthas@${pid}]$ dashboard
 
 ID   NAME                          GROUP      PRIORITY  STATE    %CPU
 1    main                          main       5         RUNNABLE 12.3
@@ -373,7 +548,7 @@ openjdk version "${c.runtime?.version || '?'}" 2022-01-18 LTS</div></div></div>`
     return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
   }
 
-  return { init, render, switchTab, switchPm, startSample };
+  return { init, render, switchTab, switchPm, startSample, restoreLegacyPanel };
 })();
 
 window.ConnectionWorkspace = ConnectionWorkspace;

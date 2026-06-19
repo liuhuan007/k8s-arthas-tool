@@ -34,7 +34,10 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 </script>
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="css/app.css?v=20260411i">
+<script>
+(function(){try{if(localStorage.getItem('ops_ui_theme')==='devops')document.documentElement.setAttribute('data-ops-theme','devops');}catch(e){}})();
+</script>
+<link rel="stylesheet" href="css/app.css?v=20260619h">
 <link rel="stylesheet" href="css/components/diagnosis.css?v=20260525a">
 <link rel="stylesheet" href="css/components/scheduler.css">
 
@@ -48,7 +51,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <script src="js/app-terminal.js"></script>
 <script src="js/components/monitor.js"></script>
 <script src="js/components/profiler.js"></script>
-<script src="js/components/sampling-history.js"></script>
+<script src="js/components/sampling-history.js?v=20260619a"></script>
 <script src="js/components/filebrowser.js"></script>
 <script src="js/components/clusters.js"></script>
 <script src="js/ai-chat.js"></script>
@@ -58,11 +61,11 @@ document.addEventListener('DOMContentLoaded', function() {
 <script>console.log('🔍 script-check: API=' + typeof API + ', safePost=' + typeof safePost + ', diagQuickTool=' + typeof window.diagQuickTool + ', diagSelectScene=' + typeof window.diagSelectScene + ', diagStart=' + typeof window.diagStart);</script>
 
 <!-- 应用入口 -->
-<script src="js/app-ui.js?v=20260619y"></script>
+<script src="js/app-ui.js?v=20260619zg"></script>
 <script src="js/app.js"></script>
 
 <!-- ✅ 新增: 统一状态管理 -->
-<script src="js/core/connection-store.js?v=20260619aa"></script>
+<script src="js/core/connection-store.js?v=20260619ac"></script>
 
 <!-- ✅ 新增: WebSocket 实时推送 -->
 <script src="js/core/websocket-client.js?v=20260505a"></script>
@@ -83,7 +86,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <script src="js/page-connection-list.js"></script>
 
 <!-- 连接引导守卫 -->
-<script src="js/components/connection-guard.js?v=20260419a"></script>
+<script src="js/components/connection-guard.js?v=20260619b"></script>
 
 <!-- 连接信息提示条 -->
 <script src="js/components/conn-status-bar.js?v=20260419a"></script>
@@ -124,6 +127,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
 <!-- Page-aware script loader (available for future use) -->
 <script src="js/page-loader.js"></script>
+<script src="js/theme-switcher.js?v=20260619d"></script>
 </head>
 <body>
 
@@ -154,6 +158,13 @@ document.addEventListener('DOMContentLoaded', function() {
       <a class="tb-lnk tb-user-link" href="javascript:void(0)">👤 <span id="loginUser">—</span> ▾</a>
       <div class="tb-dropdown-menu tb-dropdown-menu-right">
         <div class="tb-menu-title">账号</div>
+        <label class="theme-switcher theme-switcher-menu" title="切换界面风格">
+          <span>界面风格</span>
+          <select data-theme-switcher aria-label="切换界面风格">
+            <option value="apm">深色 APM</option>
+            <option value="devops">DevOps 工具链</option>
+          </select>
+        </label>
         <a href="javascript:void(0)" onclick="openChangePasswordModal()">🔑 修改密码</a>
         <a href="javascript:void(0)" onclick="doLogout()">🚪 退出登录</a>
       </div>
@@ -248,11 +259,8 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="pool-tt"><span>🔌 连接池</span><span id="poolCount" style="color:var(--a)"></span></div>
     <button class="pool-add-btn" id="poolAddBtn">+ 新连接</button>
   </div>
-  <div class="pool-srch"><input id="poolSearch" placeholder="搜索 Pod / 集群 / 命名空间..." aria-label="搜索连接" autocomplete="off"></div>
+  <div class="pool-srch"><input type="search" id="poolSearch" placeholder="搜索 Pod / 集群 / 命名空间..." aria-label="搜索连接" name="pool_filter_query" inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other"></div>
   <div class="pool-ls" id="poolList"></div>
-    <div id="poolAddPanel" class="pool-add">
-      <button class="pool-add-confirm" id="poolAddConfirm" style="display:none">确认连接</button>
-    </div>
 </div>
 
 <!-- ── Main ── -->
@@ -265,7 +273,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <p>从连接池选择 Pod，或创建新连接</p>
     </div>
     <div id="wsContent" style="display:none;flex:1;display:none;flex-direction:column;overflow:hidden">
-      <div class="ws-hd"><div class="ws-hd-dot" id="wsDot"></div><div class="ws-hd-info"><div class="ws-hd-pod" id="wsPod"></div><div class="ws-hd-ns" id="wsNs"></div></div><div class="ws-hd-rt" id="wRt"></div><div class="ws-hd-ab" id="wAb"></div></div>
+      <div class="ws-hd"><div class="ws-hd-dot" id="wsDot"></div><div class="ws-hd-info"><div class="ws-hd-pod" id="wsPod"></div><div class="ws-hd-ns" id="wsNs"></div></div><div class="ws-hd-rt" id="wsRt"></div><div class="ws-hd-ab" id="wsActions"></div></div>
       <div class="ws-tabs" id="wsTabs" role="tablist"></div>
       <div class="ws-body" id="wsBody" role="tabpanel"></div>
     </div>
@@ -296,12 +304,6 @@ document.addEventListener('DOMContentLoaded', function() {
           <div id="addConnPreview" style="font-size:12px;color:var(--tx3)">选择集群和命名空间后，Pod 列表将在此显示</div>
         </div>
       </div>
-    </div>
-        <div class="ws-hd-rt" id="wsRt"></div>
-        <div class="ws-hd-ab" id="wsAb"></div>
-      </div>
-      <div class="ws-tabs" id="wsTabs" role="tablist"></div>
-      <div class="ws-body" id="wsBody" role="tabpanel"></div>
     </div>
   </div>
 
@@ -773,7 +775,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="toolbox-toolbar-left">
               <div class="toolbox-search">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="text" id="searchBinary" placeholder="搜索二进制工具..." oninput="filterBinaryTools(this.value)" autocomplete="off">
+                <input type="search" id="searchBinary" placeholder="搜索二进制工具..." oninput="filterBinaryTools(this.value)" name="binary_tool_filter_query" inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other">
               </div>
             </div>
             <div class="toolbox-toolbar-right">
@@ -793,7 +795,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="toolbox-toolbar-left">
               <div class="toolbox-search">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="text" id="searchScript" placeholder="搜索脚本工具..." oninput="filterScriptTools(this.value)" autocomplete="off">
+                <input type="search" id="searchScript" placeholder="搜索脚本工具..." oninput="filterScriptTools(this.value)" name="script_tool_filter_query" inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other">
               </div>
             </div>
             <div class="toolbox-toolbar-right">
@@ -1276,7 +1278,6 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="pm-st"    id="pms-ev" onclick="switchPm('ev')">🔔 事件 <span id="evBdg"></span></div>
           <div class="pm-st"    id="pms-lg" onclick="switchPm('lg')">📄 日志</div>
           <div class="pm-st"    id="pms-cf" onclick="switchPm('cf')">🔧 配置</div>
-          <div class="pm-st"    id="pms-tr" onclick="switchPm('tr')">🖥️ 终端</div>
           <div class="pm-st"    id="pms-fb" onclick="switchPm('fb')">📂 文件</div>
           <div style="margin-left:auto;display:flex;align-items:center;gap:6px;padding-right:10px;flex-shrink:0">
             <span id="pmTs" style="font-size:10px;color:var(--tx3)"></span>
@@ -1313,9 +1314,6 @@ document.addEventListener('DOMContentLoaded', function() {
             </div>
           </div>
           <div class="pm-panel" id="pmp-cf"><div style="color:var(--tx3);padding:40px;text-align:center">加载后查看</div></div>
-          <div class="pm-panel" id="pmp-tr" style="padding:0;display:none">
-            <div id="terminal-container" style="height:100%;width:100%"></div>
-          </div>
           <div class="pm-panel" id="pmp-fb" style="padding:0;display:none">
             <div class="fb-wrap">
               <div style="margin-bottom:8px;padding:8px 12px">
@@ -2085,7 +2083,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
         <div class="toolbox-search" style="flex:1">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="distHistorySearch" placeholder="搜索分发记录..." oninput="filterDistHistory(this.value)" autocomplete="off">
+          <input type="search" id="distHistorySearch" placeholder="搜索分发记录..." oninput="filterDistHistory(this.value)" name="distribution_history_filter_query" inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other">
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-g btn-sm active" onclick="filterDistByStatus('all', this)">全部</button>
@@ -2135,25 +2133,34 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 
 <!-- 连接池 + 工作区初始化 -->
-<script src="js/components/connection-pool.js?v=20260619d"></script>
-<script src="js/components/connection-workspace.js"></script>
+<script src="js/components/connection-pool.js?v=20260619f"></script>
+<script src="js/components/connection-workspace.js?v=20260619a"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
   // 初始化连接池和工作区
   ConnectionStore.restore();
   ConnectionPool.init();
   ConnectionWorkspace.init();
+  document.querySelectorAll('input[type=search][data-form-type="other"]').forEach(function(input) {
+    if (window.ConnectionPool && typeof ConnectionPool.hardenSearchInput === 'function') {
+      ConnectionPool.hardenSearchInput(input);
+    }
+  });
 
-  // 切换新旧视图：有焦点连接时显示新工作区，否则显示旧面板
+  // 切换新旧视图：工作台始终使用连接池 + 新工作区，非工作台才显示旧面板
   ConnectionStore.subscribe(function(state) {
     var workspaceArea = document.getElementById('workspaceArea');
     var legacyPanels = document.getElementById('legacyPanels');
-    if (state.focusId) {
-      workspaceArea.style.display = 'flex';
-      legacyPanels.style.display = 'none';
+    var pool = document.getElementById('connectionPool');
+    var isWorkspaceMode = window.__mainShellMode !== 'legacy';
+    if (isWorkspaceMode) {
+      if (pool) pool.style.display = 'flex';
+      if (workspaceArea) workspaceArea.style.display = 'flex';
+      if (legacyPanels) legacyPanels.style.display = 'none';
     } else {
-      workspaceArea.style.display = 'none';
-      legacyPanels.style.display = 'flex';
+      if (pool) pool.style.display = 'none';
+      if (workspaceArea) workspaceArea.style.display = 'none';
+      if (legacyPanels) legacyPanels.style.display = 'flex';
     }
   });
 });

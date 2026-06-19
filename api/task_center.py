@@ -351,7 +351,7 @@ _MAX_TIMEOUT_SECONDS = 600
 _OUTPUT_ROOT = Path('data/task_runs')
 _TOOL_PACKAGE_ROOT = Path('data/tool_packages')
 _TOOL_TYPES = {'arthas', 'async-profiler', 'jattach', 'generic'}
-_BUILTIN_ARTHAS_PATH = '/app/arthas/arthas-boot.jar'
+_BUILTIN_ARTHAS_PATH = str(Path(__file__).resolve().parent.parent / 'tools' / 'arthas' / 'arthas-boot.jar')
 _DEFAULT_ARTHAS_INSTALL_PATH = '/tmp/arthas/arthas-boot.jar'
 _SCHEDULER_STARTED = False
 _SCHEDULER_LOCK = threading.Lock()
@@ -519,6 +519,26 @@ def _sha256_file(path: Path) -> str:
         for chunk in iter(lambda: f.read(1024 * 1024), b''):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _resolve_tool_file_path(tool_row: Dict[str, Any]) -> Optional[Path]:
+    """解析工具包本地文件路径，兼容历史内置 Arthas 记录。"""
+    file_path = tool_row.get('file_path') or ''
+    path = Path(file_path) if file_path else None
+    if path and path.exists():
+        return path
+    is_builtin_arthas = (
+        bool(tool_row.get('is_builtin'))
+        or tool_row.get('source_type') == 'builtin'
+    ) and (
+        tool_row.get('tool_type') == 'arthas'
+        or tool_row.get('file_name') == 'arthas-boot.jar'
+        or tool_row.get('name') == 'builtin-arthas-offline'
+    )
+    builtin_path = Path(_BUILTIN_ARTHAS_PATH)
+    if is_builtin_arthas and builtin_path.exists():
+        return builtin_path
+    return path
 
 
 def _validate_tool_install_path(value: Any) -> str:
@@ -1463,9 +1483,13 @@ def distribute_tool_package(package_id: int):
     except ValueError as exc:
         return _error(str(exc))
 
-    file_path = row.get('file_path') or ''
-    local_path = Path(file_path)
-    if not file_path or not local_path.exists():
+    local_path = _resolve_tool_file_path(row)
+    if not local_path or not local_path.exists():
+        _record_tool_distribution(
+            row, target, install_path, 'failed',
+            f"工具文件不存在: {row.get('file_path') or ''}",
+            row.get('file_path') or '',
+        )
         return _error('离线工具文件不存在，请先上传或检查服务器内置路径', 404)
     if row.get('tool_type') == 'arthas' and not install_path.endswith('.jar'):
         return _error('Arthas 工具必须分发为 .jar 文件')
@@ -1608,6 +1632,25 @@ def _record_distribution(
         )
     except Exception as exc:
         log.warning('记录分发历史失败: %s', exc)
+
+
+def _record_tool_distribution(tool_row: Dict[str, Any], target: Dict[str, str], install_path: str,
+                              status: str, error_message: str = '', stderr: str = '') -> None:
+    """把工具分发结果统一写入分发历史。"""
+    local_sha256 = ''
+    file_path = tool_row.get('file_path') or ''
+    if file_path and Path(file_path).exists():
+        local_sha256 = _sha256_file(Path(file_path))
+    _record_distribution(
+        int(tool_row.get('id') or 0),
+        target,
+        install_path,
+        local_sha256,
+        status,
+        error_message,
+        stderr,
+        package_name=tool_row.get('name', ''),
+    )
 
 
 @task_bp.route('/tool-packages/distributions', methods=['GET'])
@@ -2035,40 +2078,22 @@ def distribute_single_tool():
         current_user, target['cluster_name'], target['namespace'])
     if auth_err:
         return _error(auth_err['error'], auth_code)
+    dist_target = {
+        'cluster_name': target['cluster_name'],
+        'namespace': target['namespace'],
+        'pod_name': target['pod_name'],
+        'container': target['container'],
+    }
 
     try:
         start_time = time.time()
         _do_distribute(tool_row, target['cluster_name'], target['namespace'],
                        target['pod_name'], target['container'], install_path)
         duration_ms = int((time.time() - start_time) * 1000)
-        db.insert('tool_distributions', {
-            'tool_type': tool_row.get('tool_type', 'binary'),
-            'tool_id': tool_id,
-            'tool_name': tool_row.get('name', ''),
-            'target_cluster': target['cluster_name'],
-            'target_namespace': target['namespace'],
-            'target_pod': target['pod_name'],
-            'target_container': target['container'],
-            'install_path': install_path,
-            'status': 'success',
-            'duration_ms': duration_ms,
-            'distributed_by': current_user.id if hasattr(current_user, 'id') else None,
-        })
+        _record_tool_distribution(tool_row, dist_target, install_path, 'success')
         return jsonify({'ok': True, 'duration_ms': duration_ms})
     except Exception as e:
-        db.insert('tool_distributions', {
-            'tool_type': tool_row.get('tool_type', 'binary'),
-            'tool_id': tool_id,
-            'tool_name': tool_row.get('name', ''),
-            'target_cluster': target['cluster_name'],
-            'target_namespace': target['namespace'],
-            'target_pod': target['pod_name'],
-            'target_container': target['container'],
-            'install_path': install_path,
-            'status': 'failed',
-            'error_message': str(e),
-            'distributed_by': current_user.id if hasattr(current_user, 'id') else None,
-        })
+        _record_tool_distribution(tool_row, dist_target, install_path, 'failed', str(e), str(e))
         return _error(f'分发失败: {e}', 500)
 
 
@@ -2103,29 +2128,19 @@ def batch_distribute():
             namespace = target.get('namespace', 'default')
             pod = target.get('pod', '')
             container = target.get('container', '')
-
-            dist_id = db.insert('tool_distributions', {
-                'tool_type': tool_type,
-                'tool_id': tool_id,
-                'tool_name': tool_name,
-                'target_cluster': cluster,
-                'target_namespace': namespace,
-                'target_pod': pod,
-                'target_container': container,
-                'install_path': install_path,
-                'status': 'pending',
-                'distributed_by': current_user.id if hasattr(current_user, 'id') else None,
-            })
+            dist_target = {
+                'cluster_name': cluster,
+                'namespace': namespace,
+                'pod_name': pod,
+                'container': container,
+            }
 
             # 执行分发
             try:
                 start_time = time.time()
                 _do_distribute(tool_row, cluster, namespace, pod, container, install_path)
                 duration_ms = int((time.time() - start_time) * 1000)
-                db.update('tool_distributions', {
-                    'status': 'success',
-                    'duration_ms': duration_ms,
-                }, 'id = ?', (dist_id,))
+                _record_tool_distribution(tool_row, dist_target, install_path, 'success')
                 results.append({
                     'tool': tool_name,
                     'pod': pod,
@@ -2133,10 +2148,7 @@ def batch_distribute():
                     'duration_ms': duration_ms,
                 })
             except Exception as e:
-                db.update('tool_distributions', {
-                    'status': 'failed',
-                    'error_message': str(e),
-                }, 'id = ?', (dist_id,))
+                _record_tool_distribution(tool_row, dist_target, install_path, 'failed', str(e), str(e))
                 results.append({
                     'tool': tool_name,
                     'pod': pod,
@@ -2161,16 +2173,16 @@ def batch_distribute():
 
 def _do_distribute(tool_row, cluster, namespace, pod, container, install_path):
     """执行单次分发（从现有 distribute 逻辑提取）"""
-    file_path = tool_row.get('file_path', '')
-    if not file_path or not os.path.exists(file_path):
-        raise ValueError(f"工具文件不存在: {file_path}")
+    local_path = _resolve_tool_file_path(tool_row)
+    if not local_path or not local_path.exists():
+        raise ValueError(f"工具文件不存在: {tool_row.get('file_path', '')}")
 
     # 构建 kubectl cp 命令
     cmd_parts = ['kubectl', 'cp', '-n', namespace]
     if container:
         cmd_parts.extend(['-c', container])
     target = f"{cluster}/{pod}:{install_path}" if cluster else f"{pod}:{install_path}"
-    cmd_parts.extend([file_path, target])
+    cmd_parts.extend([str(local_path), target])
 
     proc = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=120)
     if proc.returncode != 0:

@@ -1,5 +1,21 @@
 /* K8s Arthas Tool - Login Page Styles */
 
+:root {
+    --bg: #eef5ff;
+    --bg1: #ffffff;
+    --bg2: #f7fbff;
+    --bg3: #edf6ff;
+    --ln: #d7e7f7;
+    --ln2: #b9d7f3;
+    --a: #1677ff;
+    --a2: #4096ff;
+    --a3: #34d399;
+    --a5: #ef4444;
+    --tx: #172033;
+    --tx2: #61738d;
+    --tx3: #8ca0b7;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -8,7 +24,10 @@
 
 body {
     font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-    background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+    background:
+        radial-gradient(circle at 20% 15%, rgba(22, 119, 255, 0.14), transparent 30%),
+        radial-gradient(circle at 80% 80%, rgba(16, 185, 129, 0.10), transparent 28%),
+        linear-gradient(180deg, #f7fbff 0%, var(--bg) 100%);
     min-height: 100vh;
     display: flex;
     align-items: center;
@@ -22,16 +41,18 @@ body {
 }
 
 .login-card {
-    background: #2d3748;
+    background: var(--bg1);
+    border: 1px solid var(--ln);
     border-radius: 12px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 24px 64px rgba(22, 119, 255, 0.12), 0 0 0 1px rgba(22, 119, 255, 0.08);
     overflow: hidden;
 }
 
 .login-header {
     text-align: center;
     padding: 40px 30px 30px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    background: linear-gradient(135deg, rgba(22, 119, 255, 0.10) 0%, rgba(64, 150, 255, 0.08) 100%);
+    border-bottom: 1px solid var(--ln);
 }
 
 .login-header h1 {
@@ -57,7 +78,7 @@ body {
 
 .form-group label {
     display: block;
-    color: #b8c7d6;
+    color: var(--tx2);
     font-size: 14px;
     font-weight: 500;
     margin-bottom: 8px;
@@ -66,29 +87,30 @@ body {
 .form-group input {
     width: 100%;
     padding: 12px 16px;
-    border: 2px solid #3b4a5c;
+    border: 2px solid var(--ln2);
     border-radius: 8px;
-    background: #1a1a2e;
-    color: #e0e1e5;
+    background: var(--bg2);
+    color: var(--tx);
     font-size: 15px;
     transition: all 0.3s ease;
 }
 
 .form-group input:focus {
     outline: none;
-    border-color: #667eea;
-    background: #1f2937;
+    border-color: var(--a);
+    background: var(--bg3);
+    box-shadow: 0 0 0 3px rgba(22, 119, 255, 0.14);
 }
 
 .form-group input::placeholder {
-    color: #4a5568;
+    color: var(--tx3);
 }
 
 .login-btn {
     width: 100%;
     padding: 14px 24px;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
+    background: linear-gradient(135deg, var(--a) 0%, var(--a2) 100%);
+    color: #ffffff;
     border: none;
     border-radius: 8px;
     font-size: 16px;
@@ -100,7 +122,7 @@ body {
 
 .login-btn:hover {
     transform: translateY(-2px);
-    box-shadow: 0 6px 20px rgba(102, 126, 234, 0.4);
+    box-shadow: 0 10px 24px rgba(22, 119, 255, 0.24);
 }
 
 .login-btn:active {
@@ -114,9 +136,9 @@ body {
 }
 
 .error-message {
-    color: #ef4444;
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid #ef4444;
+    color: var(--a5);
+    background: rgba(248, 113, 113, 0.10);
+    border: 1px solid rgba(248, 113, 113, 0.36);
     border-radius: 6px;
     padding: 12px;
     margin-top: 16px;
@@ -137,12 +159,12 @@ body {
 
 .login-footer {
     padding: 20px 30px;
-    background: #1a1a2e;
+    background: var(--bg);
     text-align: center;
 }
 
 .login-footer p {
-    color: #4a5568;
+    color: var(--tx3);
     font-size: 13px;
     margin: 0;
 }

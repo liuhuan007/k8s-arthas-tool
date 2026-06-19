@@ -24,8 +24,14 @@ const ConnectionStore = {
   _broadcastChannel: null,
   _isSyncingFromBroadcast: false,
   _heartbeatTimer: null,
+  _lastNotifiedState: null,
 
-  getState() { return { ...this._state }; },
+  getState() {
+    return {
+      ...this._state,
+      currentConnId: this._state.focusId,
+    };
+  },
   getConnections() { return [...this._state.connections]; },
   getFocusId() { return this._state.focusId; },
 
@@ -79,6 +85,28 @@ const ConnectionStore = {
     this._persist();
   },
 
+  // ── 旧代码兼容方法 ──────────────────────────────────────────
+
+  setConnections(connections) {
+    this._state.connections = connections || [];
+    this._notify();
+    this._persist();
+  },
+
+  setState(updates) {
+    if (updates.currentConnId) this._state.focusId = updates.currentConnId;
+    Object.assign(this._state, updates);
+    this._notify();
+    this._persist();
+  },
+
+  getCurrentConnId() { return this._state.focusId; },
+  setCurrentConnection(id) { this.setFocus(id); },
+  getCurrentConnection() { return this.getFocusConnection(); },
+  getConnectionState() { return this._state.connState || 'disconnected'; },
+  isArthasReady() { return this._state.connState === 'arthas_ready'; },
+  isPodConnected() { return this._state.connState === 'pod_connected'; },
+
   // ── 焦点管理 ──────────────────────────────────────────────────
 
   setFocus(id) {
@@ -102,9 +130,14 @@ const ConnectionStore = {
 
   _notify() {
     const state = this.getState();
+    const oldState = this._lastNotifiedState || state;
     this._listeners.forEach(fn => {
-      try { fn(state); } catch (e) { console.error('[ConnectionStore] Listener error:', e); }
+      try { fn(state, oldState); } catch (e) { console.error('[ConnectionStore] Listener error:', e); }
     });
+    this._lastNotifiedState = {
+      ...state,
+      connections: [...(state.connections || [])],
+    };
     this._broadcast('state-changed', state);
   },
 
@@ -223,6 +256,8 @@ window.ConnectionState = ConnectionState;
 window.ConnectionStore = ConnectionStore;
 
 document.addEventListener('DOMContentLoaded', () => {
+  // 清理 localStorage 中的旧连接数据
+  localStorage.removeItem('k8s_pool');
   ConnectionStore.restore();
   ConnectionStore._initBroadcast();
 });

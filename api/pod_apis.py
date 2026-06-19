@@ -559,10 +559,24 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
     # ── 采集函数 ────────────────────────────────────────────────────────────────
 
     def _exec_pod_cmd(conn, cmd: str, timeout: int = 10) -> str:
-        """在 Pod 内执行命令，返回 stdout"""
-        rc, out, err = conn.exec_command(cmd, timeout=timeout)
+        """Execute a command in the target Pod for both PodConnection and ArthasConnection."""
+        pod_conn = conn if hasattr(conn, 'exec_command') else getattr(conn, 'pod_conn', None)
+        if pod_conn and hasattr(pod_conn, 'exec_command'):
+            rc, out, err = pod_conn.exec_command(cmd, timeout=timeout)
+        else:
+            target = getattr(conn, 'target', None)
+            executor = getattr(conn, 'executor', None)
+            if not target or not executor or not hasattr(executor, 'exec_pod'):
+                raise RuntimeError('current connection does not support Pod command execution; reconnect the Pod first')
+            rc, out, err = executor.exec_pod(
+                target.namespace,
+                target.pod_name,
+                getattr(target, 'container', '') or '',
+                cmd,
+                timeout=timeout,
+            )
         if rc != 0:
-            raise RuntimeError(err or out or f"命令执行失败 (rc={rc})")
+            raise RuntimeError(err or out or f"command failed (rc={rc})")
         return out
 
     def _collect_cpu(conn) -> dict:

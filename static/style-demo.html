@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>K8s Arthas UI 风格 Demo</title>
+<style>
+:root {
+  --bg:#eef5ff; --shell:#ffffff; --panel:#f7fbff; --panel2:#edf6ff;
+  --line:#d7e7f7; --line2:#b9d7f3;
+  --primary:#1677ff; --primary2:#4096ff; --success:#10b981; --warning:#f59e0b; --danger:#ef4444;
+  --text:#172033; --muted:#61738d; --subtle:#8ca0b7;
+  --shadow:0 18px 45px rgba(22, 119, 255, .10);
+  --radius:12px; --font:Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+}
+* { box-sizing:border-box; }
+body { margin:0; min-height:100vh; background:var(--bg); color:var(--text); font-family:var(--font); transition:background .2s,color .2s; }
+.page { min-height:100vh; display:grid; grid-template-columns:280px 1fr; }
+.chooser { padding:22px; border-right:1px solid var(--line); background:rgba(255,255,255,.74); backdrop-filter:blur(14px); }
+.brand { display:flex; align-items:center; gap:10px; margin-bottom:18px; }
+.hex { width:28px; height:28px; background:linear-gradient(135deg,var(--primary),var(--primary2)); clip-path:polygon(50% 0,100% 25%,100% 75%,50% 100%,0 75%,0 25%); box-shadow:0 0 22px color-mix(in srgb, var(--primary) 34%, transparent); }
+h1 { font-size:18px; margin:0; }
+.hint { color:var(--muted); font-size:12px; line-height:1.6; margin:6px 0 18px; }
+.theme-btn { width:100%; display:flex; gap:10px; align-items:flex-start; padding:12px; border:1px solid var(--line); border-radius:12px; margin-bottom:10px; background:var(--shell); color:var(--text); cursor:pointer; text-align:left; transition:.16s; }
+.theme-btn:hover, .theme-btn.active { border-color:var(--primary); box-shadow:0 10px 24px color-mix(in srgb, var(--primary) 16%, transparent); transform:translateY(-1px); }
+.swatches { display:flex; gap:3px; padding-top:2px; }
+.swatches i { width:12px; height:28px; border-radius:8px; display:block; border:1px solid rgba(0,0,0,.08); }
+.theme-name { font-weight:800; font-size:13px; }
+.theme-desc { font-size:11px; color:var(--muted); line-height:1.45; margin-top:3px; }
+.main { padding:24px; overflow:auto; }
+.topbar { height:52px; border:1px solid var(--line); background:var(--shell); border-radius:var(--radius); box-shadow:var(--shadow); display:flex; align-items:center; padding:0 16px; gap:14px; margin-bottom:18px; }
+.top-title { font-size:15px; font-weight:900; }
+.top-title span { color:var(--primary); }
+.top-nav { display:flex; gap:8px; margin-left:16px; }
+.pill { border:1px solid var(--line); background:var(--panel); color:var(--muted); padding:7px 12px; border-radius:999px; font-size:12px; }
+.pill.on { color:#fff; border-color:var(--primary); background:linear-gradient(135deg,var(--primary),var(--primary2)); }
+.status { margin-left:auto; display:flex; gap:8px; align-items:center; color:var(--muted); font-size:12px; }
+.dot { width:8px; height:8px; border-radius:50%; background:var(--success); box-shadow:0 0 12px var(--success); }
+.preview { display:grid; grid-template-columns:360px 1fr; gap:18px; }
+.login-card, .workspace { border:1px solid var(--line); background:var(--shell); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden; }
+.login-head { padding:20px; border-bottom:1px solid var(--line); background:linear-gradient(135deg,color-mix(in srgb,var(--primary) 14%, transparent),color-mix(in srgb,var(--success) 8%, transparent)); }
+.login-head strong { display:block; font-size:18px; margin-bottom:5px; }
+.login-head small { color:var(--muted); }
+.form { padding:20px; }
+.label { font-size:11px; font-weight:800; color:var(--muted); letter-spacing:.08em; text-transform:uppercase; margin-bottom:7px; }
+.input { width:100%; height:42px; border:1px solid var(--line2); background:var(--panel); color:var(--text); border-radius:10px; padding:0 12px; margin-bottom:14px; outline:none; }
+.input:focus { border-color:var(--primary); box-shadow:0 0 0 3px color-mix(in srgb,var(--primary) 16%, transparent); }
+.primary { height:42px; width:100%; border:0; border-radius:10px; background:linear-gradient(135deg,var(--primary),var(--primary2)); color:#fff; font-weight:900; cursor:pointer; }
+.workspace { display:grid; grid-template-columns:230px 1fr; min-height:520px; }
+.side { border-right:1px solid var(--line); background:linear-gradient(180deg,var(--panel),color-mix(in srgb,var(--panel2) 70%, var(--shell))); padding:14px; }
+.side-sec { color:var(--subtle); font-size:10px; font-weight:900; letter-spacing:.12em; text-transform:uppercase; margin:12px 0 8px; }
+.side-item { padding:10px 12px; border-radius:10px; color:var(--muted); font-size:12px; margin-bottom:5px; display:flex; gap:8px; align-items:center; }
+.side-item.on { color:var(--text); background:color-mix(in srgb,var(--primary) 12%, var(--shell)); box-shadow:inset 3px 0 0 var(--primary); font-weight:800; }
+.content { padding:16px; background:var(--panel); }
+.content-head { display:flex; align-items:center; margin-bottom:14px; }
+.content-head h2 { margin:0; font-size:18px; }
+.content-head p { margin:3px 0 0; color:var(--muted); font-size:12px; }
+.grid { display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:12px; }
+.metric, .conn, .terminal { border:1px solid var(--line); background:var(--shell); border-radius:12px; padding:14px; }
+.metric b { display:block; font-size:22px; margin-top:8px; color:var(--primary); }
+.metric span, .conn span { color:var(--muted); font-size:11px; }
+.conn-list { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:12px; }
+.conn { min-height:96px; }
+.conn strong { display:block; margin:6px 0; }
+.badge { display:inline-flex; align-items:center; gap:6px; border-radius:999px; padding:4px 8px; font-size:11px; font-weight:800; background:color-mix(in srgb,var(--success) 14%, transparent); color:var(--success); }
+.terminal { background:color-mix(in srgb,var(--bg) 88%, #000); color:#b7e3ff; font-family:"IBM Plex Mono",Consolas,monospace; min-height:120px; line-height:1.7; font-size:12px; }
+.cmd { color:var(--success); }
+.note { margin-top:14px; border:1px dashed var(--line2); border-radius:12px; padding:12px; color:var(--muted); font-size:12px; line-height:1.6; }
+body[data-theme="cloud"] { --bg:#eef5ff; --shell:#ffffff; --panel:#f7fbff; --panel2:#edf6ff; --line:#d7e7f7; --line2:#b9d7f3; --primary:#1677ff; --primary2:#4096ff; --success:#10b981; --text:#172033; --muted:#61738d; --subtle:#8ca0b7; --shadow:0 18px 45px rgba(22,119,255,.10); }
+body[data-theme="apm"] { --bg:#061426; --shell:#0b1f38; --panel:#0f2d4f; --panel2:#16406d; --line:#1d4f7a; --line2:#2d6fa3; --primary:#0ea5ff; --primary2:#66c7ff; --success:#34d399; --text:#e6f4ff; --muted:#a9c6df; --subtle:#6f91ae; --shadow:0 18px 45px rgba(14,165,255,.14); }
+body[data-theme="devops"] { --bg:#f4f7fb; --shell:#ffffff; --panel:#f8fafc; --panel2:#edf2f7; --line:#dce5ef; --line2:#c4d3e2; --primary:#2563eb; --primary2:#3b82f6; --success:#16a34a; --text:#1e293b; --muted:#64748b; --subtle:#94a3b8; --shadow:0 16px 36px rgba(30,41,59,.08); }
+body[data-theme="rancher"] { --bg:#edf8fb; --shell:#ffffff; --panel:#f3fbfd; --panel2:#e1f4f8; --line:#c7e6ed; --line2:#9fd0dc; --primary:#00a0df; --primary2:#00c2ff; --success:#2fb344; --text:#17313f; --muted:#557180; --subtle:#7d9aa6; --shadow:0 18px 42px rgba(0,160,223,.12); }
+body[data-theme="terminal"] { --bg:#07110d; --shell:#0d1b16; --panel:#10271f; --panel2:#143427; --line:#1f4d3c; --line2:#2d6d53; --primary:#22c55e; --primary2:#67e8f9; --success:#4ade80; --text:#dafbe1; --muted:#8bb99b; --subtle:#5f8770; --shadow:0 18px 45px rgba(34,197,94,.12); }
+body[data-theme="grafana"] { --bg:#111827; --shell:#1f2937; --panel:#172033; --panel2:#243247; --line:#34465f; --line2:#4b6280; --primary:#f97316; --primary2:#f59e0b; --success:#22c55e; --text:#f8fafc; --muted:#cbd5e1; --subtle:#94a3b8; --shadow:0 18px 45px rgba(249,115,22,.13); }
+body[data-theme="sre"] { --bg:#f8fbff; --shell:#ffffff; --panel:#f2f6fb; --panel2:#e9f0f8; --line:#d6e0ec; --line2:#b8c7d9; --primary:#334155; --primary2:#0f766e; --success:#059669; --text:#0f172a; --muted:#64748b; --subtle:#94a3b8; --shadow:0 16px 38px rgba(15,23,42,.08); }
+body[data-theme="noc"] { --bg:#050b18; --shell:#081426; --panel:#0b1d35; --panel2:#102b4b; --line:#173b63; --line2:#245b91; --primary:#00e5ff; --primary2:#2dd4bf; --success:#39ff88; --text:#e0fbff; --muted:#8cc8d6; --subtle:#5b8798; --shadow:0 20px 50px rgba(0,229,255,.12); }
+body[data-theme="kubesphere"] { --bg:#eef7fb; --shell:#ffffff; --panel:#f5fbfd; --panel2:#e7f4f8; --line:#cfe4ec; --line2:#a7cedb; --primary:#00a1c9; --primary2:#36cfc9; --success:#55b467; --text:#1f3440; --muted:#607783; --subtle:#8aa0aa; --shadow:0 18px 42px rgba(0,161,201,.11); }
+body[data-theme="enterprise"] { --bg:#f3f6fa; --shell:#ffffff; --panel:#f8fafc; --panel2:#eef3f8; --line:#d9e2ec; --line2:#bfccda; --primary:#1d4ed8; --primary2:#2563eb; --success:#15803d; --text:#111827; --muted:#4b5563; --subtle:#9ca3af; --shadow:0 18px 38px rgba(29,78,216,.08); }
+@media (max-width:1100px){ .page{grid-template-columns:1fr}.chooser{border-right:0;border-bottom:1px solid var(--line)}.preview{grid-template-columns:1fr}.workspace{grid-template-columns:1fr}.side{display:none}.grid{grid-template-columns:1fr}.conn-list{grid-template-columns:1fr} }
+</style>
+</head>
+<body data-theme="cloud">
+<div class="page">
+  <aside class="chooser">
+    <div class="brand"><div class="hex"></div><div><h1>运维系统风格 Demo</h1><div class="hint">点击左侧切换，直接看登录页和工作台体感。</div></div></div>
+    <button class="theme-btn active" data-theme="cloud"><span class="swatches"><i style="background:#1677ff"></i><i style="background:#fff"></i><i style="background:#eef5ff"></i></span><span><span class="theme-name">云厂商控制台风</span><span class="theme-desc">亮蓝、白底、企业控制台；最适合全站。</span></span></button>
+    <button class="theme-btn" data-theme="apm"><span class="swatches"><i style="background:#0ea5ff"></i><i style="background:#0b1f38"></i><i style="background:#34d399"></i></span><span><span class="theme-name">深色 APM 监控风</span><span class="theme-desc">适合监控/Profiler/日志，技术感强。</span></span></button>
+    <button class="theme-btn" data-theme="devops"><span class="swatches"><i style="background:#2563eb"></i><i style="background:#f8fafc"></i><i style="background:#16a34a"></i></span><span><span class="theme-name">DevOps 工具链风</span><span class="theme-desc">像 GitLab/Rancher，任务流清晰。</span></span></button>
+    <button class="theme-btn" data-theme="rancher"><span class="swatches"><i style="background:#00a0df"></i><i style="background:#edf8fb"></i><i style="background:#2fb344"></i></span><span><span class="theme-name">K8s/Rancher 清爽风</span><span class="theme-desc">更 Kubernetes、更轻、更明亮。</span></span></button>
+    <button class="theme-btn" data-theme="terminal"><span class="swatches"><i style="background:#22c55e"></i><i style="background:#0d1b16"></i><i style="background:#67e8f9"></i></span><span><span class="theme-name">终端增强风</span><span class="theme-desc">适合命令/日志区，不建议全站。</span></span></button>
+    <button class="theme-btn" data-theme="grafana"><span class="swatches"><i style="background:#f97316"></i><i style="background:#111827"></i><i style="background:#22c55e"></i></span><span><span class="theme-name">Grafana 监控风</span><span class="theme-desc">橙色强调、深色指标平台，适合监控大屏/图表。</span></span></button>
+    <button class="theme-btn" data-theme="sre"><span class="swatches"><i style="background:#334155"></i><i style="background:#f8fbff"></i><i style="background:#0f766e"></i></span><span><span class="theme-name">SRE 告警控制台风</span><span class="theme-desc">中性灰蓝、强调稳定与告警处置。</span></span></button>
+    <button class="theme-btn" data-theme="noc"><span class="swatches"><i style="background:#00e5ff"></i><i style="background:#050b18"></i><i style="background:#39ff88"></i></span><span><span class="theme-name">NOC 大屏运维风</span><span class="theme-desc">高对比深色、青色数据光感，适合监控中心。</span></span></button>
+    <button class="theme-btn" data-theme="kubesphere"><span class="swatches"><i style="background:#00a1c9"></i><i style="background:#eef7fb"></i><i style="background:#55b467"></i></span><span><span class="theme-name">KubeSphere 云原生风</span><span class="theme-desc">清爽青蓝、Kubernetes/容器平台感。</span></span></button>
+    <button class="theme-btn" data-theme="enterprise"><span class="swatches"><i style="background:#1d4ed8"></i><i style="background:#f3f6fa"></i><i style="background:#15803d"></i></span><span><span class="theme-name">企业蓝灰后台风</span><span class="theme-desc">稳重蓝灰、传统企业运维后台。</span></span></button>
+    <div class="note">建议：全站优先看「云厂商控制台风」「K8s/Rancher 清爽风」「KubeSphere 云原生风」；监控页可选「Grafana 监控风」或「NOC 大屏运维风」。</div>
+  </aside>
+  <main class="main">
+    <div class="topbar"><div class="hex"></div><div class="top-title">Arthas <span>K8s</span></div><nav class="top-nav"><span class="pill on">工作台</span><span class="pill">工具管理</span><span class="pill">任务列表</span><span class="pill">系统管理</span></nav><div class="status"><i class="dot"></i>服务在线</div></div>
+    <section class="preview">
+      <div class="login-card">
+        <div class="login-head"><strong>用户登录</strong><small>K8s Arthas 诊断台 · 统一身份验证</small></div>
+        <div class="form"><div class="label">用户名</div><input class="input" value="admin"><div class="label">密码</div><input class="input" value="••••••••"><button class="primary">登录控制台</button></div>
+      </div>
+      <div class="workspace">
+        <aside class="side"><div class="side-sec">Workspace</div><div class="side-item on">🏠 工作台</div><div class="side-item">🧰 工具管理</div><div class="side-item">📋 任务列表</div><div class="side-sec">Ops</div><div class="side-item">⚡ Arthas 命令</div><div class="side-item">📊 Pod 监控</div><div class="side-item">📂 文件</div></aside>
+        <div class="content"><div class="content-head"><div><h2>连接工作台</h2><p>连接池、监控、Arthas 命令与采样任务统一入口</p></div></div><div class="grid"><div class="metric"><span>活跃连接</span><b>12</b></div><div class="metric"><span>运行任务</span><b>3</b></div><div class="metric"><span>异常告警</span><b>1</b></div></div><div class="conn-list"><div class="conn"><span>内部环境 / seeyon-test106</span><strong>app-approval-68f5b5d47-57nl7</strong><em class="badge">● Arthas Ready</em></div><div class="conn"><span>性能环境 / default</span><strong>ai-gateway-775d9c889b-t4x7w</strong><em class="badge">● Pod Connected</em></div></div><div class="terminal"><div class="cmd">arthas&gt; dashboard</div><div>ID  NAME                 GROUP      PRIORITY  STATE</div><div>42  http-nio-8080-exec  main       5         RUNNABLE</div><div class="cmd">arthas&gt; profiler start --event cpu</div></div></div>
+      </div>
+    </section>
+  </main>
+</div>
+<script>
+document.querySelectorAll('.theme-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.body.dataset.theme = btn.dataset.theme;
+    document.querySelectorAll('.theme-btn').forEach(x => x.classList.toggle('active', x === btn));
+  });
+});
+</script>
+</body>
+</html>

@@ -42,6 +42,15 @@ const ConnectionGuard = (function () {
     if (cs === 'arthas_ready') return 'arthas';
     if (cs === 'pod_connected') return 'pod';
 
+    if (window.ConnectionStore && typeof ConnectionStore.getFocusConnection === 'function') {
+      const conn = ConnectionStore.getFocusConnection();
+      if (conn) {
+        const level = (conn.level || conn.connection_level || '').toLowerCase();
+        if (level === 'arthas' || conn.local_port || conn.arthas_version || conn.arthas?.port) return 'arthas';
+        if (level === 'pod' || conn.runtime_type || conn.runtime || conn.state === 'connected') return 'pod';
+      }
+    }
+
     // 兼容旧流程或状态未完全同步的场景：优先从当前连接对象推断真实层级
     if (window._currentConnId) {
       const conn = (window._connections || []).find(c => c.id === window._currentConnId);

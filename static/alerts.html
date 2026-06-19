@@ -3,7 +3,10 @@
 <head>
     <meta charset="UTF-8">
     <title>告警中心 - K8s Arthas Tool</title>
-    <link rel="stylesheet" href="css/app.css">
+    <script>
+    (function(){try{if(localStorage.getItem('ops_ui_theme')==='devops')document.documentElement.setAttribute('data-ops-theme','devops');}catch(e){}})();
+    </script>
+    <link rel="stylesheet" href="css/app.css?v=20260619c">
     <style>
         /* ── 告警中心页面样式 ─────────────────────────────────────── */
         body {
@@ -527,6 +530,8 @@
         body.embed .alerts-hero-actions .btn-alert:last-child { display: none; }
         body.embed .alerts-page { padding: 12px; }
     </style>
+    <link rel="stylesheet" href="css/ops-theme-bridge.css?v=20260619c">
+    <script src="js/theme-switcher.js?v=20260619d"></script>
 </head>
 <body>
 <script>
