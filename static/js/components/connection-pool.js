@@ -20,28 +20,52 @@ const ConnectionPool = (function() {
     const addConfirm = document.getElementById('poolAddConfirm');
     if (addConfirm) addConfirm.addEventListener('click', addNewConnection);
 
-    const nsSelect = document.getElementById('poolSelNs');
-    if (nsSelect) nsSelect.addEventListener('change', () => loadPods());
+    // 集群选择变化 → 加载命名空间
+    const clusterSel = document.getElementById('poolSelCluster');
+    if (clusterSel) clusterSel.addEventListener('change', async () => {
+      const cluster = clusterSel.value;
+      document.getElementById('poolSelNs').innerHTML = '<option value="">加载中...</option>';
+      document.getElementById('poolSelPod').innerHTML = '<option value="">选择 Pod...</option>';
+      if (!cluster) { document.getElementById('poolSelNs').innerHTML = '<option value="">选择命名空间...</option>'; return; }
+      try {
+        const r = await fetch(`${API}/clusters/${encodeURIComponent(cluster)}/namespaces`, { credentials: 'include' });
+        const d = await r.json();
+        const ns = d.namespaces || d || [];
+        document.getElementById('poolSelNs').innerHTML = '<option value="">选择命名空间...</option>' +
+          ns.map(n => `<option value="${n}">${n}</option>`).join('');
+      } catch (e) {
+        document.getElementById('poolSelNs').innerHTML = '<option value="">加载失败</option>';
+      }
+    });
 
-    // 加载集群列表
+    // 命名空间选择变化 → 加载 Pod
+    const nsSel = document.getElementById('poolSelNs');
+    if (nsSel) nsSel.addEventListener('change', () => loadPods());
+
+    // 初始加载集群列表
     loadClusters();
   }
 
   // ── 集群/Pod 加载 ─────────────────────────────────────────────
 
   async function loadClusters() {
+    const sel = document.getElementById('poolSelCluster');
+    if (!sel) return;
+    sel.innerHTML = '<option value="">加载中...</option>';
     try {
       const r = await fetch(`${API}/clusters`, { credentials: 'include' });
+      if (r.status === 401) { toast('请先登录', 'warn'); return; }
       const d = await r.json();
-      if (d.ok && d.clusters) {
-        const sel = document.getElementById('poolSelCluster');
-        if (sel) {
-          sel.innerHTML = d.clusters.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
-        }
-        loadPods();
+      const clusters = d.clusters || d || [];
+      if (clusters.length) {
+        sel.innerHTML = '<option value="">选择集群...</option>' +
+          clusters.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+      } else {
+        sel.innerHTML = '<option value="">暂无集群</option>';
       }
     } catch (e) {
       console.warn('[Pool] loadClusters failed:', e);
+      sel.innerHTML = '<option value="">加载失败</option>';
     }
   }
 

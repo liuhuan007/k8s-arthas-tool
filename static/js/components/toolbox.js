@@ -319,6 +319,236 @@
     }
   };
 
+  // ═══════════════════════════════════════════════════════════════
+  // 分发结果 Modal
+  // ═══════════════════════════════════════════════════════════════
+
+  window.openDistResultModal = function(results) {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'distResultModal';
+
+    const successCount = results.filter(r => r.status === 'success').length;
+    const failedCount = results.filter(r => r.status === 'failed').length;
+
+    modal.innerHTML = `
+      <div class="modal" style="width:600px">
+        <div class="modal-header">
+          <h3>分发结果</h3>
+          <button class="btn-close" onclick="closeModal('distResultModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="display:flex;gap:16px;margin-bottom:20px">
+            <div style="flex:1;padding:12px;background:rgba(52,199,89,.1);border-radius:8px;text-align:center">
+              <div style="font-size:24px;font-weight:700;color:#34c759">${successCount}</div>
+              <div style="font-size:11px;color:var(--tx2)">成功</div>
+            </div>
+            <div style="flex:1;padding:12px;background:rgba(255,59,48,.1);border-radius:8px;text-align:center">
+              <div style="font-size:24px;font-weight:700;color:#ff3b30">${failedCount}</div>
+              <div style="font-size:11px;color:var(--tx2)">失败</div>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:8px">
+            ${results.map(r => `
+              <div style="display:flex;align-items:center;gap:10px;padding:10px;background:${r.status === 'success' ? 'rgba(52,199,89,.08)' : 'rgba(255,59,48,.08)'};border:1px solid ${r.status === 'success' ? 'rgba(52,199,89,.2)' : 'rgba(255,59,48,.2)'};border-radius:6px">
+                <span style="color:${r.status === 'success' ? '#34c759' : '#ff3b30'};font-size:14px">${r.status === 'success' ? '✓' : '✗'}</span>
+                <div style="flex:1">
+                  <div style="font-size:12px;font-weight:600">${esc(r.pod || '未知')}</div>
+                  <div style="font-size:11px;color:var(--tx2)">${esc(r.cluster || '')} / ${esc(r.namespace || '')}</div>
+                  ${r.error ? `<div style="font-size:10px;color:#ff3b30;margin-top:4px">${esc(r.error)}</div>` : ''}
+                </div>
+                <span class="badge badge-${r.status === 'success' ? 'running' : 'stopped'}" style="font-size:10px">${r.status === 'success' ? '成功' : '失败'}</span>
+                ${r.status === 'failed' ? `<button class="btn btn-p btn-sm" style="font-size:10px" onclick="retrySingleDist(${r.id || 0})">重试</button>` : ''}
+              </div>
+            `).join('')}
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-g btn-sm" onclick="closeModal('distResultModal')">关闭</button>
+          ${failedCount > 0 ? `<button class="btn btn-p btn-sm" onclick="batchRetryFailed()">重试失败项 (${failedCount})</button>` : ''}
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  };
+
+  window.retrySingleDist = function(distId) {
+    closeModal('distResultModal');
+    // Open retry modal or directly retry
+    toast('正在重试...', 'info');
+  };
+
+  window.batchRetryFailed = function() {
+    closeModal('distResultModal');
+    toast('批量重试功能开发中', 'info');
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // 批量重试 Modal
+  // ═══════════════════════════════════════════════════════════════
+
+  window.openBatchRetryModal = function(failedItems) {
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'batchRetryModal';
+    modal.innerHTML = `
+      <div class="modal" style="width:600px">
+        <div class="modal-header">
+          <h3>批量重试失败项</h3>
+          <button class="btn-close" onclick="closeModal('batchRetryModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="font-size:12px;color:var(--tx2);margin-bottom:10px">以下分发失败，是否重试？</div>
+          <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+            ${failedItems.map(item => `
+              <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(255,59,48,.08);border:1px solid rgba(255,59,48,.2);border-radius:6px">
+                <input type="checkbox" checked class="retry-check" value="${item.id}" style="width:14px;height:14px">
+                <div style="flex:1">
+                  <div style="font-size:12px;font-weight:600">${esc(item.pod || '未知')}</div>
+                  <div style="font-size:11px;color:var(--tx3)">${esc(item.cluster || '')} / ${esc(item.namespace || '')} / ${esc(item.container || '')}</div>
+                  <div style="font-size:10px;color:#ff3b30">${esc(item.error || '未知错误')}</div>
+                </div>
+              </div>
+            `).join('')}
+          </div>
+          <div style="background:rgba(0,122,255,.08);border:1px solid rgba(0,122,255,.2);border-radius:6px;padding:10px;font-size:11px;color:var(--tx2)">
+            💡 批量重试将使用相同的工具和安装路径，仅重新执行分发操作
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-g btn-sm" onclick="closeModal('batchRetryModal')">取消</button>
+          <button class="btn btn-p btn-sm" onclick="executeBatchRetry()">重试选中项</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  };
+
+  window.executeBatchRetry = async function() {
+    const checkboxes = document.querySelectorAll('.retry-check:checked');
+    const ids = Array.from(checkboxes).map(cb => parseInt(cb.value));
+
+    if (ids.length === 0) {
+      toast('请选择要重试的项', 'warn');
+      return;
+    }
+
+    closeModal('batchRetryModal');
+    toast(`正在重试 ${ids.length} 项...`, 'info');
+
+    try {
+      const result = await safePost('/tasks/distributions/batch-retry', { dist_ids: ids });
+      if (result.ok) {
+        toast(`重试完成: ${result.summary.success} 成功, ${result.summary.failed} 失败`, 'ok');
+        openDistResultModal(result.results);
+      }
+    } catch (e) {
+      toast(`重试失败: ${e.message}`, 'err');
+    }
+  };
+
+  // ═══════════════════════════════════════════════════════════════
+  // Arthas 文档 Modal
+  // ═══════════════════════════════════════════════════════════════
+
+  window.openArthasDocModal = function(command) {
+    const docs = {
+      'jad': {
+        title: 'jad - 反编译已运行代码',
+        desc: '反编译指定类的源代码。可以用来查看正在运行的 Java 类的源码。',
+        usage: 'jad [option] class-pattern [filter条件]',
+        examples: [
+          { comment: '反编译单个类', cmd: 'jad com.example.MyClass' },
+          { comment: '反编译并输出到文件', cmd: 'jad -d /tmp arthas com.example.MyClass' },
+          { comment: '只反编译指定方法', cmd: 'jad com.example.MyClass *testMethod*' },
+        ],
+        url: 'https://arthas.aliyun.com/doc/jad.html'
+      },
+      'thread': {
+        title: 'thread - 线程堆栈',
+        desc: '查看当前 JVM 线程堆栈信息。',
+        usage: 'thread [option]',
+        examples: [
+          { comment: '查看所有线程', cmd: 'thread' },
+          { comment: '查看最忙的3个线程', cmd: 'thread -n 3' },
+          { comment: '查看指定线程', cmd: 'thread <id>' },
+        ],
+        url: 'https://arthas.aliyun.com/doc/thread.html'
+      },
+      'dashboard': {
+        title: 'dashboard - 实时面板',
+        desc: '实时展示 JVM 运行数据：线程、内存、GC、运行时信息。',
+        usage: 'dashboard [option]',
+        examples: [
+          { comment: '查看实时面板', cmd: 'dashboard' },
+          { comment: '只显示线程面板', cmd: 'dashboard -i 2000 -n 1' },
+        ],
+        url: 'https://arthas.aliyun.com/doc/dashboard.html'
+      },
+      'watch': {
+        title: 'watch - 方法执行数据',
+        desc: '观察方法执行的入参、返回值、异常等信息。',
+        usage: 'watch class-pattern method-pattern [expressions]',
+        examples: [
+          { comment: '观察方法入参和返回值', cmd: 'watch com.example.MyClass myMethod "{params, returnObj}"' },
+          { comment: '观察耗时超过100ms的调用', cmd: 'watch com.example.MyClass myMethod "#cost > 100"' },
+        ],
+        url: 'https://arthas.aliyun.com/doc/watch.html'
+      },
+      'trace': {
+        title: 'trace - 方法调用链',
+        desc: '跟踪方法内部调用路径和耗时。',
+        usage: 'trace class-pattern method-pattern',
+        examples: [
+          { comment: '跟踪方法调用', cmd: 'trace com.example.MyClass myMethod' },
+          { comment: '只显示耗时超过100ms的调用', cmd: 'trace com.example.MyClass myMethod "#cost > 100"' },
+        ],
+        url: 'https://arthas.aliyun.com/doc/trace.html'
+      },
+    };
+
+    const doc = docs[command] || docs['jad'];
+
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.id = 'arthasDocModal';
+    modal.innerHTML = `
+      <div class="modal" style="width:640px">
+        <div class="modal-header">
+          <h3>Arthas 文档: ${esc(doc.title)}</h3>
+          <button class="btn-close" onclick="closeModal('arthasDocModal')">✕</button>
+        </div>
+        <div class="modal-body">
+          <div style="margin-bottom:16px">
+            <p style="font-size:12px;color:var(--tx2);line-height:1.6">${esc(doc.desc)}</p>
+          </div>
+          <div style="margin-bottom:16px">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px">用法</div>
+            <div style="background:rgba(0,0,0,.3);padding:10px;border-radius:6px;font-family:monospace;font-size:12px;color:var(--a2)">
+              ${esc(doc.usage)}
+            </div>
+          </div>
+          <div style="margin-bottom:16px">
+            <div style="font-size:13px;font-weight:600;margin-bottom:8px">示例</div>
+            <div style="background:rgba(0,0,0,.3);padding:10px;border-radius:6px;font-family:monospace;font-size:11px">
+              ${doc.examples.map(ex => `
+                <div style="margin-bottom:8px">
+                  <div style="color:var(--tx3);margin-bottom:4px"># ${esc(ex.comment)}</div>
+                  <div style="color:var(--a2)">${esc(ex.cmd)}</div>
+                </div>
+              `).join('')}
+            </div>
+          </div>
+          <a href="${doc.url}" target="_blank" style="color:var(--a);font-size:12px">查看完整文档 →</a>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-g btn-sm" onclick="closeModal('arthasDocModal')">关闭</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+  };
+
   window.openEditBinaryModal = function(toolId) {
     const tool = _allTools.binary.find(t => t.id === toolId);
     if (!tool) { toast('工具不存在', 'warn'); return; }
@@ -628,6 +858,10 @@
             <button class="btn btn-p btn-sm" onclick="openExecuteModal(${t.id}, '${esc(t.name)}', '${esc(t.command_template || "")}')">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"/></svg>
               执行→
+            </button>
+            <button class="btn btn-g btn-sm" onclick="openArthasDocModal('${esc(t.command_template || 'jad').split(' ')[0]}')">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+              文档
             </button>
             <button class="btn btn-s btn-sm" onclick="toolboxDeleteScript(${t.id})">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>

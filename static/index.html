@@ -251,8 +251,8 @@ document.addEventListener('DOMContentLoaded', function() {
   <div class="pool-srch"><input id="poolSearch" placeholder="搜索 Pod / 集群 / 命名空间..." aria-label="搜索连接"></div>
   <div class="pool-ls" id="poolList"></div>
   <div id="poolAddPanel" class="pool-add">
-    <select id="poolSelCluster"><option>prod-cluster-1</option><option>prod-cluster-2</option><option>staging-cluster</option><option>dev-cluster</option></select>
-    <select id="poolSelNs"><option>app-prod</option><option>app-staging</option><option>default</option><option>kube-system</option></select>
+    <select id="poolSelCluster"><option value="">选择集群...</option></select>
+    <select id="poolSelNs"><option value="">选择命名空间...</option></select>
     <div class="pool-add-row"><select id="poolSelPod"><option value="">选择 Pod...</option></select><button class="pool-add-confirm" id="poolAddConfirm">连接</button></div>
   </div>
 </div>

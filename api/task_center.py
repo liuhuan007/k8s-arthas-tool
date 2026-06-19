@@ -1656,6 +1656,139 @@ def list_distributions():
     })
 
 
+@task_bp.route('/distributions/<int:dist_id>', methods=['GET'])
+@login_required
+def get_distribution_detail(dist_id):
+    """获取单条分发记录详情"""
+    row = db.fetch_one('SELECT * FROM tool_distributions WHERE id = ?', (dist_id,))
+    if not row:
+        return _error('记录不存在', 404)
+    return jsonify({'ok': True, 'distribution': dict(row)})
+
+
+@task_bp.route('/distributions/retry', methods=['POST'])
+@login_required
+def retry_distribution():
+    """重试分发"""
+    data = request.json or {}
+    dist_id = data.get('dist_id')
+    if not dist_id:
+        return _error('缺少 dist_id')
+
+    row = db.fetch_one('SELECT * FROM tool_distributions WHERE id = ?', (dist_id,))
+    if not row:
+        return _error('记录不存在', 404)
+
+    tool_row = db.fetch_one('SELECT * FROM tool_packages WHERE id = ?', (row['tool_id'],))
+    if not tool_row:
+        return _error('工具不存在', 404)
+
+    cluster = data.get('cluster') or row['target_cluster']
+    namespace = data.get('namespace') or row['target_namespace']
+    pod = data.get('pod') or row['target_pod']
+    container = data.get('container') or row['target_container'] or ''
+    install_path = data.get('install_path') or row['install_path']
+
+    try:
+        start_time = time.time()
+        _do_distribute(tool_row, cluster, namespace, pod, container, install_path)
+        duration_ms = int((time.time() - start_time) * 1000)
+        db.insert('tool_distributions', {
+            'tool_type': row['tool_type'],
+            'tool_id': row['tool_id'],
+            'tool_name': row['tool_name'],
+            'target_cluster': cluster,
+            'target_namespace': namespace,
+            'target_pod': pod,
+            'target_container': container,
+            'install_path': install_path,
+            'status': 'success',
+            'duration_ms': duration_ms,
+            'distributed_by': current_user.id if hasattr(current_user, 'id') else None,
+        })
+        return jsonify({'ok': True, 'duration_ms': duration_ms})
+    except Exception as e:
+        db.insert('tool_distributions', {
+            'tool_type': row['tool_type'],
+            'tool_id': row['tool_id'],
+            'tool_name': row['tool_name'],
+            'target_cluster': cluster,
+            'target_namespace': namespace,
+            'target_pod': pod,
+            'target_container': container,
+            'install_path': install_path,
+            'status': 'failed',
+            'error_message': str(e),
+            'distributed_by': current_user.id if hasattr(current_user, 'id') else None,
+        })
+        return _error(f'重试失败: {e}', 500)
+
+
+@task_bp.route('/distributions/batch-retry', methods=['POST'])
+@login_required
+def batch_retry_distributions():
+    """批量重试分发"""
+    data = request.json or {}
+    dist_ids = data.get('dist_ids', [])
+    if not dist_ids:
+        return _error('缺少 dist_ids')
+
+    results = []
+    for dist_id in dist_ids:
+        row = db.fetch_one('SELECT * FROM tool_distributions WHERE id = ?', (dist_id,))
+        if not row:
+            results.append({'id': dist_id, 'status': 'skipped', 'error': '记录不存在'})
+            continue
+
+        tool_row = db.fetch_one('SELECT * FROM tool_packages WHERE id = ?', (row['tool_id'],))
+        if not tool_row:
+            results.append({'id': dist_id, 'status': 'skipped', 'error': '工具不存在'})
+            continue
+
+        try:
+            start_time = time.time()
+            _do_distribute(tool_row, row['target_cluster'], row['target_namespace'],
+                          row['target_pod'], row['target_container'] or '', row['install_path'])
+            duration_ms = int((time.time() - start_time) * 1000)
+            db.insert('tool_distributions', {
+                'tool_type': row['tool_type'],
+                'tool_id': row['tool_id'],
+                'tool_name': row['tool_name'],
+                'target_cluster': row['target_cluster'],
+                'target_namespace': row['target_namespace'],
+                'target_pod': row['target_pod'],
+                'target_container': row['target_container'],
+                'install_path': row['install_path'],
+                'status': 'success',
+                'duration_ms': duration_ms,
+                'distributed_by': current_user.id if hasattr(current_user, 'id') else None,
+            })
+            results.append({'id': dist_id, 'status': 'success', 'duration_ms': duration_ms})
+        except Exception as e:
+            db.insert('tool_distributions', {
+                'tool_type': row['tool_type'],
+                'tool_id': row['tool_id'],
+                'tool_name': row['tool_name'],
+                'target_cluster': row['target_cluster'],
+                'target_namespace': row['target_namespace'],
+                'target_pod': row['target_pod'],
+                'target_container': row['target_container'],
+                'install_path': row['install_path'],
+                'status': 'failed',
+                'error_message': str(e),
+                'distributed_by': current_user.id if hasattr(current_user, 'id') else None,
+            })
+            results.append({'id': dist_id, 'status': 'failed', 'error': str(e)})
+
+    success_count = sum(1 for r in results if r['status'] == 'success')
+    failed_count = sum(1 for r in results if r['status'] == 'failed')
+    return jsonify({
+        'ok': True,
+        'results': results,
+        'summary': {'success': success_count, 'failed': failed_count, 'total': len(results)}
+    })
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 脚本工具 API
 # ═══════════════════════════════════════════════════════════════════════════════
