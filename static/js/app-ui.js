@@ -3145,6 +3145,16 @@ async function arthasDC() {
   _polling = false; if(_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
   if(_sid && _ap) try { await fetch(`${API}/arthas/session/close`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({..._ap, session_id: _sid})}); } catch {}
   if(_ap) try { await fetch(`${API}/arthas/disconnect`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(_ap)}); } catch {}
+  
+  // 更新新连接池状态
+  if (typeof ConnectionStore !== 'undefined' && _currentConnId) {
+    ConnectionStore.updateConnection(_currentConnId, {
+      state: ConnectionState.DISCONNECTED, level: 'disconnected', arthas: null, health: 'off'
+    });
+    if (typeof ConnectionPool !== 'undefined') ConnectionPool.render();
+    if (typeof ConnectionWorkspace !== 'undefined') ConnectionWorkspace.render();
+  }
+  
   _connected = false; _ap = null; _sid = null; _cid = null;
   window._selectedJavaPid = null;  // 清除选中的 PID
   const ptBtn = document.getElementById('ptConnBtn');

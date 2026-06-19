@@ -499,6 +499,30 @@ async function podConnect() {
         created_at: new Date().toISOString()
       });
     }
+
+    // 同步到新连接池
+    if (typeof ConnectionStore !== 'undefined' && typeof ConnectionPool !== 'undefined') {
+      const existingConn = ConnectionStore.getConnection(d.connection_id);
+      if (existingConn) {
+        ConnectionStore.updateConnection(d.connection_id, {
+          state: ConnectionState.POD_CONNECTED, level: 'pod',
+          health: 'ok', lastHb: Date.now(), runtime: d.runtime, pid: d.runtime?.pid,
+        });
+      } else {
+        ConnectionStore.addConnection({
+          id: d.connection_id, cluster: t.cluster_name, namespace: t.namespace,
+          pod: t.pod_name, runtime: d.runtime, pid: d.runtime?.pid, uptime: '0h',
+        });
+        ConnectionStore.updateConnection(d.connection_id, {
+          state: ConnectionState.POD_CONNECTED, level: 'pod',
+          health: 'ok', lastHb: Date.now(),
+        });
+      }
+      ConnectionStore.setFocus(d.connection_id);
+      ConnectionPool.render();
+      ConnectionWorkspace.render();
+    }
+
     if (typeof renderConnList === 'function') renderConnList();
 
     // ✅ UI 已经在前面更新过了,这里不再重复调用
@@ -674,6 +698,10 @@ async function upgradeToArthas() {
     // 更新 UI
     updateConnectionButton();
     updateFeatureTabs();
+
+    // 刷新新连接池和工作区
+    if (typeof ConnectionPool !== 'undefined') ConnectionPool.render();
+    if (typeof ConnectionWorkspace !== 'undefined') ConnectionWorkspace.render();
 
     const reused = Boolean(d.reused);
     const verSuffix = d.arthas_version ? ` Arthas ${d.arthas_version}` : '';
