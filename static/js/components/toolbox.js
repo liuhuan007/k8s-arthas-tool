@@ -127,6 +127,101 @@
 
   window.openDistributeHistory = function() {
     openModal('distHistoryModal');
+    loadDistHistory();
+  };
+
+  let _distHistoryData = [];
+  let _distHistoryFilter = 'all';
+
+  async function loadDistHistory(page = 1) {
+    const container = document.getElementById('distHistoryList');
+    if (!container) return;
+    container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx2)">加载中...</div>';
+
+    try {
+      const limit = 10;
+      const offset = (page - 1) * limit;
+      const data = await safeGet(`/tasks/tool-packages/distributions?limit=${limit}&offset=${offset}`);
+      _distHistoryData = data.distributions || [];
+      renderDistHistory(_distHistoryData);
+    } catch (e) {
+      container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx2)">加载失败</div>';
+    }
+  }
+
+  function renderDistHistory(records) {
+    const container = document.getElementById('distHistoryList');
+    const countEl = document.getElementById('distHistoryCount');
+    if (!container) return;
+
+    let filtered = records;
+    if (_distHistoryFilter !== 'all') {
+      filtered = records.filter(r => r.status === _distHistoryFilter);
+    }
+
+    if (filtered.length === 0) {
+      container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx2)">暂无分发记录</div>';
+      if (countEl) countEl.textContent = '共 0 条记录';
+      return;
+    }
+
+    if (countEl) countEl.textContent = `共 ${filtered.length} 条记录`;
+
+    container.innerHTML = filtered.map(r => {
+      const statusClass = r.status === 'success' ? 'running' : 'stopped';
+      const statusText = r.status === 'success' ? '成功' : '失败';
+      const time = r.distributed_at ? new Date(r.distributed_at).toLocaleString('zh-CN') : '-';
+      const target = `${r.target_cluster || ''} / ${r.target_namespace || ''} / ${r.target_pod || ''}`;
+      const duration = r.duration_ms ? `${(r.duration_ms / 1000).toFixed(1)}s` : '-';
+      const toolName = r.tool_name || r.tool_id || '-';
+
+      return `
+        <div style="display:grid;grid-template-columns:60px 140px 1fr 100px 80px 100px;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(40,61,90,.2);font-size:12px;align-items:center">
+          <div><span style="background:rgba(0,122,255,.15);color:var(--a);padding:2px 6px;border-radius:4px;font-size:10px">Pod</span></div>
+          <div style="color:var(--tx2);font-size:11px">${esc(time)}</div>
+          <div>
+            <div style="font-weight:600">${esc(target)}</div>
+            <div style="font-size:10px;color:var(--tx3)">${esc(toolName)}</div>
+            ${r.error_message ? `<div style="font-size:10px;color:#ff3b30">${esc(r.error_message)}</div>` : ''}
+          </div>
+          <div><span class="badge badge-${statusClass}">${statusText}</span></div>
+          <div style="color:var(--tx2);font-size:11px">${duration}</div>
+          <div>
+            <button class="btn btn-g btn-sm" style="font-size:10px" onclick="openDistDetailModal(${r.id})">详情</button>
+            ${r.status === 'failed' ? `<button class="btn btn-p btn-sm" style="font-size:10px" onclick="retryDist(${r.id})">重试</button>` : ''}
+          </div>
+        </div>
+      `;
+    }).join('');
+  }
+
+  window.filterDistHistory = function(query) {
+    query = query.toLowerCase();
+    const filtered = _distHistoryData.filter(r =>
+      !query ||
+      (r.tool_name || '').toLowerCase().includes(query) ||
+      (r.target_cluster || '').toLowerCase().includes(query) ||
+      (r.target_pod || '').toLowerCase().includes(query)
+    );
+    renderDistHistory(filtered);
+  };
+
+  window.filterDistByStatus = function(status, btn) {
+    _distHistoryFilter = status;
+    btn.parentElement.querySelectorAll('.btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    renderDistHistory(_distHistoryData);
+  };
+
+  window.retryDist = async function(distId) {
+    if (!confirm('确认重试此分发？')) return;
+    try {
+      await safePost('/tasks/distributions/retry', { dist_id: distId });
+      toast('重试成功', 'ok');
+      loadDistHistory();
+    } catch (e) {
+      toast(`重试失败: ${e.message}`, 'err');
+    }
   };
 
   // ═══════════════════════════════════════════════════════════════
@@ -1470,6 +1565,7 @@
     `;
     document.body.appendChild(modal);
     loadBatchToolLists();
+    initBatchClusterSelects();
   };
 
   let _batchState = { step: 1, selectedTools: [], selectedPods: [] };
@@ -1540,11 +1636,98 @@
     }
   }
 
-  window.loadBatchPods = function() {
-    // TODO: Load pods based on cluster and namespace selection
+  async function _loadBatchClusters() {
+    try {
+      const data = await safeGet('/clusters');
+      return data.clusters || [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  async function _loadBatchNamespaces(cluster) {
+    try {
+      const data = await safeGet(`/clusters/${encodeURIComponent(cluster)}/namespaces`);
+      return data.namespaces || [];
+    } catch (e) {
+      return ['default'];
+    }
+  }
+
+  async function _loadBatchPods(cluster, namespace) {
+    try {
+      const data = await safeGet(`/clusters/${encodeURIComponent(cluster)}/pods?namespace=${encodeURIComponent(namespace)}`);
+      return data.pods || [];
+    } catch (e) {
+      return [];
+    }
+  }
+
+  window.initBatchClusterSelects = async function() {
+    const clusters = await _loadBatchClusters();
+    const clusterOptions = clusters.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
+
+    // Pod target cluster select
+    const podCluster = document.querySelector('#batchTargetPod select');
+    if (podCluster) {
+      podCluster.innerHTML = '<option value="">选择集群</option>' + clusterOptions;
+      podCluster.onchange = async () => {
+        const ns = await _loadBatchNamespaces(podCluster.value);
+        const nsSelect = document.querySelectorAll('#batchTargetPod select')[1];
+        if (nsSelect) {
+          nsSelect.innerHTML = ns.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
+          nsSelect.onchange = () => loadBatchPodList(podCluster.value, nsSelect.value);
+          if (ns.length > 0) loadBatchPodList(podCluster.value, ns[0]);
+        }
+      };
+    }
+
+    // Node target cluster select
+    const nodeCluster = document.querySelector('#batchTargetNode select');
+    if (nodeCluster) {
+      nodeCluster.innerHTML = '<option value="">选择集群</option>' + clusterOptions;
+    }
+
+    // NS target cluster select
+    const nsCluster = document.querySelector('#batchTargetNamespace select');
+    if (nsCluster) {
+      nsCluster.innerHTML = '<option value="">选择集群</option>' + clusterOptions;
+    }
+
+    // Label target cluster select
+    const labelCluster = document.querySelector('#batchTargetLabel select');
+    if (labelCluster) {
+      labelCluster.innerHTML = '<option value="">选择集群</option>' + clusterOptions;
+    }
+  };
+
+  async function loadBatchPodList(cluster, namespace) {
     const container = document.getElementById('batchPodList');
-    if (container) {
-      container.innerHTML = '<div style="text-align:center;color:var(--tx2);font-size:12px;padding:20px">加载中...</div>';
+    if (!container || !cluster || !namespace) return;
+    container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx2)">加载中...</div>';
+
+    const pods = await _loadBatchPods(cluster, namespace);
+    if (pods.length === 0) {
+      container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx2)">暂无 Pod</div>';
+      return;
+    }
+
+    container.innerHTML = pods.map(p => `
+      <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+        <input type="checkbox" value="${esc(p.name)}" style="width:14px;height:14px">
+        <div style="flex:1;font-size:12px">
+          <span style="font-weight:600">${esc(p.name)}</span>
+          <span style="color:var(--tx2);margin:0 4px">${esc(p.phase || 'Unknown')}</span>
+        </div>
+      </label>
+    `).join('');
+  }
+
+  window.loadBatchPods = function() {
+    const cluster = document.querySelector('#batchTargetPod select')?.value;
+    const ns = document.querySelectorAll('#batchTargetPod select')[1]?.value;
+    if (cluster && ns) {
+      loadBatchPodList(cluster, ns);
     }
   };
 

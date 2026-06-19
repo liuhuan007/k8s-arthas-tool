@@ -4562,6 +4562,11 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
   background: rgba(0,122,255,.08);
   border-color: var(--a);
 }
+.pool-add-btn-active {
+  background: var(--a);
+  color: #fff;
+  border-color: var(--a);
+}
 .pool-srch {
   padding: 0 12px 8px;
 }

@@ -73,16 +73,24 @@ const ConnectionPool = (function() {
     const cluster = document.getElementById('poolSelCluster')?.value;
     const ns = document.getElementById('poolSelNs')?.value;
     const podSelect = document.getElementById('poolSelPod');
+    const preview = document.getElementById('addConnPreview');
     if (!podSelect || !cluster || !ns) return;
+    podSelect.innerHTML = '<option value="">加载中...</option>';
     try {
       const r = await fetch(`${API}/clusters/${encodeURIComponent(cluster)}/pods?namespace=${encodeURIComponent(ns)}`, { credentials: 'include' });
       const d = await r.json();
       if (d.ok && d.pods) {
         podSelect.innerHTML = '<option value="">选择 Pod...</option>' +
           d.pods.map(p => `<option value="${p.name}" data-containers="${(p.containers||[]).join(',')}">[${p.phase}] ${p.name}</option>`).join('');
+        // 更新预览
+        if (preview) {
+          preview.innerHTML = `<div style="font-size:12px;color:var(--tx)">${d.pods.length} 个 Pod 可用</div>` +
+            d.pods.map(p => `<div style="padding:4px 0;border-bottom:1px solid var(--ln);display:flex;justify-content:space-between"><span>${p.name}</span><span style="color:${p.phase==='Running'?'var(--a3)':'var(--a5)'}">${p.phase}</span></div>`).join('');
+        }
       }
     } catch (e) {
       podSelect.innerHTML = '<option value="">加载失败</option>';
+      if (preview) preview.innerHTML = '<div style="color:var(--a5)">Pod 列表加载失败</div>';
     }
   }
 
@@ -220,7 +228,28 @@ const ConnectionPool = (function() {
   }
 
   function toggleAddPanel() {
-    document.getElementById('poolAddPanel')?.classList.toggle('show');
+    // 在工作区右侧显示新建连接面板
+    document.getElementById('wsEmpty').style.display = 'none';
+    document.getElementById('wsContent').style.display = 'none';
+    const addView = document.getElementById('addConnView');
+    if (addView) addView.style.display = 'flex';
+    // 高亮"+ 新连接"按钮
+    const btn = document.getElementById('poolAddBtn');
+    if (btn) btn.classList.add('pool-add-btn-active');
+    // 加载集群列表
+    loadClusters();
+  }
+
+  function cancelAdd() {
+    document.getElementById('addConnView').style.display = 'none';
+    const focusId = ConnectionStore.getFocusId();
+    if (focusId) {
+      document.getElementById('wsContent').style.display = 'flex';
+    } else {
+      document.getElementById('wsEmpty').style.display = 'flex';
+    }
+    const btn = document.getElementById('poolAddBtn');
+    if (btn) btn.classList.remove('pool-add-btn-active');
   }
 
   function filterPool(q) {
@@ -264,7 +293,9 @@ const ConnectionPool = (function() {
       toast(`连接失败: ${e.message}`, 'error');
     }
 
-    document.getElementById('poolAddPanel')?.classList.remove('show');
+    document.getElementById('addConnView').style.display = 'none';
+    const btn = document.getElementById('poolAddBtn');
+    if (btn) btn.classList.remove('pool-add-btn-active');
   }
 
   function confirmDelete(id) {
