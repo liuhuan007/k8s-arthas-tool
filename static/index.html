@@ -62,7 +62,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <script src="js/app.js"></script>
 
 <!-- ✅ 新增: 统一状态管理 -->
-<script src="js/core/connection-store.js?v=20260522a"></script>
+<script src="js/core/connection-store.js?v=20260619aa"></script>
 
 <!-- ✅ 新增: WebSocket 实时推送 -->
 <script src="js/core/websocket-client.js?v=20260505a"></script>
@@ -248,7 +248,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="pool-tt"><span>🔌 连接池</span><span id="poolCount" style="color:var(--a)"></span></div>
     <button class="pool-add-btn" id="poolAddBtn">+ 新连接</button>
   </div>
-  <div class="pool-srch"><input id="poolSearch" placeholder="搜索 Pod / 集群 / 命名空间..." aria-label="搜索连接"></div>
+  <div class="pool-srch"><input id="poolSearch" placeholder="搜索 Pod / 集群 / 命名空间..." aria-label="搜索连接" autocomplete="off"></div>
   <div class="pool-ls" id="poolList"></div>
     <div id="poolAddPanel" class="pool-add">
       <button class="pool-add-confirm" id="poolAddConfirm" style="display:none">确认连接</button>
@@ -287,7 +287,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <select id="poolSelPod" size="12" style="width:100%;padding:8px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-size:13px"><option value="">选择 Pod...</option></select>
           </div>
           <div style="display:flex;gap:8px">
-            <button class="pool-add-confirm" id="poolAddConfirm" style="flex:1;padding:10px;font-size:13px">🔌 连接</button>
+            <button class="pool-add-confirm" id="poolAddConfirm" onclick="ConnectionPool.addNewConnection()" style="flex:1;padding:10px;font-size:13px">🔌 连接</button>
             <button onclick="ConnectionPool.cancelAdd()" style="padding:10px 16px;background:var(--bg2);color:var(--tx2);border:1px solid var(--ln);border-radius:4px;font-size:13px;cursor:pointer">取消</button>
           </div>
         </div>
@@ -773,7 +773,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="toolbox-toolbar-left">
               <div class="toolbox-search">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="text" id="searchBinary" placeholder="搜索二进制工具..." oninput="filterBinaryTools(this.value)">
+                <input type="text" id="searchBinary" placeholder="搜索二进制工具..." oninput="filterBinaryTools(this.value)" autocomplete="off">
               </div>
             </div>
             <div class="toolbox-toolbar-right">
@@ -793,7 +793,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="toolbox-toolbar-left">
               <div class="toolbox-search">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="text" id="searchScript" placeholder="搜索脚本工具..." oninput="filterScriptTools(this.value)">
+                <input type="text" id="searchScript" placeholder="搜索脚本工具..." oninput="filterScriptTools(this.value)" autocomplete="off">
               </div>
             </div>
             <div class="toolbox-toolbar-right">
@@ -965,7 +965,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="cp-title">🎯 命令面板</div>
             <div class="cp-cst" id="cpSt"></div>
           </div>
-          <div class="cp-search"><input id="cmdSearch" placeholder="搜索命令..." oninput="filterCmds(this.value)"></div>
+          <div class="cp-search"><input id="cmdSearch" placeholder="搜索命令..." oninput="filterCmds(this.value)" autocomplete="off"></div>
           <div class="cp-cats" id="cmdPal"></div>
         </div>
         <div class="ac-right">
@@ -1892,7 +1892,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <button class="dc-filter-btn" onclick="dcFilterCategory(this, 'quick')">⚡ 快速</button>
             <button class="dc-filter-btn" onclick="dcFilterCategory(this, 'tool')">🔍 工具</button>
             <input type="text" class="dc-search-input" id="dcSearchInput-quick"
-                placeholder="搜索诊断能力..." oninput="dcOnSearch(this.value)">
+                placeholder="搜索诊断能力..." oninput="dcOnSearch(this.value)" autocomplete="off">
           </div>
           <div class="dc-result-container" id="dcResultContainer-quick"></div>
           <div id="dcCapabilityGrid-quick"></div>
@@ -1901,7 +1901,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="dc-panel" id="dc-panel-scenario" style="overflow-y:auto;padding:20px">
           <div class="dc-filter-bar">
             <input type="text" class="dc-search-input" id="dcSearchInput-scenario"
-                placeholder="搜索场景方案..." oninput="dcOnSearch(this.value)">
+                placeholder="搜索场景方案..." oninput="dcOnSearch(this.value)" autocomplete="off">
           </div>
           <div class="dc-result-container" id="dcResultContainer-scenario"></div>
           <div id="dcCapabilityGrid-scenario"></div>
@@ -1910,7 +1910,7 @@ document.addEventListener('DOMContentLoaded', function() {
         <div class="dc-panel" id="dc-panel-ai" style="overflow-y:auto;padding:20px">
           <div class="dc-filter-bar">
             <input type="text" class="dc-search-input" id="dcSearchInput-ai"
-                placeholder="搜索 AI 诊断..." oninput="dcOnSearch(this.value)">
+                placeholder="搜索 AI 诊断..." oninput="dcOnSearch(this.value)" autocomplete="off">
           </div>
           <div class="dc-result-container" id="dcResultContainer-ai"></div>
           <div id="dcCapabilityGrid-ai"></div>
@@ -2085,7 +2085,7 @@ document.addEventListener('DOMContentLoaded', function() {
       <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
         <div class="toolbox-search" style="flex:1">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" id="distHistorySearch" placeholder="搜索分发记录..." oninput="filterDistHistory(this.value)">
+          <input type="text" id="distHistorySearch" placeholder="搜索分发记录..." oninput="filterDistHistory(this.value)" autocomplete="off">
         </div>
         <div style="display:flex;gap:6px">
           <button class="btn btn-g btn-sm active" onclick="filterDistByStatus('all', this)">全部</button>
@@ -2135,7 +2135,7 @@ document.addEventListener('DOMContentLoaded', function() {
 </div>
 
 <!-- 连接池 + 工作区初始化 -->
-<script src="js/components/connection-pool.js"></script>
+<script src="js/components/connection-pool.js?v=20260619d"></script>
 <script src="js/components/connection-workspace.js"></script>
 <script>
 document.addEventListener('DOMContentLoaded', function() {
