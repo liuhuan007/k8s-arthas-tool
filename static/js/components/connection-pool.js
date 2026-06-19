@@ -228,7 +228,10 @@ const ConnectionPool = (function() {
   }
 
   function toggleAddPanel() {
-    // 在工作区右侧显示新建连接面板
+    // 显示工作区区域（可能被隐藏）
+    const wsArea = document.getElementById('workspaceArea');
+    if (wsArea) wsArea.style.display = 'flex';
+    // 隐藏空状态和内容，显示新建连接面板
     document.getElementById('wsEmpty').style.display = 'none';
     document.getElementById('wsContent').style.display = 'none';
     const addView = document.getElementById('addConnView');
@@ -447,6 +450,24 @@ const ConnectionPool = (function() {
 
   function stopHeartbeat() {
     if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
+  }
+
+  // ── 确认弹窗 ──────────────────────────────────────────────────
+  function showConfirm(title, message, onConfirm) {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);display:flex;align-items:center;justify-content:center;z-index:1000';
+    overlay.innerHTML = `<div style="background:var(--bg1);border:1px solid var(--ln);border-radius:8px;padding:20px;max-width:400px;width:90%">
+      <div style="font-size:14px;font-weight:600;margin-bottom:8px;color:var(--tx)">${title}</div>
+      <div style="font-size:12px;color:var(--tx2);white-space:pre-line;margin-bottom:16px">${message}</div>
+      <div style="display:flex;justify-content:flex-end;gap:8px">
+        <button class="pool-btn pool-btn-warn" onclick="this.closest('.modal-overlay').remove()">取消</button>
+        <button class="pool-btn pool-btn-primary" id="confirmBtn">确认</button>
+      </div>
+    </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelector('#confirmBtn').onclick = () => { overlay.remove(); onConfirm(); };
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   }
 
   return {
