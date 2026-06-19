@@ -2094,7 +2094,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div><span class="badge badge-running">成功</span></div>
           <div style="color:var(--tx2);font-size:11px">2.3s</div>
           <div>
-            <button class="btn btn-g btn-sm" style="font-size:10px">详情</button>
+            <button class="btn btn-g btn-sm" style="font-size:10px" onclick="openDistDetailModal('dist-001')">详情</button>
           </div>
         </div>
 
@@ -2108,7 +2108,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div><span class="badge badge-running">3 成功</span></div>
           <div style="color:var(--tx2);font-size:11px">8.2s</div>
           <div>
-            <button class="btn btn-g btn-sm" style="font-size:10px">详情</button>
+            <button class="btn btn-g btn-sm" style="font-size:10px" onclick="openDistDetailModal('dist-002')">详情</button>
           </div>
         </div>
 
@@ -2122,7 +2122,8 @@ document.addEventListener('DOMContentLoaded', function() {
           <div><span class="badge badge-stopped">失败</span></div>
           <div style="color:var(--tx2);font-size:11px">0.4s</div>
           <div>
-            <button class="btn btn-p btn-sm" style="font-size:10px">重试</button>
+            <button class="btn btn-g btn-sm" style="font-size:10px" onclick="openDistDetailModal('dist-123')">详情</button>
+            <button class="btn btn-p btn-sm" style="font-size:10px" onclick="openRetryModal('dist-123', 1, 'prod/default/pod-d-9e1b3')">重试</button>
           </div>
         </div>
       </div>

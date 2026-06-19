@@ -144,37 +144,67 @@ const ConnectionWorkspace = (function() {
     if (!body) return;
     const t = c.pmTab || 'ov';
 
+    // 先显示骨架屏
+    if (t === 'ov' || t === 'pr' || t === 'nw' || t === 'dk') {
+      body.innerHTML = '<div class="skeleton" style="height:200px;margin:16px"></div>';
+    }
+
+    // 从后端获取真实数据
+    const connId = c.pod_conn_id || c.id;
+    if (!connId) { body.innerHTML = '<div style="padding:16px;color:var(--tx3)">请先建立连接</div>'; return; }
+
     if (t === 'ov') {
-      const cpu = (Math.random() * 60 + 5).toFixed(1);
-      const mem = Math.floor(Math.random() * 500 + 100);
-      const th = Math.floor(Math.random() * 80 + 10);
-      const gc = Math.floor(Math.random() * 20);
-      const rx = Math.floor(Math.random() * 200 + 10);
-      const tx = Math.floor(Math.random() * 80 + 5);
-      body.innerHTML = `<div class="mg">
-        <div class="mc"><div class="lb">CPU</div><div class="vl ${cpu > 50 ? 'yellow' : 'green'}">${cpu}<span class="un">%</span></div><div class="bar"><div class="bar-f" style="width:${cpu}%;background:${cpu > 50 ? 'var(--a6)' : 'var(--a3)'}"></div></div></div>
-        <div class="mc"><div class="lb">内存</div><div class="vl blue">${mem}<span class="un">MB</span></div><div class="bar"><div class="bar-f" style="width:${mem / 40}%;background:var(--a)"></div></div></div>
-        <div class="mc"><div class="lb">线程</div><div class="vl">${th}</div></div>
-        <div class="mc"><div class="lb">GC</div><div class="vl">${gc}<span class="un">次</span></div></div>
-        <div class="mc"><div class="lb">RX</div><div class="vl green">${rx}<span class="un">KB/s</span></div></div>
-        <div class="mc"><div class="lb">TX</div><div class="vl blue">${tx}<span class="un">KB/s</span></div></div>
-      </div>`;
+      fetchMonitorSnapshot(connId).then(d => {
+        const cpu = d.cpu_percent ?? 0;
+        const mem = d.memory_used_mb ?? 0;
+        const memMax = d.memory_limit_mb ?? 4096;
+        const th = d.threads ?? 0;
+        const gc = d.gc_count ?? 0;
+        const rx = d.network_rx_kb ?? 0;
+        const tx = d.network_tx_kb ?? 0;
+        body.innerHTML = `<div class="mg">
+          <div class="mc"><div class="lb">CPU</div><div class="vl ${cpu > 50 ? 'yellow' : 'green'}">${cpu.toFixed(1)}<span class="un">%</span></div><div class="bar"><div class="bar-f" style="width:${Math.min(cpu, 100)}%;background:${cpu > 50 ? 'var(--a6)' : 'var(--a3)'}"></div></div></div>
+          <div class="mc"><div class="lb">内存</div><div class="vl blue">${Math.round(mem)}<span class="un">MB / ${Math.round(memMax)}MB</span></div><div class="bar"><div class="bar-f" style="width:${memMax ? (mem / memMax * 100) : 0}%;background:var(--a)"></div></div></div>
+          <div class="mc"><div class="lb">线程</div><div class="vl">${th}</div></div>
+          <div class="mc"><div class="lb">GC</div><div class="vl">${gc}<span class="un">次</span></div></div>
+          <div class="mc"><div class="lb">RX</div><div class="vl green">${rx}<span class="un">KB/s</span></div></div>
+          <div class="mc"><div class="lb">TX</div><div class="vl blue">${tx}<span class="un">KB/s</span></div></div>
+        </div>`;
+      }).catch(() => { body.innerHTML = '<div style="padding:16px;color:var(--a5)">监控数据加载失败</div>'; });
     } else if (t === 'pr') {
-      body.innerHTML = `<table class="pt"><thead><tr><th>PID</th><th>名称</th><th>CPU%</th><th>MEM%</th><th>状态</th></tr></thead><tbody>
-        <tr><td class="pid">${c.pid || '?'}</td><td>${c.runtime?.type === 'java' ? 'java' : c.runtime?.type === 'node' ? 'node' : c.runtime?.type}</td><td>12.3%</td><td>345%</td><td><span class="st run">运行</span></td></tr>
-      </tbody></table>`;
+      fetchMonitorProcesses(connId).then(d => {
+        const procs = d.processes || [];
+        body.innerHTML = `<table class="pt"><thead><tr><th>PID</th><th>名称</th><th>CPU%</th><th>MEM%</th><th>状态</th></tr></thead><tbody>
+          ${procs.map(p => `<tr><td class="pid">${p.pid}</td><td>${p.name || p.cmd?.split(' ')[0] || '?'}</td><td>${(p.cpu || 0).toFixed(1)}%</td><td>${(p.mem_percent || 0).toFixed(1)}%</td><td><span class="st ${p.state === 'R' ? 'run' : 'sl'}">${p.state === 'R' ? '运行' : '休眠'}</span></td></tr>`).join('')}
+        </tbody></table>`;
+      }).catch(() => { body.innerHTML = '<div style="padding:16px;color:var(--a5)">进程数据加载失败</div>'; });
     } else if (t === 'nw') {
-      body.innerHTML = `<div class="ng"><div class="nc"><div class="nc-t">🌐 eth0</div><div class="nr"><span class="k">RX</span><span class="v">1.2 GB</span></div><div class="nr"><span class="k">TX</span><span class="v">856 MB</span></div></div></div>`;
+      fetchMonitorNetwork(connId).then(d => {
+        const ifaces = d.interfaces || [];
+        body.innerHTML = `<div class="ng">${ifaces.map(iface => `<div class="nc"><div class="nc-t">🌐 ${iface.name}</div><div class="nr"><span class="k">RX</span><span class="v">${formatBytes(iface.rx_bytes)}</span></div><div class="nr"><span class="k">TX</span><span class="v">${formatBytes(iface.tx_bytes)}</span></div></div>`).join('')}</div>`;
+      }).catch(() => { body.innerHTML = '<div style="padding:16px;color:var(--a5)">网络数据加载失败</div>'; });
     } else if (t === 'ev') {
-      body.innerHTML = `<div class="ev"><div class="ei"><span class="tm">14:30</span><span class="tp w">⚠️</span><span class="ms">内存超过 80%</span></div><div class="ei"><span class="tm">14:28</span><span class="tp n">✅</span><span class="ms">健康检查通过</span></div></div>`;
+      fetchMonitorEvents(connId).then(d => {
+        const events = d.events || [];
+        body.innerHTML = `<div class="ev">${events.map(e => `<div class="ei"><span class="tm">${e.time || ''}</span><span class="tp ${e.type === 'Warning' ? 'w' : e.type === 'Error' ? 'e' : 'n'}">${e.type === 'Warning' ? '⚠️' : e.type === 'Error' ? '🔴' : '✅'}</span><span class="ms">${e.message || e.reason || ''}</span></div>`).join('') || '<div style="padding:16px;color:var(--tx3)">暂无事件</div>'}</div>`;
+      }).catch(() => { body.innerHTML = '<div style="padding:16px;color:var(--a5)">事件数据加载失败</div>'; });
     } else if (t === 'dk') {
-      body.innerHTML = `<div class="mg"><div class="mc"><div class="lb">/ 磁盘</div><div class="vl blue">12.3<span class="un">GB / 50GB</span></div></div></div>`;
+      fetchMonitorSnapshot(connId).then(d => {
+        const disk = d.disk || {};
+        body.innerHTML = `<div class="mg"><div class="mc"><div class="lb">/ 磁盘</div><div class="vl blue">${disk.used_gb || '?'}<span class="un">GB / ${disk.total_gb || '?'}GB</span></div><div class="bar"><div class="bar-f" style="width:${disk.total_gb ? (disk.used_gb / disk.total_gb * 100) : 0}%;background:var(--a)"></div></div></div></div>`;
+      }).catch(() => { body.innerHTML = '<div style="padding:16px;color:var(--a5)">磁盘数据加载失败</div>'; });
     } else if (t === 'lg') {
-      body.innerHTML = `<div class="term" style="font-size:11px">14:30:12 INFO  Application started\n14:30:12 INFO  Tomcat started on port 8080</div>`;
+      fetchMonitorLogs(connId).then(d => {
+        body.innerHTML = `<div class="term" style="font-size:11px">${(d.logs || []).join('\n') || '暂无日志'}</div>`;
+      }).catch(() => { body.innerHTML = '<div style="padding:16px;color:var(--a5)">日志加载失败</div>'; });
     } else if (t === 'cf') {
-      body.innerHTML = `<div class="card"><div class="card-tt">容器配置</div><div class="nr"><span class="k" style="color:var(--tx3)">CPU</span><span class="v">500m / 2000m</span></div><div class="nr"><span class="k" style="color:var(--tx3)">Memory</span><span class="v">512Mi / 4Gi</span></div></div>`;
+      body.innerHTML = `<div class="card"><div class="card-tt">容器配置</div>
+        <div class="nr"><span class="k" style="color:var(--tx3)">CPU</span><span class="v">${c.runtime?.type || '?'} ${c.runtime?.version || ''}</span></div>
+        <div class="nr"><span class="k" style="color:var(--tx3)">Pod</span><span class="v">${c.pod || '?'}</span></div>
+        <div class="nr"><span class="k" style="color:var(--tx3)">集群</span><span class="v">${c.cluster || '?'} / ${c.namespace || '?'}</span></div></div>`;
     } else if (t === 'mt') {
-      body.innerHTML = `<div class="card"><div class="card-tt">📈 CPU / 内存趋势</div><div style="height:150px;background:var(--bg2);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--tx3);font-size:12px">实时图表区域</div></div>`;
+      body.innerHTML = `<div class="card"><div class="card-tt">📈 CPU / 内存趋势</div><div id="monitorChart" style="height:150px;background:var(--bg2);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--tx3);font-size:12px">加载中...</div></div>`;
+      // 可扩展为实时图表
     }
   }
 
@@ -282,6 +312,65 @@ openjdk version "${c.runtime?.version || '?'}" 2022-01-18 LTS</div></div></div>`
       <div style="color:var(--tx3);text-align:center;padding:20px">按场景组织 JVM 与 Pod 诊断<br>
       <span style="font-size:11px;margin-top:8px;display:block">需要 Arthas 连接</span></div>
     </div></div>`;
+  }
+
+  // ── API 辅助函数 ──────────────────────────────────────────────
+
+  async function fetchMonitorSnapshot(connId) {
+    try {
+      const r = await fetch(`${API}/monitor/snapshot`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ connection_id: connId })
+      });
+      return await r.json();
+    } catch { return {}; }
+  }
+
+  async function fetchMonitorProcesses(connId) {
+    try {
+      const r = await fetch(`${API}/monitor/pod`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ connection_id: connId })
+      });
+      return await r.json();
+    } catch { return {}; }
+  }
+
+  async function fetchMonitorNetwork(connId) {
+    try {
+      const r = await fetch(`${API}/monitor/snapshot`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ connection_id: connId })
+      });
+      return await r.json();
+    } catch { return {}; }
+  }
+
+  async function fetchMonitorEvents(connId) {
+    try {
+      const r = await fetch(`${API}/monitor/events`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ connection_id: connId })
+      });
+      return await r.json();
+    } catch { return {}; }
+  }
+
+  async function fetchMonitorLogs(connId) {
+    try {
+      const r = await fetch(`${API}/monitor/logs`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, credentials: 'include',
+        body: JSON.stringify({ connection_id: connId })
+      });
+      return await r.json();
+    } catch { return {}; }
+  }
+
+  function formatBytes(bytes) {
+    if (!bytes || bytes === 0) return '0 B';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
   }
 
   return { init, render, switchTab, switchPm, startSample };

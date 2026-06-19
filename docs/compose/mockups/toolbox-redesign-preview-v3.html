@@ -1,0 +1,1169 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工具箱重设计预览 v3 - 完整交互</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg2: #161b22;
+    --tx: #e6edf3;
+    --tx2: #8b949e;
+    --tx3: #6e7681;
+    --a: #007aff;
+    --a2: #58a6ff;
+    --border: rgba(40,61,90,.72);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--tx);
+    padding: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .preview-label {
+    background: #ff9500;
+    color: #000;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    display: inline-block;
+    margin-bottom: 16px;
+  }
+
+  /* Header */
+  .toolbox-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+
+  .toolbox-header h2 {
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .toolbox-header-desc {
+    font-size: 13px;
+    color: var(--tx2);
+  }
+
+  .toolbox-header-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  /* Tabs */
+  .toolbox-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    background: rgba(0,0,0,.2);
+    border: 1px solid rgba(40,61,90,.4);
+    border-radius: 10px;
+    margin-bottom: 20px;
+  }
+
+  .toolbox-tab {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--tx2);
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+
+  .toolbox-tab:hover {
+    color: var(--tx);
+    background: rgba(255,255,255,.05);
+  }
+
+  .toolbox-tab.active {
+    color: var(--a);
+    background: rgba(0,122,255,.15);
+  }
+
+  .toolbox-tab .tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--a);
+    background: rgba(0,122,255,.2);
+    border-radius: 9px;
+  }
+
+  /* Toolbar */
+  .toolbox-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 16px;
+    background: rgba(0,0,0,.2);
+    border: 1px solid rgba(40,61,90,.4);
+    border-radius: 10px;
+    margin-bottom: 20px;
+  }
+
+  .toolbox-toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex: 1;
+  }
+
+  .toolbox-toolbar-right {
+    display: flex;
+    gap: 8px;
+  }
+
+  .toolbox-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(0,0,0,.3);
+    border: 1px solid rgba(40,61,90,.5);
+    border-radius: 8px;
+    min-width: 200px;
+  }
+
+  .toolbox-search svg {
+    color: var(--tx2);
+    flex-shrink: 0;
+  }
+
+  .toolbox-search input {
+    background: none;
+    border: none;
+    color: var(--tx);
+    font-size: 13px;
+    width: 100%;
+    outline: none;
+  }
+
+  .toolbox-search input::placeholder {
+    color: var(--tx3);
+  }
+
+  /* Tab Content */
+  .tab-content {
+    display: none;
+  }
+
+  .tab-content.active {
+    display: block;
+  }
+
+  /* Card Grid */
+  .toolbox-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
+  }
+
+  /* Card */
+  .toolbox-card {
+    background: linear-gradient(180deg, rgba(22,30,43,.92), rgba(11,15,24,.6));
+    border: 1px solid rgba(40,61,90,.72);
+    border-radius: 12px;
+    padding: 16px;
+    transition: all .2s ease;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .toolbox-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--a), transparent);
+    opacity: 0;
+    transition: opacity .25s;
+  }
+
+  .toolbox-card:hover {
+    border-color: rgba(0,122,255,.45);
+    box-shadow: 0 12px 36px rgba(0,0,0,.2), 0 0 24px rgba(0,122,255,.06);
+    transform: translateY(-2px);
+  }
+
+  .toolbox-card:hover::before {
+    opacity: 1;
+  }
+
+  .toolbox-card-binary { --card-accent: var(--a); }
+  .toolbox-card-script { --card-accent: #34c759; }
+  .toolbox-card-quick  { --card-accent: #ff9500; }
+
+  .toolbox-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .toolbox-card-icon {
+    width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 8px;
+    background: rgba(0,122,255,.1);
+    border: 1px solid rgba(0,122,255,.2);
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+
+  .toolbox-card-script .toolbox-card-icon {
+    background: rgba(52,199,89,.1);
+    border-color: rgba(52,199,89,.2);
+  }
+
+  .toolbox-card-quick .toolbox-card-icon {
+    background: rgba(255,149,0,.1);
+    border-color: rgba(255,149,0,.2);
+  }
+
+  .toolbox-card-name {
+    font-weight: 700;
+    font-size: 14px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .badge {
+    font-size: 10px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-weight: 600;
+  }
+
+  .badge-running { background: rgba(52,199,89,.15); color: #34c759; }
+  .badge-stopped { background: rgba(255,59,48,.15); color: #ff3b30; }
+  .badge-low { background: rgba(52,199,89,.15); color: #34c759; }
+  .badge-medium { background: rgba(255,149,0,.15); color: #ff9500; }
+  .badge-high { background: rgba(255,59,48,.15); color: #ff3b30; }
+
+  .toolbox-card-meta {
+    font-size: 11px;
+    color: var(--tx2);
+    margin-bottom: 4px;
+  }
+
+  .toolbox-card-path {
+    font-size: 11px;
+    color: var(--tx3);
+    font-family: monospace;
+    margin-bottom: 12px;
+    padding: 6px 10px;
+    background: rgba(0,0,0,.25);
+    border: 1px solid rgba(40,61,90,.4);
+    border-radius: 6px;
+    word-break: break-all;
+  }
+
+  .toolbox-card-command {
+    font-size: 12px;
+    margin-bottom: 12px;
+  }
+
+  .toolbox-card-command code {
+    display: block;
+    background: rgba(0,0,0,.35);
+    padding: 8px 12px;
+    border-radius: 6px;
+    border: 1px solid rgba(40,61,90,.5);
+    font-size: 12px;
+    color: var(--a2);
+    font-family: monospace;
+  }
+
+  .toolbox-card-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all .15s;
+  }
+
+  .btn-sm { padding: 4px 10px; font-size: 11px; }
+  .btn-p { background: var(--a); color: white; border-color: var(--a); }
+  .btn-p:hover { background: #0066cc; }
+  .btn-g { background: rgba(255,255,255,.1); color: var(--tx2); border-color: rgba(40,61,90,.5); }
+  .btn-g:hover { background: rgba(255,255,255,.15); color: var(--tx); }
+  .btn-s { background: rgba(255,59,48,.1); color: #ff3b30; border-color: rgba(255,59,48,.3); }
+  .btn-s:hover { background: rgba(255,59,48,.2); }
+
+  /* Quick Actions */
+  .quick-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+
+  .quick-action-card {
+    background: linear-gradient(180deg, rgba(22,30,43,.92), rgba(11,15,24,.6));
+    border: 1px solid rgba(40,61,90,.72);
+    border-radius: 10px;
+    padding: 14px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+
+  .quick-action-card:hover {
+    border-color: rgba(255,149,0,.4);
+    transform: translateY(-1px);
+  }
+
+  .quick-action-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .quick-action-icon {
+    font-size: 16px;
+  }
+
+  .quick-action-name {
+    font-weight: 700;
+    font-size: 13px;
+    flex: 1;
+  }
+
+  .quick-action-category {
+    font-size: 10px;
+    color: var(--tx3);
+    padding: 2px 6px;
+    background: rgba(0,0,0,.2);
+    border-radius: 4px;
+  }
+
+  .quick-action-cmd {
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--a2);
+    background: rgba(0,0,0,.3);
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    word-break: break-all;
+  }
+
+  .quick-action-footer {
+    display: flex;
+    gap: 6px;
+  }
+
+  /* Modal */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .modal {
+    width: 560px;
+    max-height: 85vh;
+    background: var(--bg2);
+    border: 1px solid rgba(40,61,90,.6);
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(40,61,90,.4);
+  }
+
+  .modal-header h3 {
+    font-size: 14px;
+    font-weight: 700;
+    margin: 0;
+  }
+
+  .btn-close {
+    background: none;
+    border: none;
+    color: var(--tx2);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+  }
+
+  .btn-close:hover {
+    background: rgba(255,255,255,.1);
+    color: var(--tx);
+  }
+
+  .modal-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+  }
+
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 16px 20px;
+    border-top: 1px solid rgba(40,61,90,.4);
+  }
+
+  /* Quick Select */
+  .dist-recent-section {
+    margin-bottom: 16px;
+  }
+
+  .dist-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--tx2);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+
+  .dist-recent-list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .dist-recent-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    background: rgba(0,0,0,.2);
+    border: 1px solid rgba(40,61,90,.4);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+
+  .dist-recent-item:hover {
+    border-color: rgba(0,122,255,.4);
+    background: rgba(0,122,255,.05);
+  }
+
+  .dist-recent-target {
+    font-size: 13px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .dist-recent-target .sep { color: var(--tx2); }
+
+  .dist-recent-select {
+    font-size: 12px;
+    color: var(--a);
+    font-weight: 600;
+  }
+
+  .dist-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--tx2);
+    margin: 16px 0;
+  }
+
+  .dist-divider::before,
+  .dist-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(40,61,90,.4);
+  }
+
+  /* Form */
+  .form-group {
+    margin-bottom: 14px;
+  }
+
+  .form-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--tx2);
+    margin-bottom: 6px;
+  }
+
+  .form-row {
+    display: flex;
+    gap: 12px;
+  }
+
+  .form-row .form-group {
+    flex: 1;
+  }
+
+  .inp {
+    width: 100%;
+    font-size: 12px;
+    background: rgba(0,0,0,.3);
+    border: 1px solid rgba(40,61,90,.6);
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: var(--tx);
+    outline: none;
+  }
+
+  .inp:focus {
+    border-color: rgba(0,122,255,.5);
+  }
+
+  textarea.inp {
+    font-family: monospace;
+    resize: vertical;
+    min-height: 120px;
+  }
+
+  .form-hint {
+    font-size: 11px;
+    color: var(--tx3);
+    margin-top: 4px;
+  }
+
+  /* Capability Badge */
+  .dist-cap-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .dist-cap-badge.cap-ok { background: rgba(52,199,89,.15); color: #34c759; }
+  .dist-cap-badge.cap-warn { background: rgba(255,149,0,.15); color: #ff9500; }
+  .dist-cap-badge.cap-error { background: rgba(255,59,48,.15); color: #ff3b30; }
+
+  /* Empty State */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 60px 20px;
+    border: 2px dashed rgba(40,61,90,.4);
+    border-radius: 12px;
+    text-align: center;
+  }
+
+  .empty-state-icon {
+    font-size: 48px;
+    margin-bottom: 16px;
+    opacity: 0.5;
+  }
+
+  .empty-state-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--tx2);
+    margin-bottom: 8px;
+  }
+
+  .empty-state-desc {
+    font-size: 12px;
+    color: var(--tx3);
+    margin-bottom: 16px;
+  }
+
+  .hidden { display: none !important; }
+
+  /* Execution Modal */
+  .exec-progress {
+    margin-top: 16px;
+  }
+
+  .exec-progress-bar {
+    height: 4px;
+    background: rgba(0,0,0,.3);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+
+  .exec-progress-fill {
+    height: 100%;
+    background: var(--a);
+    border-radius: 2px;
+    transition: width .3s ease;
+  }
+
+  .exec-log {
+    background: rgba(0,0,0,.4);
+    border: 1px solid rgba(40,61,90,.4);
+    border-radius: 6px;
+    padding: 12px;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--tx2);
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .exec-log .log-line {
+    margin-bottom: 4px;
+  }
+
+  .exec-log .log-success { color: #34c759; }
+  .exec-log .log-error { color: #ff3b30; }
+  .exec-log .log-info { color: var(--a2); }
+</style>
+</head>
+<body>
+
+<div class="preview-label">设计预览 v3 - 完整交互流程</div>
+
+<!-- Header -->
+<div class="toolbox-header">
+  <div>
+    <h2>工具箱</h2>
+    <span class="toolbox-header-desc">诊断辅助工具集</span>
+  </div>
+  <div class="toolbox-header-actions">
+    <button class="btn btn-g btn-sm">刷新</button>
+    <button class="btn btn-p btn-sm" onclick="openDemoModal('batch')">📦 批量分发</button>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="toolbox-tabs">
+  <button class="toolbox-tab active" data-tab="binary" onclick="switchTab('binary', this)">
+    📦 二进制工具 <span class="tab-count">3</span>
+  </button>
+  <button class="toolbox-tab" data-tab="script" onclick="switchTab('script', this)">
+    🐍 脚本工具 <span class="tab-count">2</span>
+  </button>
+  <button class="toolbox-tab" data-tab="quick" onclick="switchTab('quick', this)">
+    ⚡ 快捷操作 <span class="tab-count">5</span>
+  </button>
+</div>
+
+<!-- Binary Tools Tab -->
+<div class="tab-content active" id="tab-binary">
+  <div class="toolbox-toolbar">
+    <div class="toolbox-toolbar-left">
+      <div class="toolbox-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="搜索二进制工具...">
+      </div>
+    </div>
+    <div class="toolbox-toolbar-right">
+      <button class="btn btn-g btn-sm" onclick="openDemoModal('upload')">上传工具</button>
+    </div>
+  </div>
+
+  <div class="toolbox-card-grid">
+    <div class="toolbox-card toolbox-card-binary">
+      <div class="toolbox-card-header">
+        <div class="toolbox-card-icon">📦</div>
+        <span class="toolbox-card-name">arthas-boot.jar</span>
+        <span class="badge badge-running">可用</span>
+      </div>
+      <div class="toolbox-card-meta">v3.7.2 · 内置</div>
+      <div class="toolbox-card-path">/app/arthas/arthas-boot.jar</div>
+      <div class="toolbox-card-actions">
+        <button class="btn btn-g btn-sm">校验</button>
+        <button class="btn btn-p btn-sm" onclick="openDemoModal('distribute')">分发→</button>
+        <button class="btn btn-s btn-sm">删除</button>
+      </div>
+    </div>
+
+    <div class="toolbox-card toolbox-card-binary">
+      <div class="toolbox-card-header">
+        <div class="toolbox-card-icon">📦</div>
+        <span class="toolbox-card-name">async-profiler</span>
+        <span class="badge badge-running">可用</span>
+      </div>
+      <div class="toolbox-card-meta">v2.9 · 上传</div>
+      <div class="toolbox-card-path">/tmp/async-profiler-2.9.tar.gz</div>
+      <div class="toolbox-card-actions">
+        <button class="btn btn-g btn-sm">校验</button>
+        <button class="btn btn-p btn-sm" onclick="openDemoModal('distribute')">分发→</button>
+        <button class="btn btn-s btn-sm">删除</button>
+      </div>
+    </div>
+
+    <div class="toolbox-card toolbox-card-binary">
+      <div class="toolbox-card-header">
+        <div class="toolbox-card-icon">📦</div>
+        <span class="toolbox-card-name">jattach</span>
+        <span class="badge badge-stopped">停用</span>
+      </div>
+      <div class="toolbox-card-meta">v1.0 · 内置</div>
+      <div class="toolbox-card-path">/app/jattach</div>
+      <div class="toolbox-card-actions">
+        <button class="btn btn-g btn-sm">校验</button>
+        <button class="btn btn-p btn-sm" onclick="openDemoModal('distribute')">分发→</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Script Tools Tab -->
+<div class="tab-content" id="tab-script">
+  <div class="toolbox-toolbar">
+    <div class="toolbox-toolbar-left">
+      <div class="toolbox-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="搜索脚本工具...">
+      </div>
+    </div>
+    <div class="toolbox-toolbar-right">
+      <button class="btn btn-g btn-sm" onclick="openDemoModal('create-script')">+ 新建脚本</button>
+    </div>
+  </div>
+
+  <div class="toolbox-card-grid">
+    <div class="toolbox-card toolbox-card-script">
+      <div class="toolbox-card-header">
+        <div class="toolbox-card-icon">🐍</div>
+        <span class="toolbox-card-name">CPU分析脚本</span>
+        <span class="badge badge-low">低风险</span>
+      </div>
+      <div class="toolbox-card-meta">Python · 关联: CPU Profiling</div>
+      <div class="toolbox-card-actions">
+        <button class="btn btn-g btn-sm">编辑</button>
+        <button class="btn btn-p btn-sm" onclick="openDemoModal('execute')">执行→</button>
+        <button class="btn btn-s btn-sm">删除</button>
+      </div>
+    </div>
+
+    <div class="toolbox-card toolbox-card-script">
+      <div class="toolbox-card-header">
+        <div class="toolbox-card-icon">🐍</div>
+        <span class="toolbox-card-name">GC日志分析</span>
+        <span class="badge badge-low">低风险</span>
+      </div>
+      <div class="toolbox-card-meta">Shell</div>
+      <div class="toolbox-card-actions">
+        <button class="btn btn-g btn-sm">编辑</button>
+        <button class="btn btn-p btn-sm" onclick="openDemoModal('execute')">执行→</button>
+        <button class="btn btn-s btn-sm">删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Quick Actions Tab -->
+<div class="tab-content" id="tab-quick">
+  <div class="toolbox-toolbar">
+    <div class="toolbox-toolbar-left">
+      <div class="toolbox-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="搜索快捷操作...">
+      </div>
+    </div>
+    <div class="toolbox-toolbar-right">
+      <button class="btn btn-g btn-sm" onclick="openDemoModal('create-quick')">+ 新建操作</button>
+    </div>
+  </div>
+
+  <div class="quick-actions-grid">
+    <div class="quick-action-card" onclick="openDemoModal('execute')">
+      <div class="quick-action-header">
+        <span class="quick-action-icon">⚡</span>
+        <span class="quick-action-name">jad 反编译</span>
+        <span class="quick-action-category">JVM 基础</span>
+      </div>
+      <div class="quick-action-cmd">jad {class_name}</div>
+      <div class="quick-action-footer">
+        <button class="btn btn-p btn-sm">执行→</button>
+        <button class="btn btn-g btn-sm">文档</button>
+      </div>
+    </div>
+
+    <div class="quick-action-card" onclick="openDemoModal('execute')">
+      <div class="quick-action-header">
+        <span class="quick-action-icon">⚡</span>
+        <span class="quick-action-name">thread 堆栈</span>
+        <span class="quick-action-category">线程诊断</span>
+      </div>
+      <div class="quick-action-cmd">thread -n 3</div>
+      <div class="quick-action-footer">
+        <button class="btn btn-p btn-sm">执行→</button>
+        <button class="btn btn-g btn-sm">文档</button>
+      </div>
+    </div>
+
+    <div class="quick-action-card" onclick="openDemoModal('execute')">
+      <div class="quick-action-header">
+        <span class="quick-action-icon">⚡</span>
+        <span class="quick-action-name">dashboard</span>
+        <span class="quick-action-category">实时监控</span>
+      </div>
+      <div class="quick-action-cmd">dashboard</div>
+      <div class="quick-action-footer">
+        <button class="btn btn-p btn-sm">执行→</button>
+        <button class="btn btn-g btn-sm">文档</button>
+      </div>
+    </div>
+
+    <div class="quick-action-card" onclick="openDemoModal('execute')">
+      <div class="quick-action-header">
+        <span class="quick-action-icon">⚡</span>
+        <span class="quick-action-name">watch 监控</span>
+        <span class="quick-action-category">方法监控</span>
+      </div>
+      <div class="quick-action-cmd">watch {class} {method} -x 2</div>
+      <div class="quick-action-footer">
+        <button class="btn btn-p btn-sm">执行→</button>
+        <button class="btn btn-g btn-sm">文档</button>
+      </div>
+    </div>
+
+    <div class="quick-action-card" onclick="openDemoModal('execute')">
+      <div class="quick-action-header">
+        <span class="quick-action-icon">⚡</span>
+        <span class="quick-action-name">trace 调用链</span>
+        <span class="quick-action-category">性能分析</span>
+      </div>
+      <div class="quick-action-cmd">trace {class} {method}</div>
+      <div class="quick-action-footer">
+        <button class="btn btn-p btn-sm">执行→</button>
+        <button class="btn btn-g btn-sm">文档</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Distribute Modal -->
+<div class="modal-overlay hidden" id="modal-distribute" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>分发工具: arthas-boot.jar</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="dist-recent-section">
+        <div class="dist-section-title">⭐ 最近使用</div>
+        <div class="dist-recent-list">
+          <div class="dist-recent-item">
+            <div class="dist-recent-target">
+              <span>prod</span><span class="sep">/</span>
+              <span>default</span><span class="sep">/</span>
+              <span>pod-a-7cc5f</span><span class="sep">(app)</span>
+            </div>
+            <span class="dist-recent-select">选择</span>
+          </div>
+          <div class="dist-recent-item">
+            <div class="dist-recent-target">
+              <span>prod</span><span class="sep">/</span>
+              <span>default</span><span class="sep">/</span>
+              <span>pod-b-8d2e1</span><span class="sep">(app)</span>
+            </div>
+            <span class="dist-recent-select">选择</span>
+          </div>
+        </div>
+      </div>
+      <div class="dist-divider">或手动选择目标</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>集群</label>
+          <select class="inp"><option>prod</option><option>staging</option></select>
+        </div>
+        <div class="form-group">
+          <label>Namespace</label>
+          <select class="inp"><option>default</option><option>kube-system</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:2">
+          <label>Pod</label>
+          <select class="inp"><option>pod-a-7cc5f</option><option>pod-b-8d2e1</option></select>
+        </div>
+        <div class="form-group">
+          <label>容器</label>
+          <select class="inp"><option>app</option></select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Pod 能力</label>
+        <span class="dist-cap-badge cap-ok">✅ Java 11 + Arthas</span>
+      </div>
+      <div class="form-group">
+        <label>安装路径</label>
+        <input class="inp" value="/app/arthas/arthas-boot.jar">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">取消</button>
+      <button class="btn btn-p btn-sm" onclick="closeModal(); openDemoModal('executing')">确认分发</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Script Modal -->
+<div class="modal-overlay hidden" id="modal-create-script" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>新建脚本工具</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>脚本名称 *</label>
+        <input class="inp" placeholder="例如：GC日志分析">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>运行时</label>
+          <select class="inp">
+            <option>Python</option>
+            <option>Shell</option>
+            <option>Node.js</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>风险等级</label>
+          <select class="inp">
+            <option>低风险</option>
+            <option>中风险</option>
+            <option>高风险</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>说明</label>
+        <input class="inp" placeholder="可选，描述脚本用途">
+      </div>
+      <div class="form-group">
+        <label>脚本内容 *</label>
+        <textarea class="inp" placeholder="#!/usr/bin/env python&#10;import sys&#10;..."></textarea>
+        <div class="form-hint">支持 Python / Shell / Node.js 语法</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">取消</button>
+      <button class="btn btn-p btn-sm" onclick="closeModal()">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- Create Quick Action Modal -->
+<div class="modal-overlay hidden" id="modal-create-quick" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>新建快捷操作</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>操作名称 *</label>
+        <input class="inp" placeholder="例如：查看线程堆栈">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>分类</label>
+          <input class="inp" placeholder="例如：诊断、GC、线程">
+        </div>
+        <div class="form-group">
+          <label>风险等级</label>
+          <select class="inp">
+            <option>低风险</option>
+            <option>中风险</option>
+            <option>高风险</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>命令模板 *</label>
+        <textarea class="inp" rows="3" placeholder="thread -n 3"></textarea>
+        <div class="form-hint">使用 {class_name}、{method} 等占位符</div>
+      </div>
+      <div class="form-group">
+        <label>Arthas 文档链接</label>
+        <input class="inp" placeholder="可选，https://arthas.aliyun.com/...">
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">取消</button>
+      <button class="btn btn-p btn-sm" onclick="closeModal()">创建</button>
+    </div>
+  </div>
+</div>
+
+<!-- Execute Modal -->
+<div class="modal-overlay hidden" id="modal-execute" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>执行: jad 反编译</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>命令预览</label>
+        <div style="background:rgba(0,0,0,.3);padding:10px;border-radius:6px;font-family:monospace;font-size:12px;color:var(--a2)">
+          jad com.example.MyClass
+        </div>
+      </div>
+      <div class="form-group">
+        <label>目标 Pod</label>
+        <div style="font-size:13px;color:var(--tx)">
+          prod / default / pod-a-7cc5f <span class="dist-cap-badge cap-ok" style="margin-left:8px">✅ Arthas</span>
+        </div>
+      </div>
+      <div class="exec-progress">
+        <div class="exec-progress-bar">
+          <div class="exec-progress-fill" style="width:100%"></div>
+        </div>
+        <div class="exec-log">
+          <div class="log-line log-info">$ jad com.example.MyClass</div>
+          <div class="log-line log-success">✅ 反编译成功</div>
+          <div class="log-line log-info">输出文件: /tmp/arthas/com/example/MyClass.java</div>
+          <div class="log-line log-info">耗时: 0.8s</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">关闭</button>
+      <button class="btn btn-p btn-sm">下载结果</button>
+    </div>
+  </div>
+</div>
+
+<!-- Executing Modal (Progress) -->
+<div class="modal-overlay hidden" id="modal-executing" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>分发中...</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="exec-progress">
+        <div class="exec-progress-bar">
+          <div class="exec-progress-fill" style="width:60%"></div>
+        </div>
+        <div class="exec-log">
+          <div class="log-line log-info">正在分发 arthas-boot.jar 到 prod/default/pod-a-7cc5f...</div>
+          <div class="log-line log-info">创建目标目录...</div>
+          <div class="log-line log-info">复制文件中...</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-s btn-sm" onclick="closeModal()">取消</button>
+    </div>
+  </div>
+</div>
+
+<!-- Upload Modal -->
+<div class="modal-overlay hidden" id="modal-upload" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>上传二进制工具</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>工具名称 *</label>
+        <input class="inp" placeholder="例如：arthas-boot-3.7.2">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>工具类型</label>
+          <select class="inp">
+            <option>Arthas</option>
+            <option>async-profiler</option>
+            <option>通用</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>版本</label>
+          <input class="inp" placeholder="可选">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>安装路径</label>
+        <input class="inp" value="/tmp/arthas/arthas-boot.jar">
+      </div>
+      <div class="form-group">
+        <label>二进制文件 *</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-g btn-sm">选择文件</button>
+          <span style="font-size:12px;color:var(--tx3)">未选择文件</span>
+        </div>
+        <div class="form-hint">支持 JAR、TAR.GZ、二进制文件</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">取消</button>
+      <button class="btn btn-p btn-sm" onclick="closeModal()">上传并登记</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function switchTab(tab, btn) {
+    document.querySelectorAll('.toolbox-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+  }
+
+  function openDemoModal(type) {
+    closeModal();
+    const modal = document.getElementById('modal-' + type);
+    if (modal) modal.classList.remove('hidden');
+  }
+
+  function closeModal() {
+    document.querySelectorAll('.modal-overlay').forEach(m => m.classList.add('hidden'));
+  }
+</script>
+
+</body>
+</html>

@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use compose:subagent (recommended) or compose:execute to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Redesign the entire toolbox UI with modern layout, improved card design, Modal-based distribution, search/filter, and responsive support.
+**Goal:** Redesign the toolbox UI with tab-based navigation, modal interactions, LLM-assisted script creation, and comprehensive distribution management.
 
-**Architecture:** Component-based redesign with separate concerns: layout (HTML), styling (CSS), and behavior (JS). Each task produces self-contained, testable changes.
+**Architecture:** Tab-based layout (Binary Tools + Script Tools) with modal-driven interactions. Distribution history accessible via toolbar button. Quick actions moved to workspace/diagnosis area.
 
 **Tech Stack:** Vanilla JavaScript, CSS Grid, localStorage
 
@@ -21,16 +21,30 @@
 
 ---
 
+## Design Decisions (from brainstorming)
+
+1. **Tab navigation** — Binary Tools + Script Tools only (no Quick Actions)
+2. **Quick Actions** — Moved to workspace/diagnosis area (needs Pod + Arthas connection)
+3. **Distribution** — Modal with quick-select from recent targets
+4. **Script creation** — LLM-assisted generation
+5. **Distribution history** — Toolbar button → modal (not tab)
+6. **Target dimensions** — Pod, Node, Namespace, Label selector
+7. **Search/Filter** — In all lists with pagination/load-more
+8. **Progress feedback** — Progress modal → Result modal with retry
+9. **Edit capabilities** — Both binary (metadata + file replace) and script tools
+
+---
+
 ### Task 1: Redesign HTML Layout
 
-**Covers:** [S2]
+**Covers:** Tab navigation, header, toolbar
 
 **Files:**
 - Modify: `static/index.html` (lines 688-734)
 
 - [ ] **Step 1: Replace hero section with compact header**
 
-Find the hero section (lines 688-694) and replace with:
+Find the hero section and replace with:
 
 ```html
 <div class="toolbox-header">
@@ -40,86 +54,82 @@ Find the hero section (lines 688-694) and replace with:
   </div>
   <div class="toolbox-header-actions">
     <button class="btn btn-g btn-sm" onclick="renderToolbox()">刷新</button>
+    <button class="btn btn-g btn-sm" onclick="openDistributeHistory()">📋 查看记录</button>
     <button class="btn btn-p btn-sm" onclick="toolboxOpenBatchDistribute()">📦 批量分发</button>
   </div>
 </div>
 ```
 
-- [ ] **Step 2: Replace summary bar with toolbar**
+- [ ] **Step 2: Replace summary bar with tabs**
 
-Find the summary bar (lines 696-701) and replace with:
+Replace the summary bar with:
 
 ```html
-<div class="toolbox-toolbar">
-  <div class="toolbox-toolbar-left">
-    <div class="toolbox-search">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-      <input type="text" id="toolboxSearch" placeholder="搜索工具..." oninput="filterTools(this.value)">
-    </div>
-    <div class="toolbox-filter-tags">
-      <button class="filter-tag active" data-filter="all" onclick="setFilter('all')">全部</button>
-      <button class="filter-tag" data-filter="binary" onclick="setFilter('binary')">📦 二进制</button>
-      <button class="filter-tag" data-filter="script" onclick="setFilter('script')">🐍 脚本</button>
-      <button class="filter-tag" data-filter="quick" onclick="setFilter('quick')">⚡ 快捷</button>
-    </div>
-  </div>
-  <div class="toolbox-toolbar-right">
-    <button class="btn btn-g btn-sm" onclick="toolboxUploadBinary()">📦 上传工具</button>
-    <button class="btn btn-g btn-sm" onclick="toolboxCreateScript()">📜 新建脚本</button>
-    <button class="btn btn-g btn-sm" onclick="toolboxCreateQuick()">⚡ 新建操作</button>
-  </div>
+<div class="toolbox-tabs">
+  <button class="toolbox-tab active" data-tab="binary" onclick="switchToolboxTab('binary', this)">
+    📦 二进制工具 <span class="tab-count" id="countBinary">0</span>
+  </button>
+  <button class="toolbox-tab" data-tab="script" onclick="switchToolboxTab('script', this)">
+    🐍 脚本工具 <span class="tab-count" id="countScript">0</span>
+  </button>
 </div>
 ```
 
-- [ ] **Step 3: Update section headers**
+- [ ] **Step 3: Wrap tool sections in tab content divs**
 
-Replace each section header to remove duplicate action buttons (since they're now in toolbar):
-
-Binary tools section (lines 703-712):
+Wrap binary tools section:
 ```html
-<section class="toolbox-section" data-type="binary">
-  <div class="toolbox-section-header">
-    <h3>📦 二进制工具 <span class="section-count" id="countBinary">0</span></h3>
+<div class="tab-content active" id="tab-binary">
+  <div class="toolbox-toolbar">
+    <div class="toolbox-toolbar-left">
+      <div class="toolbox-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="searchBinary" placeholder="搜索二进制工具..." oninput="filterBinaryTools(this.value)">
+      </div>
+    </div>
+    <div class="toolbox-toolbar-right">
+      <button class="btn btn-g btn-sm" onclick="toolboxUploadBinary()">上传工具</button>
+    </div>
   </div>
-  <div id="toolboxBinaryTools" class="toolbox-card-grid">
-    <div class="sb-empty">加载中...</div>
-  </div>
-</section>
+  <section class="toolbox-section">
+    <div id="toolboxBinaryTools" class="toolbox-card-grid">
+      <div class="sb-empty">加载中...</div>
+    </div>
+  </section>
+</div>
 ```
 
-Script tools section (lines 714-723):
+Wrap script tools section:
 ```html
-<section class="toolbox-section" data-type="script">
-  <div class="toolbox-section-header">
-    <h3>🐍 脚本工具 <span class="section-count" id="countScript">0</span></h3>
+<div class="tab-content" id="tab-script">
+  <div class="toolbox-toolbar">
+    <div class="toolbox-toolbar-left">
+      <div class="toolbox-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" id="searchScript" placeholder="搜索脚本工具..." oninput="filterScriptTools(this.value)">
+      </div>
+    </div>
+    <div class="toolbox-toolbar-right">
+      <button class="btn btn-g btn-sm" onclick="toolboxCreateScript()">+ 新建脚本</button>
+    </div>
   </div>
-  <div id="toolboxScriptTools" class="toolbox-card-grid">
-    <div class="sb-empty">加载中...</div>
-  </div>
-</section>
-```
-
-Quick actions section (lines 725-734):
-```html
-<section class="toolbox-section" data-type="quick">
-  <div class="toolbox-section-header">
-    <h3>⚡ 快捷操作 <span class="section-count" id="countQuick">0</span></h3>
-  </div>
-  <div id="toolboxQuickActions" class="toolbox-card-grid">
-    <div class="sb-empty">加载中...</div>
-  </div>
-</section>
+  <section class="toolbox-section">
+    <div id="toolboxScriptTools" class="toolbox-card-grid">
+      <div class="sb-empty">加载中...</div>
+    </div>
+  </section>
+</div>
 ```
 
 - [ ] **Step 4: Verify layout renders**
 
-Open browser, verify the new layout displays correctly.
+Open browser, verify tabs and toolbar display correctly.
 
 ---
 
 ### Task 2: Add New CSS Styles
 
-**Covers:** [S5], [S9]
+**Covers:** Tabs, toolbar, modal, quick-select, capability badge
 
 **Files:**
 - Modify: `static/css/app.css` (append after line ~3230)
@@ -150,6 +160,58 @@ Open browser, verify the new layout displays correctly.
 .toolbox-header-actions {
   display: flex;
   gap: 8px;
+}
+
+/* ── Toolbox Tabs ── */
+.toolbox-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: rgba(0,0,0,.2);
+  border: 1px solid rgba(40,61,90,.4);
+  border-radius: 10px;
+  margin-bottom: 20px;
+}
+
+.toolbox-tab {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 10px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--tx2);
+  background: transparent;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all .15s;
+}
+
+.toolbox-tab:hover {
+  color: var(--tx);
+  background: rgba(255,255,255,.05);
+}
+
+.toolbox-tab.active {
+  color: var(--a);
+  background: rgba(0,122,255,.15);
+}
+
+.toolbox-tab .tab-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--a);
+  background: rgba(0,122,255,.2);
+  border-radius: 9px;
 }
 
 /* ── Toolbox Toolbar ── */
@@ -207,49 +269,13 @@ Open browser, verify the new layout displays correctly.
   color: var(--tx3);
 }
 
-/* ── Filter Tags ── */
-.toolbox-filter-tags {
-  display: flex;
-  gap: 6px;
+/* ── Tab Content ── */
+.tab-content {
+  display: none;
 }
 
-.filter-tag {
-  padding: 4px 10px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--tx2);
-  background: rgba(0,0,0,.2);
-  border: 1px solid rgba(40,61,90,.4);
-  border-radius: 6px;
-  cursor: pointer;
-  transition: all .15s;
-}
-
-.filter-tag:hover {
-  border-color: rgba(0,122,255,.4);
-  color: var(--tx);
-}
-
-.filter-tag.active {
-  background: rgba(0,122,255,.15);
-  border-color: rgba(0,122,255,.5);
-  color: var(--a);
-}
-
-/* ── Section Count Badge ── */
-.section-count {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 20px;
-  height: 20px;
-  padding: 0 6px;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--a);
-  background: rgba(0,122,255,.15);
-  border-radius: 10px;
-  margin-left: 8px;
+.tab-content.active {
+  display: block;
 }
 ```
 
@@ -447,135 +473,60 @@ Open browser, verify the new layout displays correctly.
 }
 ```
 
-- [ ] **Step 5: Add empty state styles**
-
-```css
-/* ── Empty State ── */
-.toolbox-empty {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  padding: 40px 20px;
-  border: 2px dashed rgba(40,61,90,.4);
-  border-radius: 12px;
-  text-align: center;
-}
-
-.toolbox-empty-icon {
-  font-size: 48px;
-  margin-bottom: 16px;
-  opacity: 0.5;
-}
-
-.toolbox-empty-title {
-  font-size: 14px;
-  font-weight: 600;
-  color: var(--tx2);
-  margin-bottom: 8px;
-}
-
-.toolbox-empty-desc {
-  font-size: 12px;
-  color: var(--tx3);
-  margin-bottom: 16px;
-}
-```
-
-- [ ] **Step 6: Verify styles load**
+- [ ] **Step 5: Verify styles load**
 
 Open browser dev tools, check no CSS errors.
 
 ---
 
-### Task 3: Add Search and Filter Logic
+### Task 3: Add Tab Switching and Search Logic
 
-**Covers:** [S5]
+**Covers:** Tab navigation, search/filter
 
 **Files:**
 - Modify: `static/js/components/toolbox.js` (add after line ~15)
 
-- [ ] **Step 1: Add state variables and filter functions**
+- [ ] **Step 1: Add state variables and tab switching**
 
 ```javascript
 // ═══════════════════════════════════════════════════════════════
-// Search & Filter
+// Tab Switching & Search
 // ═══════════════════════════════════════════════════════════════
 
-let _currentFilter = 'all';
-let _allTools = { binary: [], script: [], quick: [] };
+let _allTools = { binary: [], script: [] };
 
-window.setFilter = function(filter) {
-  _currentFilter = filter;
-  document.querySelectorAll('.filter-tag').forEach(tag => {
-    tag.classList.toggle('active', tag.dataset.filter === filter);
-  });
-  _applyFilter();
+window.switchToolboxTab = function(tab, btn) {
+  document.querySelectorAll('.toolbox-tab').forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+  document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+  document.getElementById('tab-' + tab).classList.add('active');
 };
 
-window.filterTools = function(query) {
-  _applyFilter(query);
+window.filterBinaryTools = function(query) {
+  query = query.toLowerCase();
+  const filtered = _allTools.binary.filter(t =>
+    !query || t.name?.toLowerCase().includes(query) ||
+    t.file_name?.toLowerCase().includes(query) ||
+    t.tool_type?.toLowerCase().includes(query)
+  );
+  renderBinaryToolCards(filtered);
+  document.getElementById('countBinary').textContent = _allTools.binary.length;
 };
 
-function _applyFilter(query) {
-  query = (query || document.getElementById('toolboxSearch')?.value || '').toLowerCase();
-  
-  // Filter binary tools
-  const binaryContainer = document.getElementById('toolboxBinaryTools');
-  if (binaryContainer && (_currentFilter === 'all' || _currentFilter === 'binary')) {
-    const filtered = _allTools.binary.filter(t => 
-      !query || t.name?.toLowerCase().includes(query) || 
-      t.file_name?.toLowerCase().includes(query) ||
-      t.tool_type?.toLowerCase().includes(query)
-    );
-    renderBinaryToolCards(filtered);
-  } else if (binaryContainer) {
-    binaryContainer.innerHTML = '';
-  }
-
-  // Filter script tools
-  const scriptContainer = document.getElementById('toolboxScriptTools');
-  if (scriptContainer && (_currentFilter === 'all' || _currentFilter === 'script')) {
-    const filtered = _allTools.script.filter(t =>
-      !query || t.name?.toLowerCase().includes(query) ||
-      t.runtime?.toLowerCase().includes(query)
-    );
-    renderScriptToolCards(filtered);
-  } else if (scriptContainer) {
-    scriptContainer.innerHTML = '';
-  }
-
-  // Filter quick actions
-  const quickContainer = document.getElementById('toolboxQuickActions');
-  if (quickContainer && (_currentFilter === 'all' || _currentFilter === 'quick')) {
-    const filtered = _allTools.quick.filter(t =>
-      !query || t.name?.toLowerCase().includes(query) ||
-      t.command_template?.toLowerCase().includes(query) ||
-      t.category?.toLowerCase().includes(query)
-    );
-    renderQuickActionCards(filtered);
-  } else if (quickContainer) {
-    quickContainer.innerHTML = '';
-  }
-
-  // Update counts
-  _updateCounts();
-}
-
-function _updateCounts() {
-  const countBinary = document.getElementById('countBinary');
-  const countScript = document.getElementById('countScript');
-  const countQuick = document.getElementById('countQuick');
-  
-  if (countBinary) countBinary.textContent = _allTools.binary.length;
-  if (countScript) countScript.textContent = _allTools.script.length;
-  if (countQuick) countQuick.textContent = _allTools.quick.length;
-}
+window.filterScriptTools = function(query) {
+  query = query.toLowerCase();
+  const filtered = _allTools.script.filter(t =>
+    !query || t.name?.toLowerCase().includes(query) ||
+    t.runtime?.toLowerCase().includes(query)
+  );
+  renderScriptToolCards(filtered);
+  document.getElementById('countScript').textContent = _allTools.script.length;
+};
 ```
 
 - [ ] **Step 2: Update loadBinaryTools to cache data**
 
-Find `loadBinaryTools` function (lines 21-29) and update:
+Find `loadBinaryTools` function and update:
 
 ```javascript
 async function loadBinaryTools() {
@@ -583,7 +534,7 @@ async function loadBinaryTools() {
     const data = await safeGet('/tasks/tool-packages');
     _allTools.binary = data.packages || [];
     renderBinaryToolCards(_allTools.binary);
-    _updateCounts();
+    document.getElementById('countBinary').textContent = _allTools.binary.length;
   } catch (e) {
     console.error('加载二进制工具失败:', e);
   }
@@ -592,7 +543,7 @@ async function loadBinaryTools() {
 
 - [ ] **Step 3: Update loadScriptTools to cache data**
 
-Find `loadScriptTools` function (lines 83-91) and update:
+Find `loadScriptTools` function and update:
 
 ```javascript
 async function loadScriptTools() {
@@ -600,31 +551,14 @@ async function loadScriptTools() {
     const data = await safeGet('/tasks/script-tools');
     _allTools.script = data.tools || [];
     renderScriptToolCards(_allTools.script);
-    _updateCounts();
+    document.getElementById('countScript').textContent = _allTools.script.length;
   } catch (e) {
     console.error('加载脚本工具失败:', e);
   }
 }
 ```
 
-- [ ] **Step 4: Update loadQuickActions to cache data**
-
-Find `loadQuickActions` function (lines 141-149) and update:
-
-```javascript
-async function loadQuickActions() {
-  try {
-    const data = await safeGet('/tasks/quick-actions');
-    _allTools.quick = data.actions || [];
-    renderQuickActionCards(_allTools.quick);
-    _updateCounts();
-  } catch (e) {
-    console.error('加载快捷操作失败:', e);
-  }
-}
-```
-
-- [ ] **Step 5: Verify search works**
+- [ ] **Step 4: Verify search works**
 
 Open browser, type in search box, verify tools filter in real-time.
 
@@ -632,10 +566,10 @@ Open browser, type in search box, verify tools filter in real-time.
 
 ### Task 4: Add Recent Targets Functions
 
-**Covers:** [S4]
+**Covers:** Quick-select from recent targets
 
 **Files:**
-- Modify: `static/js/components/toolbox.js` (add after filter functions)
+- Modify: `static/js/components/toolbox.js` (add after search functions)
 
 - [ ] **Step 1: Add localStorage helper functions**
 
@@ -704,18 +638,43 @@ Open browser console, check `_loadRecentTargets` is defined.
 
 ### Task 5: Add Modal Logic
 
-**Covers:** [S4]
+**Covers:** Distribute modal, edit modals, history modal
 
 **Files:**
 - Modify: `static/js/components/toolbox.js` (add after recent targets functions)
 
-- [ ] **Step 1: Add Modal open function**
+- [ ] **Step 1: Add Modal open/close functions**
 
 ```javascript
 // ═══════════════════════════════════════════════════════════════
-// Distribute Modal
+// Modal Management
 // ═══════════════════════════════════════════════════════════════
 
+window.openModal = function(modalId) {
+  const modal = document.getElementById(modalId);
+  if (modal) modal.classList.remove('hidden');
+};
+
+window.closeModal = function(modalId) {
+  if (modalId) {
+    const modal = document.getElementById(modalId);
+    if (modal) modal.classList.add('hidden');
+  } else {
+    document.querySelectorAll('.modal-overlay').forEach(m => m.classList.add('hidden'));
+  }
+};
+
+// Close modal on overlay click
+document.addEventListener('click', (e) => {
+  if (e.target.classList.contains('modal-overlay')) {
+    e.target.classList.add('hidden');
+  }
+});
+```
+
+- [ ] **Step 2: Add Distribute Modal function**
+
+```javascript
 window.openDistributeModal = async function(toolId, toolType, defaultPath) {
   const existing = document.getElementById(`distModal-${toolId}`);
   if (existing) existing.remove();
@@ -735,7 +694,7 @@ window.openDistributeModal = async function(toolId, toolType, defaultPath) {
     <div class="dist-modal">
       <div class="dist-modal-header">
         <h3>分发工具: ${esc(toolName)}</h3>
-        <button class="btn-close" onclick="closeDistributeModal(${toolId})">✕</button>
+        <button class="btn-close" onclick="closeModal('distModal-${toolId}')">✕</button>
       </div>
       <div class="dist-modal-body">
         <div class="dist-recent-section">
@@ -779,9 +738,8 @@ window.openDistributeModal = async function(toolId, toolType, defaultPath) {
         </div>
       </div>
       <div class="dist-modal-footer">
-        <button class="btn btn-g btn-sm" onclick="closeDistributeModal(${toolId})">取消</button>
+        <button class="btn btn-g btn-sm" onclick="closeModal('distModal-${toolId}')">取消</button>
         <button class="btn btn-p btn-sm" onclick="confirmModalDistribute(${toolId}, '${toolType}')">
-          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
           确认分发
         </button>
       </div>
@@ -789,7 +747,6 @@ window.openDistributeModal = async function(toolId, toolType, defaultPath) {
   `;
 
   document.body.appendChild(modal);
-
   _renderRecentTargets(`distRecentList-${toolId}`);
 
   modal.querySelectorAll('.dist-recent-item').forEach(item => {
@@ -801,53 +758,10 @@ window.openDistributeModal = async function(toolId, toolType, defaultPath) {
       }
     };
   });
-
-  modal.onclick = (e) => {
-    if (e.target === modal) closeDistributeModal(toolId);
-  };
 };
 ```
 
-- [ ] **Step 2: Add Modal close function**
-
-```javascript
-window.closeDistributeModal = function(toolId) {
-  const modal = document.getElementById(`distModal-${toolId}`);
-  if (modal) modal.remove();
-};
-```
-
-- [ ] **Step 3: Add form fill helper**
-
-```javascript
-function _fillDistributeForm(toolId, target) {
-  const clusterEl = document.getElementById(`dist-cluster-${toolId}`);
-  const nsEl = document.getElementById(`dist-ns-${toolId}`);
-  const podEl = document.getElementById(`dist-pod-${toolId}`);
-  const ctrEl = document.getElementById(`dist-ctr-${toolId}`);
-
-  if (clusterEl) {
-    clusterEl.value = target.cluster;
-    distOnClusterChange(toolId).then(() => {
-      if (nsEl) {
-        nsEl.value = target.namespace;
-        distOnNsChange(toolId).then(() => {
-          if (podEl) {
-            podEl.value = target.pod;
-            distOnPodChange(toolId).then(() => {
-              if (ctrEl && target.container) {
-                ctrEl.value = target.container;
-              }
-            });
-          }
-        });
-      }
-    });
-  }
-}
-```
-
-- [ ] **Step 4: Add Pod change handler with capability detection**
+- [ ] **Step 3: Add Pod change handler with capability detection**
 
 ```javascript
 window.distOnPodChange = async function(toolId) {
@@ -879,7 +793,7 @@ window.distOnPodChange = async function(toolId) {
 };
 ```
 
-- [ ] **Step 5: Add Modal confirm distribute function**
+- [ ] **Step 4: Add confirm distribute function**
 
 ```javascript
 window.confirmModalDistribute = async function(toolId, toolType) {
@@ -898,29 +812,59 @@ window.confirmModalDistribute = async function(toolId, toolType) {
     await safePost('/tasks/distribute', payload);
     _saveRecentTarget({ cluster, namespace: ns, pod, container: ctr });
     toast('分发成功', 'ok');
-    closeDistributeModal(toolId);
+    closeModal(`distModal-${toolId}`);
   } catch (e) {
     toast(`分发失败：${e.message}`, 'err');
   }
 };
 ```
 
+- [ ] **Step 5: Add form fill helper**
+
+```javascript
+function _fillDistributeForm(toolId, target) {
+  const clusterEl = document.getElementById(`dist-cluster-${toolId}`);
+  const nsEl = document.getElementById(`dist-ns-${toolId}`);
+  const podEl = document.getElementById(`dist-pod-${toolId}`);
+  const ctrEl = document.getElementById(`dist-ctr-${toolId}`);
+
+  if (clusterEl) {
+    clusterEl.value = target.cluster;
+    distOnClusterChange(toolId).then(() => {
+      if (nsEl) {
+        nsEl.value = target.namespace;
+        distOnNsChange(toolId).then(() => {
+          if (podEl) {
+            podEl.value = target.pod;
+            distOnPodChange(toolId).then(() => {
+              if (ctrEl && target.container) {
+                ctrEl.value = target.container;
+              }
+            });
+          }
+        });
+      }
+    });
+  }
+}
+```
+
 - [ ] **Step 6: Verify Modal opens**
 
-Open browser, click distribute button on a tool card, verify Modal appears.
+Open browser, click distribute button, verify Modal appears.
 
 ---
 
 ### Task 6: Update Card Buttons
 
-**Covers:** [S3], [S4]
+**Covers:** Distribute button, edit buttons
 
 **Files:**
 - Modify: `static/js/components/toolbox.js` (lines 60-76)
 
 - [ ] **Step 1: Update distribute button onclick**
 
-Find the distribute button in `renderBinaryToolCards` (line 64):
+Find the distribute button in `renderBinaryToolCards`:
 
 ```javascript
 <button class="btn btn-p btn-sm" onclick="toolboxSingleDistribute(${p.id}, 'binary', '${esc(p.install_path || '')}')">
@@ -932,36 +876,48 @@ Replace with:
 <button class="btn btn-p btn-sm" onclick="openDistributeModal(${p.id}, 'binary', '${esc(p.install_path || '')}')">
 ```
 
-- [ ] **Step 2: Remove old inline form div**
+- [ ] **Step 2: Add edit button to binary cards**
 
-Find and remove this line (line 73):
+Add edit button before distribute button:
 
 ```javascript
-<div class="toolbox-distribute-form" id="distForm-binary-${p.id}" style="display:none"></div>
+<button class="btn btn-g btn-sm" onclick="openEditBinaryModal(${p.id})">编辑</button>
 ```
 
-- [ ] **Step 3: Verify button opens Modal**
+- [ ] **Step 3: Add edit button to script cards**
 
-Open browser, click distribute button, verify Modal opens instead of inline form.
+Add edit button to script cards:
+
+```javascript
+<button class="btn btn-g btn-sm" onclick="openEditScriptModal(${t.id})">编辑</button>
+```
+
+- [ ] **Step 4: Verify buttons work**
+
+Open browser, click edit and distribute buttons, verify modals open.
 
 ---
 
 ### Task 7: Clean Up Old Code
 
-**Covers:** [S6]
+**Covers:** Remove inline form code
 
 **Files:**
 - Modify: `static/js/components/toolbox.js`
 
 - [ ] **Step 1: Remove old toolboxSingleDistribute function**
 
-Remove the entire `window.toolboxSingleDistribute` function (lines ~335-419).
+Remove the entire `window.toolboxSingleDistribute` function.
 
 - [ ] **Step 2: Remove old distToggleType function**
 
-Remove the `window.distToggleType` function (lines ~421-429).
+Remove the `window.distToggleType` function.
 
-- [ ] **Step 3: Verify no references to removed functions**
+- [ ] **Step 3: Remove old inline form div**
+
+Remove the toolbox-distribute-form div from renderBinaryToolCards.
+
+- [ ] **Step 4: Verify no references to removed functions**
 
 Run: `grep -r "toolboxSingleDistribute\|distToggleType" static/js/`
 Expected: No matches.
@@ -970,7 +926,7 @@ Expected: No matches.
 
 ### Task 8: Add Tests
 
-**Covers:** [S7]
+**Covers:** Test coverage
 
 **Files:**
 - Modify: `tests/test_toolbox.py`
@@ -1003,15 +959,14 @@ Expected: All tests pass.
 - [ ] **Step 2: Manual browser verification**
 
 1. Open toolbox page
-2. Verify new layout with toolbar and search
-3. Type in search box → verify tools filter
-4. Click filter tags → verify section filtering
-5. Click "分发" on a binary tool → verify Modal opens
-6. Select a recent target → verify form auto-fills
-7. Manually select cluster/namespace/pod → verify capability badge appears
-8. Click "确认分发" → verify success toast and Modal closes
-9. Re-open Modal → verify target appears in recent list
-10. Test responsive layout at different widths
+2. Verify tab switching works
+3. Verify search filters tools
+4. Click "分发" on a binary tool → verify Modal opens
+5. Select a recent target → verify form auto-fills
+6. Manually select cluster/namespace/pod → verify capability badge appears
+7. Click "确认分发" → verify success toast
+8. Click "编辑" on tools → verify edit modals open
+9. Click "查看记录" → verify history modal opens
 
 - [ ] **Step 3: Commit changes**
 
@@ -1019,10 +974,12 @@ Expected: All tests pass.
 git add static/index.html static/js/components/toolbox.js static/css/app.css tests/test_toolbox.py docs/compose/specs/2026-06-19-toolbox-full-redesign.md docs/compose/plans/2026-06-19-toolbox-full-redesign.md
 git commit -m "feat: comprehensive toolbox UI redesign
 
-- Compact header with action buttons
-- Toolbar with search and filter tags
+- Tab-based navigation (Binary + Script tools)
 - Modal-based distribution with quick-select
-- Pod capability detection and badges
-- Responsive grid layout
-- Improved empty states"
+- Search/filter in all lists
+- Pod capability detection
+- Recent targets in localStorage
+- Edit modals for binary and script tools
+- Distribution history modal
+- LLM-assisted script creation"
 ```

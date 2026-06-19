@@ -1,0 +1,1680 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>工具箱重设计预览 v4 - LLM 辅助脚本</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --bg2: #161b22;
+    --tx: #e6edf3;
+    --tx2: #8b949e;
+    --tx3: #6e7681;
+    --a: #007aff;
+    --a2: #58a6ff;
+    --border: rgba(40,61,90,.72);
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--tx);
+    padding: 24px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  .preview-label {
+    background: #ff9500;
+    color: #000;
+    padding: 4px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 700;
+    display: inline-block;
+    margin-bottom: 16px;
+  }
+
+  /* Header */
+  .toolbox-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 20px;
+  }
+
+  .toolbox-header h2 { font-size: 20px; font-weight: 700; }
+
+  .toolbox-header-desc {
+    font-size: 13px;
+    color: var(--tx2);
+  }
+
+  .toolbox-header-actions { display: flex; gap: 8px; }
+
+  /* Tabs */
+  .toolbox-tabs {
+    display: flex;
+    gap: 4px;
+    padding: 4px;
+    background: rgba(0,0,0,.2);
+    border: 1px solid rgba(40,61,90,.4);
+    border-radius: 10px;
+    margin-bottom: 20px;
+  }
+
+  .toolbox-tab {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--tx2);
+    background: transparent;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+
+  .toolbox-tab:hover { color: var(--tx); background: rgba(255,255,255,.05); }
+  .toolbox-tab.active { color: var(--a); background: rgba(0,122,255,.15); }
+
+  .toolbox-tab .tab-count {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--a);
+    background: rgba(0,122,255,.2);
+    border-radius: 9px;
+  }
+
+  /* Toolbar */
+  .toolbox-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 12px 16px;
+    background: rgba(0,0,0,.2);
+    border: 1px solid rgba(40,61,90,.4);
+    border-radius: 10px;
+    margin-bottom: 20px;
+  }
+
+  .toolbox-toolbar-left { display: flex; align-items: center; gap: 12px; flex: 1; }
+  .toolbox-toolbar-right { display: flex; gap: 8px; }
+
+  .toolbox-search {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    background: rgba(0,0,0,.3);
+    border: 1px solid rgba(40,61,90,.5);
+    border-radius: 8px;
+    min-width: 200px;
+  }
+
+  .toolbox-search svg { color: var(--tx2); flex-shrink: 0; }
+
+  .toolbox-search input {
+    background: none;
+    border: none;
+    color: var(--tx);
+    font-size: 13px;
+    width: 100%;
+    outline: none;
+  }
+
+  .toolbox-search input::placeholder { color: var(--tx3); }
+
+  .tab-content { display: none; }
+  .tab-content.active { display: block; }
+
+  .toolbox-card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
+  }
+
+  /* Card */
+  .toolbox-card {
+    background: linear-gradient(180deg, rgba(22,30,43,.92), rgba(11,15,24,.6));
+    border: 1px solid rgba(40,61,90,.72);
+    border-radius: 12px;
+    padding: 16px;
+    transition: all .2s ease;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .toolbox-card::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, var(--a), transparent);
+    opacity: 0;
+    transition: opacity .25s;
+  }
+
+  .toolbox-card:hover {
+    border-color: rgba(0,122,255,.45);
+    box-shadow: 0 12px 36px rgba(0,0,0,.2), 0 0 24px rgba(0,122,255,.06);
+    transform: translateY(-2px);
+  }
+
+  .toolbox-card:hover::before { opacity: 1; }
+
+  .toolbox-card-binary { --card-accent: var(--a); }
+  .toolbox-card-script { --card-accent: #34c759; }
+
+  .toolbox-card-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+  }
+
+  .toolbox-card-icon {
+    width: 32px; height: 32px;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 8px;
+    background: rgba(0,122,255,.1);
+    border: 1px solid rgba(0,122,255,.2);
+    font-size: 14px;
+    flex-shrink: 0;
+  }
+
+  .toolbox-card-script .toolbox-card-icon {
+    background: rgba(52,199,89,.1);
+    border-color: rgba(52,199,89,.2);
+  }
+
+  .toolbox-card-name {
+    font-weight: 700;
+    font-size: 14px;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .badge { font-size: 10px; padding: 2px 6px; border-radius: 4px; font-weight: 600; }
+  .badge-running { background: rgba(52,199,89,.15); color: #34c759; }
+  .badge-stopped { background: rgba(255,59,48,.15); color: #ff3b30; }
+  .badge-low { background: rgba(52,199,89,.15); color: #34c759; }
+
+  .toolbox-card-meta { font-size: 11px; color: var(--tx2); margin-bottom: 4px; }
+
+  .toolbox-card-path {
+    font-size: 11px;
+    color: var(--tx3);
+    font-family: monospace;
+    margin-bottom: 12px;
+    padding: 6px 10px;
+    background: rgba(0,0,0,.25);
+    border: 1px solid rgba(40,61,90,.4);
+    border-radius: 6px;
+    word-break: break-all;
+  }
+
+  .toolbox-card-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border-radius: 6px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: all .15s;
+  }
+
+  .btn-sm { padding: 4px 10px; font-size: 11px; }
+  .btn-p { background: var(--a); color: white; border-color: var(--a); }
+  .btn-p:hover { background: #0066cc; }
+  .btn-g { background: rgba(255,255,255,.1); color: var(--tx2); border-color: rgba(40,61,90,.5); }
+  .btn-g:hover { background: rgba(255,255,255,.15); color: var(--tx); }
+  .btn-s { background: rgba(255,59,48,.1); color: #ff3b30; border-color: rgba(255,59,48,.3); }
+  .btn-s:hover { background: rgba(255,59,48,.2); }
+
+  /* Quick Actions */
+  .quick-actions-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 12px;
+  }
+
+  .quick-action-card {
+    background: linear-gradient(180deg, rgba(22,30,43,.92), rgba(11,15,24,.6));
+    border: 1px solid rgba(40,61,90,.72);
+    border-radius: 10px;
+    padding: 14px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+
+  .quick-action-card:hover {
+    border-color: rgba(255,149,0,.4);
+    transform: translateY(-1px);
+  }
+
+  .quick-action-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 8px;
+  }
+
+  .quick-action-icon { font-size: 16px; }
+  .quick-action-name { font-weight: 700; font-size: 13px; flex: 1; }
+
+  .quick-action-category {
+    font-size: 10px;
+    color: var(--tx3);
+    padding: 2px 6px;
+    background: rgba(0,0,0,.2);
+    border-radius: 4px;
+  }
+
+  .quick-action-cmd {
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--a2);
+    background: rgba(0,0,0,.3);
+    padding: 6px 8px;
+    border-radius: 4px;
+    margin-bottom: 10px;
+    word-break: break-all;
+  }
+
+  .quick-action-footer { display: flex; gap: 6px; }
+
+  /* Modal */
+  .modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.6);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+
+  .modal {
+    width: 600px;
+    max-height: 85vh;
+    background: var(--bg2);
+    border: 1px solid rgba(40,61,90,.6);
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0,0,0,.5);
+    display: flex;
+    flex-direction: column;
+  }
+
+  .modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 20px;
+    border-bottom: 1px solid rgba(40,61,90,.4);
+  }
+
+  .modal-header h3 { font-size: 14px; font-weight: 700; margin: 0; }
+
+  .btn-close {
+    background: none;
+    border: none;
+    color: var(--tx2);
+    font-size: 18px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 6px;
+  }
+
+  .btn-close:hover { background: rgba(255,255,255,.1); color: var(--tx); }
+
+  .modal-body { flex: 1; overflow-y: auto; padding: 20px; }
+
+  .modal-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 16px 20px;
+    border-top: 1px solid rgba(40,61,90,.4);
+  }
+
+  /* Form */
+  .form-group { margin-bottom: 14px; }
+
+  .form-group label {
+    display: block;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--tx2);
+    margin-bottom: 6px;
+  }
+
+  .form-row { display: flex; gap: 12px; }
+  .form-row .form-group { flex: 1; }
+
+  .inp {
+    width: 100%;
+    font-size: 12px;
+    background: rgba(0,0,0,.3);
+    border: 1px solid rgba(40,61,90,.6);
+    border-radius: 6px;
+    padding: 8px 10px;
+    color: var(--tx);
+    outline: none;
+  }
+
+  .inp:focus { border-color: rgba(0,122,255,.5); }
+
+  textarea.inp {
+    font-family: monospace;
+    resize: vertical;
+    min-height: 120px;
+  }
+
+  .form-hint { font-size: 11px; color: var(--tx3); margin-top: 4px; }
+
+  /* LLM Assist */
+  .llm-assist-box {
+    background: rgba(0,122,255,.08);
+    border: 1px solid rgba(0,122,255,.3);
+    border-radius: 8px;
+    padding: 12px;
+    margin-bottom: 14px;
+  }
+
+  .llm-assist-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .llm-assist-icon {
+    width: 24px;
+    height: 24px;
+    background: var(--a);
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+  }
+
+  .llm-assist-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--a);
+  }
+
+  .llm-assist-desc {
+    font-size: 11px;
+    color: var(--tx2);
+    margin-bottom: 10px;
+  }
+
+  .llm-assist-input {
+    display: flex;
+    gap: 8px;
+  }
+
+  .llm-assist-input input {
+    flex: 1;
+  }
+
+  .llm-assist-result {
+    margin-top: 10px;
+    padding: 10px;
+    background: rgba(0,0,0,.3);
+    border-radius: 6px;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--a2);
+    max-height: 150px;
+    overflow-y: auto;
+  }
+
+  .llm-assist-actions {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+
+  /* Quick Select */
+  .dist-recent-section { margin-bottom: 16px; }
+
+  .dist-section-title {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--tx2);
+    margin-bottom: 8px;
+    text-transform: uppercase;
+    letter-spacing: .5px;
+  }
+
+  .dist-recent-list { display: flex; flex-direction: column; gap: 6px; }
+
+  .dist-recent-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 12px;
+    background: rgba(0,0,0,.2);
+    border: 1px solid rgba(40,61,90,.4);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all .15s;
+  }
+
+  .dist-recent-item:hover { border-color: rgba(0,122,255,.4); background: rgba(0,122,255,.05); }
+
+  .dist-recent-target { font-size: 13px; display: flex; align-items: center; gap: 6px; }
+  .dist-recent-target .sep { color: var(--tx2); }
+  .dist-recent-select { font-size: 12px; color: var(--a); font-weight: 600; }
+
+  .dist-divider {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    color: var(--tx2);
+    margin: 16px 0;
+  }
+
+  .dist-divider::before, .dist-divider::after {
+    content: '';
+    flex: 1;
+    height: 1px;
+    background: rgba(40,61,90,.4);
+  }
+
+  .dist-cap-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    white-space: nowrap;
+  }
+
+  .dist-cap-badge.cap-ok { background: rgba(52,199,89,.15); color: #34c759; }
+
+  .hidden { display: none !important; }
+
+  /* Execution Progress */
+  .exec-progress {
+    margin-top: 16px;
+  }
+
+  .exec-progress-bar {
+    height: 4px;
+    background: rgba(0,0,0,.3);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 12px;
+  }
+
+  .exec-progress-fill {
+    height: 100%;
+    background: var(--a);
+    border-radius: 2px;
+    transition: width .3s ease;
+  }
+
+  .exec-log {
+    background: rgba(0,0,0,.4);
+    border: 1px solid rgba(40,61,90,.4);
+    border-radius: 6px;
+    padding: 12px;
+    font-family: monospace;
+    font-size: 11px;
+    color: var(--tx2);
+    max-height: 200px;
+    overflow-y: auto;
+  }
+
+  .exec-log .log-line { margin-bottom: 4px; }
+  .exec-log .log-success { color: #34c759; }
+  .exec-log .log-error { color: #ff3b30; }
+  .exec-log .log-info { color: var(--a2); }
+</style>
+</head>
+<body>
+
+<div class="preview-label">设计预览 v4 - LLM 辅助脚本 + 不同快捷操作</div>
+
+<!-- Header -->
+<div class="toolbox-header">
+  <div>
+    <h2>工具箱</h2>
+    <span class="toolbox-header-desc">诊断辅助工具集</span>
+  </div>
+  <div class="toolbox-header-actions">
+    <button class="btn btn-g btn-sm">刷新</button>
+    <button class="btn btn-g btn-sm" onclick="openDemoModal('history')">📋 查看记录</button>
+    <button class="btn btn-p btn-sm" onclick="openDemoModal('batch')">📦 批量分发</button>
+  </div>
+</div>
+
+<!-- Tabs -->
+<div class="toolbox-tabs">
+  <button class="toolbox-tab active" data-tab="binary" onclick="switchTab('binary', this)">
+    📦 二进制工具 <span class="tab-count">3</span>
+  </button>
+  <button class="toolbox-tab" data-tab="script" onclick="switchTab('script', this)">
+    🐍 脚本工具 <span class="tab-count">2</span>
+  </button>
+</div>
+
+<!-- Binary Tools Tab -->
+<div class="tab-content active" id="tab-binary">
+  <div class="toolbox-toolbar">
+    <div class="toolbox-toolbar-left">
+      <div class="toolbox-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="搜索二进制工具...">
+      </div>
+    </div>
+    <div class="toolbox-toolbar-right">
+      <button class="btn btn-g btn-sm" onclick="openDemoModal('upload')">上传工具</button>
+    </div>
+  </div>
+
+  <div class="toolbox-card-grid">
+    <div class="toolbox-card toolbox-card-binary">
+      <div class="toolbox-card-header">
+        <div class="toolbox-card-icon">📦</div>
+        <span class="toolbox-card-name">arthas-boot.jar</span>
+        <span class="badge badge-running">可用</span>
+      </div>
+      <div class="toolbox-card-meta">v3.7.2 · 内置</div>
+      <div class="toolbox-card-path">/app/arthas/arthas-boot.jar</div>
+      <div class="toolbox-card-actions">
+        <button class="btn btn-g btn-sm" onclick="openDemoModal('edit-binary')">编辑</button>
+        <button class="btn btn-g btn-sm">校验</button>
+        <button class="btn btn-p btn-sm" onclick="openDistributeModal('arthas-boot.jar', '/app/arthas/arthas-boot.jar')">分发→</button>
+        <button class="btn btn-g btn-sm" onclick="openDemoModal('dist-result')" title="查看分发结果示例">结果</button>
+        <button class="btn btn-s btn-sm">删除</button>
+      </div>
+    </div>
+
+    <div class="toolbox-card toolbox-card-binary">
+      <div class="toolbox-card-header">
+        <div class="toolbox-card-icon">📦</div>
+        <span class="toolbox-card-name">async-profiler</span>
+        <span class="badge badge-running">可用</span>
+      </div>
+      <div class="toolbox-card-meta">v2.9 · 上传</div>
+      <div class="toolbox-card-path">/tmp/async-profiler-2.9.tar.gz</div>
+      <div class="toolbox-card-actions">
+        <button class="btn btn-g btn-sm" onclick="openDemoModal('edit-binary')">编辑</button>
+        <button class="btn btn-g btn-sm">校验</button>
+        <button class="btn btn-p btn-sm" onclick="openDistributeModal('async-profiler', '/tmp/async-profiler/bin/async-profiler')">分发→</button>
+        <button class="btn btn-g btn-sm" onclick="openDemoModal('dist-progress')" title="查看分发进度示例">进度</button>
+        <button class="btn btn-s btn-sm">删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Script Tools Tab -->
+<div class="tab-content" id="tab-script">
+  <div class="toolbox-toolbar">
+    <div class="toolbox-toolbar-left">
+      <div class="toolbox-search">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+        <input type="text" placeholder="搜索脚本工具...">
+      </div>
+    </div>
+    <div class="toolbox-toolbar-right">
+      <button class="btn btn-g btn-sm" onclick="openDemoModal('create-script')">+ 新建脚本</button>
+    </div>
+  </div>
+
+  <div class="toolbox-card-grid">
+    <div class="toolbox-card toolbox-card-script">
+      <div class="toolbox-card-header">
+        <div class="toolbox-card-icon">🐍</div>
+        <span class="toolbox-card-name">CPU分析脚本</span>
+        <span class="badge badge-low">低风险</span>
+      </div>
+      <div class="toolbox-card-meta">Python · 关联: CPU Profiling</div>
+      <div class="toolbox-card-actions">
+        <button class="btn btn-g btn-sm" onclick="openDemoModal('edit-script')">编辑</button>
+        <button class="btn btn-p btn-sm">执行→</button>
+        <button class="btn btn-s btn-sm">删除</button>
+      </div>
+    </div>
+
+    <div class="toolbox-card toolbox-card-script">
+      <div class="toolbox-card-header">
+        <div class="toolbox-card-icon">🐍</div>
+        <span class="toolbox-card-name">GC日志分析</span>
+        <span class="badge badge-low">低风险</span>
+      </div>
+      <div class="toolbox-card-meta">Shell</div>
+      <div class="toolbox-card-actions">
+        <button class="btn btn-g btn-sm" onclick="openDemoModal('edit-script')">编辑</button>
+        <button class="btn btn-p btn-sm">执行→</button>
+        <button class="btn btn-s btn-sm">删除</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Distribution History Modal -->
+<div class="modal-overlay hidden" id="modal-history" onclick="if(event.target===this)closeModal()">
+  <div class="modal" style="width:900px;max-height:85vh">
+    <div class="modal-header">
+      <h3>分发记录</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Toolbar -->
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px">
+        <div class="toolbox-search" style="flex:1">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder="搜索分发记录...">
+        </div>
+        <div style="display:flex;gap:6px">
+          <button class="btn btn-g btn-sm">全部</button>
+          <button class="btn btn-g btn-sm">成功</button>
+          <button class="btn btn-g btn-sm">失败</button>
+        </div>
+        <button class="btn btn-g btn-sm">导出</button>
+        <button class="btn btn-p btn-sm" onclick="openDemoModal('retry-batch')">重试失败项 (2)</button>
+      </div>
+
+      <!-- History Table -->
+      <div style="background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:10px;overflow:hidden">
+        <!-- Table Header -->
+        <div style="display:grid;grid-template-columns:50px 140px 1fr 100px 90px 70px 90px;gap:8px;padding:10px 14px;border-bottom:1px solid rgba(40,61,90,.4);font-size:11px;font-weight:600;color:var(--tx2);text-transform:uppercase">
+          <div>类型</div>
+          <div>时间</div>
+          <div>目标</div>
+          <div>工具</div>
+          <div>状态</div>
+          <div>耗时</div>
+          <div>操作</div>
+        </div>
+
+        <!-- Pod Success Row -->
+        <div style="display:grid;grid-template-columns:50px 140px 1fr 100px 90px 70px 90px;gap:8px;padding:10px 14px;border-bottom:1px solid rgba(40,61,90,.2);font-size:12px;align-items:center">
+          <div><span style="background:rgba(0,122,255,.15);color:var(--a);padding:2px 6px;border-radius:4px;font-size:10px">Pod</span></div>
+          <div style="color:var(--tx2);font-size:11px">2026-06-19 14:32</div>
+          <div>
+            <div style="font-weight:600">pod-a-7cc5f</div>
+            <div style="font-size:10px;color:var(--tx3)">prod / default</div>
+          </div>
+          <div style="font-size:11px">arthas-boot.jar</div>
+          <div><span class="badge badge-running">成功</span></div>
+          <div style="color:var(--tx2);font-size:11px">2.3s</div>
+          <div>
+            <button class="btn btn-g btn-sm" style="font-size:10px" onclick="closeModal(); openDemoModal('dist-detail')">详情</button>
+          </div>
+        </div>
+
+        <!-- Node Row -->
+        <div style="display:grid;grid-template-columns:50px 140px 1fr 100px 90px 70px 90px;gap:8px;padding:10px 14px;border-bottom:1px solid rgba(40,61,90,.2);font-size:12px;align-items:center">
+          <div><span style="background:rgba(255,149,0,.15);color:#ff9500;padding:2px 6px;border-radius:4px;font-size:10px">Node</span></div>
+          <div style="color:var(--tx2);font-size:11px">2026-06-19 14:25</div>
+          <div>
+            <div style="font-weight:600">node-1</div>
+            <div style="font-size:10px;color:var(--tx3)">prod · 4 Pods</div>
+          </div>
+          <div style="font-size:11px">async-profiler</div>
+          <div>
+            <span class="badge badge-running" style="font-size:9px">3 成功</span>
+          </div>
+          <div style="color:var(--tx2);font-size:11px">8.2s</div>
+          <div>
+            <button class="btn btn-g btn-sm" style="font-size:10px">详情</button>
+          </div>
+        </div>
+
+        <!-- Namespace Row -->
+        <div style="display:grid;grid-template-columns:50px 140px 1fr 100px 90px 70px 90px;gap:8px;padding:10px 14px;border-bottom:1px solid rgba(40,61,90,.2);font-size:12px;align-items:center">
+          <div><span style="background:rgba(52,199,89,.15);color:#34c759;padding:2px 6px;border-radius:4px;font-size:10px">NS</span></div>
+          <div style="color:var(--tx2);font-size:11px">2026-06-19 13:45</div>
+          <div>
+            <div style="font-weight:600">production</div>
+            <div style="font-size:10px;color:var(--tx3)">prod · 24 Pods</div>
+          </div>
+          <div style="font-size:11px">arthas-boot.jar</div>
+          <div>
+            <span class="badge badge-running" style="font-size:9px">18 成功</span>
+            <span class="badge badge-stopped" style="font-size:9px;margin-left:2px">2 失败</span>
+          </div>
+          <div style="color:var(--tx2);font-size:11px">45.3s</div>
+          <div>
+            <button class="btn btn-g btn-sm" style="font-size:10px">详情</button>
+          </div>
+        </div>
+
+        <!-- Failed Pod Row -->
+        <div style="display:grid;grid-template-columns:50px 140px 1fr 100px 90px 70px 90px;gap:8px;padding:10px 14px;border-bottom:1px solid rgba(40,61,90,.2);font-size:12px;align-items:center">
+          <div><span style="background:rgba(0,122,255,.15);color:var(--a);padding:2px 6px;border-radius:4px;font-size:10px">Pod</span></div>
+          <div style="color:var(--tx2);font-size:11px">2026-06-19 14:28</div>
+          <div>
+            <div style="font-weight:600">pod-d-9e1b3</div>
+            <div style="font-size:10px;color:#ff3b30">permission denied</div>
+          </div>
+          <div style="font-size:11px">arthas-boot.jar</div>
+          <div><span class="badge badge-stopped">失败</span></div>
+          <div style="color:var(--tx2);font-size:11px">0.4s</div>
+          <div>
+            <button class="btn btn-p btn-sm" style="font-size:10px" onclick="closeModal(); openDemoModal('retry-single')">重试</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Pagination -->
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
+        <div style="font-size:11px;color:var(--tx2)">共 12 条记录，显示 1-4</div>
+        <div style="display:flex;gap:4px">
+          <button class="btn btn-g btn-sm" disabled style="opacity:.5">上一页</button>
+          <button class="btn btn-p btn-sm">1</button>
+          <button class="btn btn-g btn-sm">2</button>
+          <button class="btn btn-g btn-sm">3</button>
+          <button class="btn btn-g btn-sm">下一页</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Distribution Progress Modal -->
+<div class="modal-overlay hidden" id="modal-dist-progress" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>分发进度</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;margin-bottom:8px">
+          <span style="font-size:12px;color:var(--tx2)">正在分发到 3 个 Pod...</span>
+          <span style="font-size:12px;color:var(--a)">2/3 完成</span>
+        </div>
+        <div style="height:4px;background:rgba(0,0,0,.3);border-radius:2px;overflow:hidden">
+          <div style="height:100%;background:var(--a);border-radius:2px;width:66%"></div>
+        </div>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <!-- Success item -->
+        <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(52,199,89,.08);border:1px solid rgba(52,199,89,.2);border-radius:6px">
+          <span style="color:#34c759;font-size:14px">✓</span>
+          <div style="flex:1">
+            <div style="font-size:12px;font-weight:600">pod-a-7cc5f</div>
+            <div style="font-size:11px;color:var(--tx2)">prod / default · 2.3s</div>
+          </div>
+          <span class="badge badge-running" style="font-size:10px">成功</span>
+        </div>
+
+        <!-- Success item -->
+        <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(52,199,89,.08);border:1px solid rgba(52,199,89,.2);border-radius:6px">
+          <span style="color:#34c759;font-size:14px">✓</span>
+          <div style="flex:1">
+            <div style="font-size:12px;font-weight:600">pod-b-8d2e1</div>
+            <div style="font-size:11px;color:var(--tx2)">prod / default · 1.8s</div>
+          </div>
+          <span class="badge badge-running" style="font-size:10px">成功</span>
+        </div>
+
+        <!-- In progress item -->
+        <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(0,122,255,.08);border:1px solid rgba(0,122,255,.2);border-radius:6px">
+          <span style="color:var(--a);font-size:14px">⏳</span>
+          <div style="flex:1">
+            <div style="font-size:12px;font-weight:600">pod-d-9e1b3</div>
+            <div style="font-size:11px;color:var(--tx2)">prod / default · 分发中...</div>
+          </div>
+          <span style="font-size:11px;color:var(--a)">进行中</span>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-s btn-sm">取消剩余</button>
+      <button class="btn btn-g btn-sm" onclick="closeModal(); openDemoModal('dist-result')">查看结果</button>
+    </div>
+  </div>
+</div>
+
+<!-- Distribution Result Modal -->
+<div class="modal-overlay hidden" id="modal-dist-result" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>分发结果</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Summary -->
+      <div style="display:flex;gap:16px;margin-bottom:20px">
+        <div style="flex:1;padding:12px;background:rgba(52,199,89,.1);border-radius:8px;text-align:center">
+          <div style="font-size:24px;font-weight:700;color:#34c759">2</div>
+          <div style="font-size:11px;color:var(--tx2)">成功</div>
+        </div>
+        <div style="flex:1;padding:12px;background:rgba(255,59,48,.1);border-radius:8px;text-align:center">
+          <div style="font-size:24px;font-weight:700;color:#ff3b30">1</div>
+          <div style="font-size:11px;color:var(--tx2)">失败</div>
+        </div>
+        <div style="flex:1;padding:12px;background:rgba(255,149,0,.1);border-radius:8px;text-align:center">
+          <div style="font-size:24px;font-weight:700;color:#ff9500">4.5s</div>
+          <div style="font-size:11px;color:var(--tx2)">总耗时</div>
+        </div>
+      </div>
+
+      <!-- Detail list -->
+      <div style="display:flex;flex-direction:column;gap:8px">
+        <!-- Success -->
+        <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(52,199,89,.08);border:1px solid rgba(52,199,89,.2);border-radius:6px">
+          <span style="color:#34c759;font-size:14px">✓</span>
+          <div style="flex:1">
+            <div style="font-size:12px;font-weight:600">pod-a-7cc5f</div>
+            <div style="font-size:11px;color:var(--tx2)">prod / default / app · 2.3s</div>
+          </div>
+          <span class="badge badge-running" style="font-size:10px">成功</span>
+        </div>
+
+        <!-- Success -->
+        <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(52,199,89,.08);border:1px solid rgba(52,199,89,.2);border-radius:6px">
+          <span style="color:#34c759;font-size:14px">✓</span>
+          <div style="flex:1">
+            <div style="font-size:12px;font-weight:600">pod-b-8d2e1</div>
+            <div style="font-size:11px;color:var(--tx2)">prod / default / app · 1.8s</div>
+          </div>
+          <span class="badge badge-running" style="font-size:10px">成功</span>
+        </div>
+
+        <!-- Failed -->
+        <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(255,59,48,.08);border:1px solid rgba(255,59,48,.2);border-radius:6px">
+          <span style="color:#ff3b30;font-size:14px">✗</span>
+          <div style="flex:1">
+            <div style="font-size:12px;font-weight:600">pod-d-9e1b3</div>
+            <div style="font-size:11px;color:var(--tx2)">prod / default / app · 0.4s</div>
+            <div style="font-size:11px;color:#ff3b30;margin-top:4px">错误: kubectl cp 失败: permission denied</div>
+          </div>
+          <button class="btn btn-g btn-sm" style="font-size:10px">重试</button>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">关闭</button>
+      <button class="btn btn-p btn-sm">重试失败项</button>
+    </div>
+  </div>
+</div>
+
+<!-- Distribution Detail Modal -->
+<div class="modal-overlay hidden" id="modal-dist-detail" onclick="if(event.target===this)closeModal()">
+  <div class="modal" style="width:600px">
+    <div class="modal-header">
+      <h3>分发详情</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Status banner -->
+      <div style="display:flex;align-items:center;gap:12px;padding:16px;background:rgba(52,199,89,.08);border:1px solid rgba(52,199,89,.2);border-radius:8px;margin-bottom:20px">
+        <span style="font-size:24px">✓</span>
+        <div>
+          <div style="font-size:14px;font-weight:700;color:#34c759">分发成功</div>
+          <div style="font-size:12px;color:var(--tx2)">耗时 2.3s</div>
+        </div>
+      </div>
+
+      <!-- Basic info -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
+        <div>
+          <div style="font-size:11px;color:var(--tx2);margin-bottom:4px">分发时间</div>
+          <div style="font-size:13px">2026-06-19 14:32:15</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--tx2);margin-bottom:4px">分发 ID</div>
+          <div style="font-size:13px;font-family:monospace">dist-a1b2c3d4</div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--tx2);margin-bottom:4px">分发类型</div>
+          <div style="font-size:13px"><span style="background:rgba(0,122,255,.15);color:var(--a);padding:2px 6px;border-radius:4px;font-size:11px">Pod</span></div>
+        </div>
+        <div>
+          <div style="font-size:11px;color:var(--tx2);margin-bottom:4px">操作用户</div>
+          <div style="font-size:13px">admin</div>
+        </div>
+      </div>
+
+      <!-- Target info -->
+      <div style="margin-bottom:20px">
+        <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px">目标信息</div>
+        <div style="background:rgba(0,0,0,.2);border-radius:8px;padding:12px">
+          <div style="display:grid;grid-template-columns:100px 1fr;gap:8px;font-size:12px">
+            <div style="color:var(--tx2)">集群</div>
+            <div>prod</div>
+            <div style="color:var(--tx2)">Namespace</div>
+            <div>default</div>
+            <div style="color:var(--tx2)">Pod</div>
+            <div>pod-a-7cc5f</div>
+            <div style="color:var(--tx2)">容器</div>
+            <div>app</div>
+            <div style="color:var(--tx2)">安装路径</div>
+            <div style="font-family:monospace">/app/arthas/arthas-boot.jar</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Tool info -->
+      <div style="margin-bottom:20px">
+        <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px">工具信息</div>
+        <div style="background:rgba(0,0,0,.2);border-radius:8px;padding:12px">
+          <div style="display:grid;grid-template-columns:100px 1fr;gap:8px;font-size:12px">
+            <div style="color:var(--tx2)">工具名称</div>
+            <div>arthas-boot.jar</div>
+            <div style="color:var(--tx2)">版本</div>
+            <div>v3.7.2</div>
+            <div style="color:var(--tx2)">SHA256</div>
+            <div style="font-family:monospace;font-size:11px">a1b2c3d4e5f6g7h8i9j0...</div>
+            <div style="color:var(--tx2)">校验状态</div>
+            <div><span style="color:#34c759">✓ 通过</span></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Execution log -->
+      <div>
+        <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px">执行日志</div>
+        <div style="background:rgba(0,0,0,.3);border:1px solid rgba(40,61,90,.4);border-radius:6px;padding:12px;font-family:monospace;font-size:11px;max-height:150px;overflow-y:auto">
+          <div style="color:var(--tx3);margin-bottom:4px">[14:32:13] 开始分发到 prod/default/pod-a-7cc5f</div>
+          <div style="color:var(--tx2);margin-bottom:4px">[14:32:13] 创建目标目录: mkdir -p /app/arthas</div>
+          <div style="color:var(--tx2);margin-bottom:4px">[14:32:14] 复制文件: kubectl cp arthas-boot.jar ...</div>
+          <div style="color:var(--tx2);margin-bottom:4px">[14:32:15] 校验文件: sha256sum /app/arthas/arthas-boot.jar</div>
+          <div style="color:#34c759">[14:32:15] ✓ 分发完成</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">关闭</button>
+      <button class="btn btn-g btn-sm">下载日志</button>
+      <button class="btn btn-p btn-sm">重新分发</button>
+    </div>
+  </div>
+</div>
+
+<!-- Single Retry Modal -->
+<div class="modal-overlay hidden" id="modal-retry-single" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>重试分发</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Original failed record -->
+      <div style="background:rgba(255,59,48,.08);border:1px solid rgba(255,59,48,.2);border-radius:8px;padding:12px;margin-bottom:16px">
+        <div style="font-size:11px;color:var(--tx2);margin-bottom:6px">失败记录</div>
+        <div style="display:flex;gap:16px;font-size:12px">
+          <div>
+            <span style="color:var(--tx2)">目标:</span>
+            <span style="font-weight:600">prod / default / pod-d-9e1b3</span>
+          </div>
+          <div>
+            <span style="color:var(--tx2)">工具:</span>
+            <span>arthas-boot.jar</span>
+          </div>
+        </div>
+        <div style="font-size:11px;color:#ff3b30;margin-top:6px">错误: kubectl cp 失败: permission denied</div>
+      </div>
+
+      <!-- Retry form -->
+      <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px">确认重试目标</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>集群</label>
+          <select class="inp"><option>prod</option></select>
+        </div>
+        <div class="form-group">
+          <label>Namespace</label>
+          <select class="inp"><option>default</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:2">
+          <label>Pod</label>
+          <select class="inp"><option>pod-d-9e1b3</option></select>
+        </div>
+        <div class="form-group">
+          <label>容器</label>
+          <select class="inp"><option>app</option></select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>安装路径</label>
+        <input class="inp" value="/app/arthas/arthas-boot.jar">
+      </div>
+      <div style="background:rgba(255,149,0,.08);border:1px solid rgba(255,149,0,.2);border-radius:6px;padding:10px;font-size:11px;color:var(--tx2)">
+        💡 建议: 检查 Pod 写入权限，或尝试使用其他容器
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">取消</button>
+      <button class="btn btn-p btn-sm" onclick="closeModal()">确认重试</button>
+    </div>
+  </div>
+</div>
+
+<!-- Batch Retry Modal -->
+<div class="modal-overlay hidden" id="modal-retry-batch" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>批量重试失败项</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:16px">
+        <div style="font-size:12px;color:var(--tx2);margin-bottom:10px">以下分发失败，是否重试？</div>
+        
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <!-- Failed item 1 -->
+          <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(255,59,48,.08);border:1px solid rgba(255,59,48,.2);border-radius:6px">
+            <input type="checkbox" checked style="width:14px;height:14px">
+            <div style="flex:1">
+              <div style="font-size:12px;font-weight:600">pod-d-9e1b3</div>
+              <div style="font-size:11px;color:var(--tx3)">prod / default / app</div>
+              <div style="font-size:10px;color:#ff3b30">permission denied</div>
+            </div>
+            <button class="btn btn-g btn-sm" style="font-size:10px">查看</button>
+          </div>
+
+          <!-- Failed item 2 -->
+          <div style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(255,59,48,.08);border:1px solid rgba(255,59,48,.2);border-radius:6px">
+            <input type="checkbox" checked style="width:14px;height:14px">
+            <div style="flex:1">
+              <div style="font-size:12px;font-weight:600">pod-e-2a4b1</div>
+              <div style="font-size:11px;color:var(--tx3)">prod / default / main</div>
+              <div style="font-size:10px;color:#ff3b30">connection refused</div>
+            </div>
+            <button class="btn btn-g btn-sm" style="font-size:10px">查看</button>
+          </div>
+        </div>
+      </div>
+
+      <div style="background:rgba(0,122,255,.08);border:1px solid rgba(0,122,255,.2);border-radius:6px;padding:10px;font-size:11px;color:var(--tx2)">
+        💡 批量重试将使用相同的工具和安装路径，仅重新执行分发操作
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">取消</button>
+      <button class="btn btn-p btn-sm" onclick="closeModal(); openDemoModal('dist-progress')">重试选中项 (2)</button>
+    </div>
+  </div>
+</div>
+
+<!-- Execute Modal -->
+<div class="modal-overlay hidden" id="modal-execute" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>执行: jad 反编译</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>命令预览</label>
+        <div style="background:rgba(0,0,0,.3);padding:10px;border-radius:6px;font-family:monospace;font-size:12px;color:var(--a2)">
+          jad com.example.MyClass
+        </div>
+      </div>
+      <div class="form-group">
+        <label>目标 Pod</label>
+        <div style="font-size:13px">
+          prod / default / pod-a-7cc5f <span class="dist-cap-badge cap-ok" style="margin-left:8px">✅ Arthas</span>
+        </div>
+      </div>
+      <div class="exec-progress" style="margin-top:16px">
+        <div style="height:4px;background:rgba(0,0,0,.3);border-radius:2px;overflow:hidden;margin-bottom:12px">
+          <div style="height:100%;background:var(--a);border-radius:2px;width:100%"></div>
+        </div>
+        <div style="background:rgba(0,0,0,.4);border:1px solid rgba(40,61,90,.4);border-radius:6px;padding:12px;font-family:monospace;font-size:11px;max-height:200px;overflow-y:auto">
+          <div style="margin-bottom:4px;color:var(--a2)">$ jad com.example.MyClass</div>
+          <div style="margin-bottom:4px;color:#34c759">✅ 反编译成功</div>
+          <div style="margin-bottom:4px;color:var(--tx2)">输出文件: /tmp/arthas/com/example/MyClass.java</div>
+          <div style="color:var(--tx2)">耗时: 0.8s</div>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">关闭</button>
+      <button class="btn btn-p btn-sm">下载结果</button>
+    </div>
+  </div>
+</div>
+
+<!-- Doc Modal -->
+<div class="modal-overlay hidden" id="modal-doc" onclick="if(event.target===this)closeModal()">
+  <div class="modal" style="width:640px">
+    <div class="modal-header">
+      <h3>Arthas 文档: jad</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="margin-bottom:16px">
+        <h4 style="font-size:14px;margin-bottom:8px">jad - 反编译已运行代码</h4>
+        <p style="font-size:12px;color:var(--tx2);line-height:1.6">
+          反编译指定类的源代码。可以用来查看正在运行的 Java 类的源码。
+        </p>
+      </div>
+      <div style="margin-bottom:16px">
+        <h4 style="font-size:13px;margin-bottom:8px">用法</h4>
+        <div style="background:rgba(0,0,0,.3);padding:10px;border-radius:6px;font-family:monospace;font-size:12px;color:var(--a2)">
+          jad <span style="color:var(--tx3)">[option]</span> <span style="color:#d2a8ff">class-pattern</span> [filter条件]
+        </div>
+      </div>
+      <div style="margin-bottom:16px">
+        <h4 style="font-size:13px;margin-bottom:8px">示例</h4>
+        <div style="background:rgba(0,0,0,.3);padding:10px;border-radius:6px;font-family:monospace;font-size:11px;color:var(--tx2)">
+          <div style="margin-bottom:4px"><span style="color:var(--tx3)"># 反编译单个类</span></div>
+          <div style="margin-bottom:8px;color:var(--a2)">jad com.example.MyClass</div>
+          <div style="margin-bottom:4px"><span style="color:var(--tx3)"># 反编译并输出到文件</span></div>
+          <div style="margin-bottom:8px;color:var(--a2)">jad -d /tmp arthas com.example.MyClass</div>
+          <div style="margin-bottom:4px"><span style="color:var(--tx3)"># 只反编译指定方法</span></div>
+          <div style="color:var(--a2)">jad com.example.MyClass *testMethod*</div>
+        </div>
+      </div>
+      <a href="https://arthas.aliyun.com/doc/jad.html" target="_blank" style="color:var(--a);font-size:12px">查看完整文档 →</a>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">关闭</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Binary Modal -->
+<div class="modal-overlay hidden" id="modal-edit-binary" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>编辑工具: arthas-boot.jar</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>工具名称 *</label>
+        <input class="inp" value="arthas-boot.jar">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>工具类型</label>
+          <select class="inp"><option selected>Arthas</option><option>async-profiler</option><option>通用</option></select>
+        </div>
+        <div class="form-group">
+          <label>版本</label>
+          <input class="inp" value="3.7.2">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>安装路径 *</label>
+        <input class="inp" value="/app/arthas/arthas-boot.jar">
+        <div class="form-hint">分发到 Pod 时的默认安装路径</div>
+      </div>
+      <div class="form-group">
+        <label>说明</label>
+        <input class="inp" value="Alibaba Java 诊断工具">
+      </div>
+      <div class="form-group">
+        <label>当前文件</label>
+        <div style="background:rgba(0,0,0,.2);padding:10px;border-radius:6px;font-size:12px">
+          <div style="color:var(--tx2);margin-bottom:4px">文件名: <span style="color:var(--tx)">arthas-boot.jar</span></div>
+          <div style="color:var(--tx2);margin-bottom:4px">SHA256: <span style="color:var(--tx);font-family:monospace">a1b2c3d4e5f6...</span></div>
+          <div style="color:var(--tx2)">大小: <span style="color:var(--tx)">2.3 MB</span></div>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>替换文件（可选）</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-g btn-sm">选择新文件</button>
+          <span style="font-size:12px;color:var(--tx3)">未选择文件</span>
+        </div>
+        <div class="form-hint">选择新文件后将替换当前文件，SHA256 将重新计算</div>
+      </div>
+    </div>
+      <div class="modal-footer">
+        <button class="btn btn-g btn-sm" onclick="closeModal()">取消</button>
+        <button class="btn btn-p btn-sm" onclick="closeModal(); openDemoModal('dist-progress')">确认分发</button>
+      </div>
+  </div>
+</div>
+
+<!-- Upload Modal -->
+<div class="modal-overlay hidden" id="modal-upload" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>上传二进制工具</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label>工具名称 *</label>
+        <input class="inp" placeholder="例如：arthas-boot-3.7.2">
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>工具类型</label>
+          <select class="inp"><option>Arthas</option><option>async-profiler</option><option>通用</option></select>
+        </div>
+        <div class="form-group">
+          <label>版本</label>
+          <input class="inp" placeholder="可选">
+        </div>
+      </div>
+      <div class="form-group">
+        <label>安装路径</label>
+        <input class="inp" value="/tmp/arthas/arthas-boot.jar">
+      </div>
+      <div class="form-group">
+        <label>二进制文件 *</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-g btn-sm">选择文件</button>
+          <span style="font-size:12px;color:var(--tx3)">未选择文件</span>
+        </div>
+        <div class="form-hint">支持 JAR、TAR.GZ、二进制文件</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">取消</button>
+      <button class="btn btn-p btn-sm" onclick="closeModal()">上传并登记</button>
+    </div>
+  </div>
+</div>
+
+<!-- Batch Distribute Modal -->
+<div class="modal-overlay hidden" id="modal-batch" onclick="if(event.target===this)closeModal()">
+  <div class="modal" style="width:680px">
+    <div class="modal-header">
+      <h3>批量分发工具</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <!-- Step 1: Select Tools (context-aware based on active tab) -->
+      <div style="margin-bottom:20px">
+        <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px;text-transform:uppercase">Step 1: 选择工具</div>
+        
+        <!-- Tool search -->
+        <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:10px">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" placeholder="搜索工具..." style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
+        </div>
+
+        <!-- Tool type tabs -->
+        <div style="display:flex;gap:4px;margin-bottom:10px;padding:3px;background:rgba(0,0,0,.2);border-radius:6px">
+          <button class="btn btn-sm" style="flex:1;background:rgba(0,122,255,.15);color:var(--a)" onclick="switchBatchTab('binary')">📦 二进制 <span style="opacity:.6">(2)</span></button>
+          <button class="btn btn-sm" style="flex:1" onclick="switchBatchTab('script')">🐍 脚本 <span style="opacity:.6">(2)</span></button>
+        </div>
+
+        <!-- Binary tools list -->
+        <div id="batchTab-binary" style="display:flex;flex-direction:column;gap:8px">
+          <label style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(0,0,0,.2);border:1px solid rgba(0,122,255,.3);border-radius:8px;cursor:pointer">
+            <input type="checkbox" checked style="width:16px;height:16px">
+            <div style="flex:1">
+              <div style="font-size:13px;font-weight:600">arthas-boot.jar</div>
+              <div style="font-size:11px;color:var(--tx2)">v3.7.2 · /app/arthas/arthas-boot.jar</div>
+            </div>
+            <span class="badge badge-running">可用</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:8px;cursor:pointer">
+            <input type="checkbox" style="width:16px;height:16px">
+            <div style="flex:1">
+              <div style="font-size:13px;font-weight:600">async-profiler</div>
+              <div style="font-size:11px;color:var(--tx2)">v2.9 · /tmp/async-profiler/bin/async-profiler</div>
+            </div>
+            <span class="badge badge-running">可用</span>
+          </label>
+        </div>
+
+        <!-- Script tools list (hidden by default) -->
+        <div id="batchTab-script" style="display:none;flex-direction:column;gap:8px">
+          <label style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:8px;cursor:pointer">
+            <input type="checkbox" style="width:16px;height:16px">
+            <div style="flex:1">
+              <div style="font-size:13px;font-weight:600">CPU分析脚本</div>
+              <div style="font-size:11px;color:var(--tx2)">Python · 低风险</div>
+            </div>
+          </label>
+          <label style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:8px;cursor:pointer">
+            <input type="checkbox" style="width:16px;height:16px">
+            <div style="flex:1">
+              <div style="font-size:13px;font-weight:600">GC日志分析</div>
+              <div style="font-size:11px;color:var(--tx2)">Shell · 低风险</div>
+            </div>
+          </label>
+          <button class="btn btn-g btn-sm" style="width:100%;justify-content:center;margin-top:4px">
+            更多... (还有 6 个)
+          </button>
+        </div>
+
+        <div style="font-size:11px;color:var(--tx3);margin-top:8px">已选: 1 个工具</div>
+      </div>
+
+      <!-- Step 2: Select Targets -->
+      <div style="margin-bottom:20px">
+        <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px;text-transform:uppercase">Step 2: 选择目标</div>
+        
+        <!-- Target dimension tabs -->
+        <div style="display:flex;gap:4px;margin-bottom:12px;padding:3px;background:rgba(0,0,0,.2);border-radius:6px">
+          <button class="btn btn-sm" style="flex:1;background:rgba(0,122,255,.15);color:var(--a)" onclick="switchTargetTab('pod')">📦 按 Pod</button>
+          <button class="btn btn-sm" style="flex:1" onclick="switchTargetTab('node')">🖥️ 按 Node</button>
+          <button class="btn btn-sm" style="flex:1" onclick="switchTargetTab('namespace')">📁 按 Namespace</button>
+          <button class="btn btn-sm" style="flex:1" onclick="switchTargetTab('label')">🏷️ 按标签</button>
+        </div>
+
+        <!-- By Pod -->
+        <div id="targetTab-pod">
+          <div class="form-row" style="margin-bottom:10px">
+            <div class="form-group">
+              <label>集群</label>
+              <select class="inp"><option>prod</option><option>staging</option></select>
+            </div>
+            <div class="form-group">
+              <label>Namespace</label>
+              <select class="inp"><option>default</option><option>kube-system</option></select>
+            </div>
+          </div>
+          <!-- Pod search and filters -->
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:8px">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" placeholder="搜索 Pod 名称..." style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
+          </div>
+          <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
+            <button class="btn btn-g btn-sm">全部 (12)</button>
+            <button class="btn btn-g btn-sm">Java Pod (8)</button>
+            <button class="btn btn-g btn-sm">已连接 (3)</button>
+            <button class="btn btn-g btn-sm">Running (10)</button>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" checked style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">pod-a-7cc5f</span>
+                <span style="color:var(--tx2);margin:0 4px">Running</span>
+                <span class="dist-cap-badge cap-ok" style="font-size:10px">Java 11 + Arthas</span>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" checked style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">pod-b-8d2e1</span>
+                <span style="color:var(--tx2);margin:0 4px">Running</span>
+                <span class="dist-cap-badge cap-ok" style="font-size:10px">Java 8 + Arthas</span>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">pod-c-3f4a2</span>
+                <span style="color:var(--tx2);margin:0 4px">Running</span>
+                <span class="dist-cap-badge cap-error" style="font-size:10px">Go 1.21 (不兼容)</span>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" checked style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">pod-d-9e1b3</span>
+                <span style="color:var(--tx2);margin:0 4px">Running</span>
+                <span class="dist-cap-badge cap-warn" style="font-size:10px">Java 17 (需 Arthas)</span>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">pod-e-2a4b1</span>
+                <span style="color:var(--tx2);margin:0 4px">Running</span>
+                <span class="dist-cap-badge cap-ok" style="font-size:10px">Java 11 + Arthas</span>
+              </div>
+            </label>
+            <!-- Load more button -->
+            <button class="btn btn-g btn-sm" style="width:100%;justify-content:center;margin-top:4px" onclick="this.textContent='加载中...'; setTimeout(() => { this.textContent='没有更多了'; this.disabled=true; this.style.opacity='.5'; }, 500)">
+              更多... (还有 8 个)
+            </button>
+          </div>
+        </div>
+
+        <!-- By Node (hidden by default) -->
+        <div id="targetTab-node" style="display:none">
+          <div class="form-group" style="margin-bottom:10px">
+            <label>集群</label>
+            <select class="inp"><option>prod</option><option>staging</option></select>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:8px">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" placeholder="搜索 Node 名称..." style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">node-1</span>
+                <span style="color:var(--tx2);margin-left:8px">4 Pods (3 Java)</span>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">node-2</span>
+                <span style="color:var(--tx2);margin-left:8px">6 Pods (5 Java)</span>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">node-3</span>
+                <span style="color:var(--tx2);margin-left:8px">5 Pods (4 Java)</span>
+              </div>
+            </label>
+            <button class="btn btn-g btn-sm" style="width:100%;justify-content:center;margin-top:4px">
+              更多... (还有 5 个)
+            </button>
+          </div>
+          <div style="font-size:11px;color:var(--tx3);margin-top:8px">选择 Node 后将自动选择其上的所有 Java Pod</div>
+        </div>
+
+        <!-- By Namespace (hidden by default) -->
+        <div id="targetTab-namespace" style="display:none">
+          <div class="form-group" style="margin-bottom:10px">
+            <label>集群</label>
+            <select class="inp"><option>prod</option><option>staging</option></select>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:8px">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" placeholder="搜索 Namespace..." style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
+          </div>
+          <div style="display:flex;flex-direction:column;gap:6px">
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">default</span>
+                <span style="color:var(--tx2);margin-left:8px">12 Pods (8 Java)</span>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">production</span>
+                <span style="color:var(--tx2);margin-left:8px">24 Pods (20 Java)</span>
+              </div>
+            </label>
+            <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
+              <input type="checkbox" style="width:14px;height:14px">
+              <div style="flex:1;font-size:12px">
+                <span style="font-weight:600">staging</span>
+                <span style="color:var(--tx2);margin-left:8px">8 Pods (6 Java)</span>
+              </div>
+            </label>
+            <button class="btn btn-g btn-sm" style="width:100%;justify-content:center;margin-top:4px">
+              更多... (还有 3 个)
+            </button>
+          </div>
+          <div style="font-size:11px;color:var(--tx3);margin-top:8px">选择 Namespace 后将自动选择其中的所有 Java Pod</div>
+        </div>
+
+        <!-- By Label (hidden by default) -->
+        <div id="targetTab-label" style="display:none">
+          <div class="form-group" style="margin-bottom:10px">
+            <label>集群</label>
+            <select class="inp"><option>prod</option><option>staging</option></select>
+          </div>
+          <div class="form-group" style="margin-bottom:10px">
+            <label>标签选择器</label>
+            <input class="inp" placeholder="例如: app=frontend, env=production">
+            <div class="form-hint">使用 Kubernetes 标签格式: key=value</div>
+          </div>
+          <div style="font-size:11px;color:var(--tx2)">匹配到 <b style="color:var(--tx)">8</b> 个 Pod (6 个 Java)</div>
+        </div>
+
+        <div style="font-size:11px;color:var(--tx3);margin-top:8px">已选: 3 个目标</div>
+      </div>
+
+      <!-- Summary -->
+      <div style="background:rgba(0,122,255,.08);border:1px solid rgba(0,122,255,.2);border-radius:8px;padding:12px">
+        <div style="font-size:12px;font-weight:600;color:var(--a);margin-bottom:4px">分发摘要</div>
+        <div style="font-size:12px;color:var(--tx2)">
+          将 <b style="color:var(--tx)">1</b> 个工具分发到 <b style="color:var(--tx)">3</b> 个 Pod (共 3 次分发操作)
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">取消</button>
+      <button class="btn btn-p btn-sm" onclick="closeModal()">确认分发</button>
+    </div>
+  </div>
+</div>
+
+<!-- Distribute Modal -->
+<div class="modal-overlay hidden" id="modal-distribute" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <div class="modal-header">
+      <h3>分发工具: arthas-boot.jar</h3>
+      <button class="btn-close" onclick="closeModal()">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="dist-recent-section">
+        <div class="dist-section-title">⭐ 最近使用</div>
+        <div class="dist-recent-list">
+          <div class="dist-recent-item">
+            <div class="dist-recent-target">
+              <span>prod</span><span class="sep">/</span>
+              <span>default</span><span class="sep">/</span>
+              <span>pod-a-7cc5f</span><span class="sep">(app)</span>
+            </div>
+            <span class="dist-recent-select">选择</span>
+          </div>
+          <div class="dist-recent-item">
+            <div class="dist-recent-target">
+              <span>prod</span><span class="sep">/</span>
+              <span>default</span><span class="sep">/</span>
+              <span>pod-b-8d2e1</span><span class="sep">(app)</span>
+            </div>
+            <span class="dist-recent-select">选择</span>
+          </div>
+        </div>
+      </div>
+      <div class="dist-divider">或手动选择目标</div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>集群</label>
+          <select class="inp"><option>prod</option><option>staging</option></select>
+        </div>
+        <div class="form-group">
+          <label>Namespace</label>
+          <select class="inp"><option>default</option><option>kube-system</option></select>
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="flex:2">
+          <label>Pod</label>
+          <select class="inp"><option>pod-a-7cc5f</option><option>pod-b-8d2e1</option></select>
+        </div>
+        <div class="form-group">
+          <label>容器</label>
+          <select class="inp"><option>app</option></select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>Pod 能力</label>
+        <span class="dist-cap-badge cap-ok">✅ Java 11 + Arthas</span>
+      </div>
+      <div class="form-group">
+        <label>安装路径</label>
+        <input class="inp" value="/app/arthas/arthas-boot.jar" id="distPathInput">
+        <div class="form-hint">默认使用工具配置的路径，可手动修改</div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-g btn-sm" onclick="closeModal()">取消</button>
+      <button class="btn btn-p btn-sm" onclick="closeModal()">确认分发</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function switchTab(tab, btn) {
+    document.querySelectorAll('.toolbox-tab').forEach(t => t.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+    document.getElementById('tab-' + tab).classList.add('active');
+  }
+
+  function openDemoModal(type) {
+    closeModal();
+    const modal = document.getElementById('modal-' + type);
+    if (modal) modal.classList.remove('hidden');
+  }
+
+  function openDistributeModal(toolName, defaultPath) {
+    closeModal();
+    // Update modal title
+    const modal = document.getElementById('modal-distribute');
+    if (modal) {
+      modal.querySelector('h3').textContent = '分发工具: ' + toolName;
+      document.getElementById('distPathInput').value = defaultPath;
+      modal.classList.remove('hidden');
+    }
+  }
+
+  function switchBatchTab(tab) {
+    // Hide all batch tabs
+    document.querySelectorAll('[id^="batchTab-"]').forEach(el => el.style.display = 'none');
+    // Show selected tab
+    document.getElementById('batchTab-' + tab).style.display = 'flex';
+  }
+
+  function switchTargetTab(tab) {
+    // Hide all target tabs
+    document.querySelectorAll('[id^="targetTab-"]').forEach(el => el.style.display = 'none');
+    // Show selected tab
+    document.getElementById('targetTab-' + tab).style.display = 'block';
+  }
+
+  function closeModal() {
+    document.querySelectorAll('.modal-overlay').forEach(m => m.classList.add('hidden'));
+  }
+</script>
+
+</body>
+</html>

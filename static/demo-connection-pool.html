@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>连接池 Demo v7 - UX 优化版</title>
+<style>
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:0.01ms!important;animation-iteration-count:1!important;transition-duration:0.01ms!important}}
+*{margin:0;padding:0;box-sizing:border-box}
+:root{--bg:#0d1117;--bg1:#131a24;--bg2:#1a2332;--bg3:#212d3f;--ln:#1e2d42;--ln2:#2d4059;--a:#007AFF;--a2:#4DA3FF;--a3:#34C759;--a4:#005EC4;--a5:#FF3B30;--a6:#FF9500;--tx:#c9d8ef;--tx2:#6b7fa0;--tx3:#344060;--mono:'IBM Plex Mono',monospace;--sans:'Syne',sans-serif;--ease:cubic-bezier(.4,0,.2,1)}
+body{font-family:var(--mono);background:var(--bg);color:var(--tx);height:100vh;overflow:hidden;font-size:13px}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:var(--ln2);border-radius:2px}
+.layout{display:flex;height:100vh}
+
+/* ── Focus ring ── */
+:focus-visible{outline:2px solid var(--a);outline-offset:2px;border-radius:4px}
+button:focus-visible,a:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--a);outline-offset:2px}
+
+/* ── Sidebar ── */
+.sidebar{width:246px;flex-shrink:0;background:linear-gradient(180deg,#131a26,#0a0e16);border-right:1px solid rgba(0,122,255,.15);display:flex;flex-direction:column;overflow:hidden}
+.side-nav{flex:1;overflow-y:auto;padding:6px 0}.side-nav::-webkit-scrollbar{width:3px}.side-nav::-webkit-scrollbar-thumb{background:var(--ln2);border-radius:2px}
+.sng{margin:0 6px 2px}
+.sng-t{display:flex;align-items:center;justify-content:space-between;width:100%;padding:7px 10px;background:none;border:none;color:var(--tx2);font-family:var(--mono);font-size:11px;cursor:pointer;border-radius:6px;text-align:left;transition:background .15s var(--ease)}.sng-t:hover{background:rgba(255,255,255,.04);color:var(--tx)}
+.sng-a{font-size:9px;transition:transform .2s var(--ease);color:var(--tx3)}.sng.collapsed .sng-a{transform:rotate(-90deg)}.sng.collapsed .sng-i{display:none}
+.sng-i{padding:0 2px 3px}
+.sni{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:5px;font-size:12px;color:var(--tx2);cursor:pointer;width:100%;border:none;background:none;text-align:left;font-family:var(--mono);transition:all .15s var(--ease);transform:translateZ(0)}.sni:hover{background:rgba(255,255,255,.04);color:var(--tx)}.sni:active{transform:scale(.98)}.sni.active{background:rgba(0,122,255,.08);color:var(--a);font-weight:600}
+.sni-ic{width:16px;text-align:center;font-size:13px;flex-shrink:0}
+
+/* ── Pool ── */
+.pool{width:280px;flex-shrink:0;background:var(--bg1);border-right:1px solid var(--ln);display:flex;flex-direction:column;overflow:hidden}
+.pool-hd{padding:10px 12px;border-bottom:1px solid var(--ln)}
+.pool-tt{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:1px;margin-bottom:6px;display:flex;align-items:center;justify-content:space-between}
+.pool-tt span:first-child{display:flex;align-items:center;gap:6px}
+.pool-add-btn{background:none;border:1px solid var(--ln);color:var(--a);border-radius:4px;padding:2px 8px;font-size:10px;cursor:pointer;font-family:var(--mono);transition:all .15s var(--ease)}.pool-add-btn:hover{background:rgba(0,122,255,.08);border-color:var(--a)}
+.pool-srch{padding:0 12px 8px}.pool-srch input{width:100%;padding:5px 8px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-family:var(--mono);font-size:11px;outline:none;transition:border-color .15s var(--ease)}.pool-srch input:focus{border-color:var(--a)}
+.pool-ls{flex:1;overflow-y:auto;padding:4px 8px}.pool-ls::-webkit-scrollbar{width:3px}.pool-ls::-webkit-scrollbar-thumb{background:var(--ln2);border-radius:2px}
+.pool-grp{font-size:9px;color:var(--tx3);text-transform:uppercase;letter-spacing:.8px;padding:8px 4px 3px;margin-top:4px;border-top:1px solid var(--ln);display:flex;align-items:center;justify-content:space-between;cursor:pointer;user-select:none;transition:color .15s}.pool-grp:first-child{border-top:none;margin-top:0}.pool-grp:hover{color:var(--tx2)}
+.pool-grp-cnt{background:rgba(0,122,255,.12);border:1px solid rgba(0,122,255,.2);border-radius:8px;padding:0 6px;font-size:9px;color:var(--a);font-weight:700}
+.pool-add{margin:6px;border:1px dashed var(--ln2);border-radius:8px;padding:8px;display:none;animation:fadeSlide .2s var(--ease)}.pool-add.show{display:block}
+@keyframes fadeSlide{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:translateY(0)}}
+.pool-add select{width:100%;padding:5px 6px;background:var(--bg);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-size:11px;margin-bottom:4px;transition:border-color .15s}.pool-add select:focus{border-color:var(--a);outline:none}
+.pool-add-r{display:flex;gap:4px}.pool-add-r select{flex:1}
+.btn-add{background:var(--a);color:#fff;border:none;border-radius:4px;padding:5px 12px;font-size:11px;font-weight:600;cursor:pointer;transition:all .15s var(--ease);transform:translateZ(0)}.btn-add:hover{filter:brightness(1.1);transform:translateY(-1px)}.btn-add:active{transform:scale(.97)}
+
+/* ── Connection Card ── */
+.cc{padding:8px 10px;border-radius:6px;border:1px solid var(--ln);margin-bottom:4px;cursor:pointer;transition:all .2s var(--ease);position:relative;transform:translateZ(0)}.cc:hover{border-color:rgba(0,122,255,.3);background:rgba(0,122,255,.03)}.cc:active{transform:scale(.99)}.cc.focus{border-color:var(--a);background:rgba(0,122,255,.05);box-shadow:0 0 0 1px rgba(0,122,255,.2)}
+.cc-hd{display:flex;align-items:center;gap:6px}
+.cc-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0;transition:all .2s}.cc-dot.arthas{background:var(--a3);box-shadow:0 0 5px rgba(52,199,89,.4)}.cc-dot.pod{background:var(--a);box-shadow:0 0 5px rgba(0,122,255,.3)}.cc-dot.degraded{background:var(--a6);box-shadow:0 0 5px rgba(255,149,0,.3)}.cc-dot.off{background:var(--tx3)}.cc-dot.connecting{background:var(--a6);animation:pulse 1.5s ease infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+.cc-nm{font-size:12px;font-weight:600;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:var(--tx)}
+.cc-badge{font-size:9px;padding:1px 6px;border-radius:3px;font-weight:600;transition:all .15s}.cc-badge.arthas{background:rgba(52,199,89,.1);color:var(--a3)}.cc-badge.pod{background:rgba(0,122,255,.1);color:var(--a2)}.cc-badge.degraded{background:rgba(255,149,0,.1);color:var(--a6)}.cc-badge.off{background:rgba(52,64,96,.2);color:var(--tx3)}.cc-badge.connecting{background:rgba(255,149,0,.1);color:var(--a6)}
+.cc-meta{font-size:10px;color:var(--tx3);margin-top:2px;display:flex;gap:6px}
+.cc-acts{position:absolute;right:6px;top:6px;display:flex;gap:2px;opacity:0;transition:opacity .15s}.cc:hover .cc-acts{opacity:1}
+.cc-act{background:none;border:none;color:var(--tx3);cursor:pointer;font-size:12px;padding:2px 3px;border-radius:3px;transition:all .1s}.cc-act:hover{color:var(--tx);background:rgba(255,255,255,.06)}.cc-act.del:hover{color:var(--a5);background:rgba(255,59,48,.08)}
+/* Expand */
+.cc-ex{display:none;border-top:1px solid var(--ln);background:rgba(0,0,0,.15);overflow:hidden;max-height:0;transition:max-height .25s var(--ease),opacity .2s;opacity:0}.cc-ex.show{display:block;max-height:600px;opacity:1}
+.cc-ex-i{padding:8px 10px;font-size:11px}
+.cc-ex-r{display:flex;justify-content:space-between;padding:2px 0}.cc-ex-k{color:var(--tx3)}.cc-ex-v{color:var(--tx2);font-family:var(--mono);font-size:10px}
+.cc-ex-hl{display:flex;align-items:center;gap:6px;margin-top:6px;padding:5px 8px;border-radius:4px;font-size:11px;transition:all .2s}.cc-ex-hl.ok{background:rgba(52,199,89,.06);color:var(--a3)}.cc-ex-hl.warn{background:rgba(255,149,0,.06);color:var(--a6)}.cc-ex-hl.err{background:rgba(255,59,48,.06);color:var(--a5)}
+.cc-ex-ar{display:flex;align-items:center;gap:6px;margin-top:6px;font-size:11px;color:var(--tx3)}.cc-ex-ar input{accent-color:var(--a)}
+.cc-ex-ab{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap}
+.cc-btn{padding:4px 10px;border-radius:4px;font-size:11px;font-weight:600;border:none;cursor:pointer;font-family:var(--mono);transition:all .15s var(--ease);transform:translateZ(0)}.cc-btn:hover{transform:translateY(-1px);filter:brightness(1.05)}.cc-btn:active{transform:scale(.97)}.cc-btn.st{background:var(--a);color:#fff}.cc-btn.sp{background:rgba(255,59,48,.08);color:var(--a5);border:1px solid rgba(255,59,48,.2)}.cc-btn.sr{background:rgba(255,149,0,.08);color:var(--a6);border:1px solid rgba(255,149,0,.2)}.cc-btn.sc{background:rgba(52,199,89,.08);color:var(--a3);border:1px solid rgba(52,199,89,.2)}.cc-btn:disabled{opacity:.3;cursor:not-allowed;transform:none}
+
+/* ── Workspace ── */
+.ws{flex:1;display:flex;flex-direction:column;overflow:hidden}
+.ws-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;color:var(--tx3);animation:fadeIn .3s var(--ease)}.ws-empty .ico{font-size:56px;opacity:.12;margin-bottom:12px}.ws-empty h3{font-size:16px;color:var(--tx2);margin-bottom:4px;font-family:var(--sans)}.ws-empty p{font-size:12px}
+.ws-hd{display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--ln);flex-shrink:0}
+.ws-hd-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0;transition:background .2s}
+.ws-hd-info{flex:1;min-width:0}.ws-hd-pod{font-size:14px;font-weight:700;color:var(--tx);font-family:var(--sans);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.ws-hd-ns{font-size:11px;color:var(--tx3)}
+.ws-hd-rt{font-size:11px;color:var(--a3);font-family:var(--mono)}
+.ws-hd-ab{display:flex;gap:4px;flex-shrink:0}
+.ws-bn{padding:4px 10px;border-radius:4px;font-size:11px;border:1px solid var(--ln);background:none;color:var(--tx2);cursor:pointer;font-family:var(--mono);transition:all .15s var(--ease);transform:translateZ(0)}.ws-bn:hover{border-color:var(--a);color:var(--a);transform:translateY(-1px)}.ws-bn:active{transform:scale(.97)}.ws-bn.pr{background:var(--a);color:#fff;border-color:var(--a)}.ws-bn.dg{border-color:rgba(255,59,48,.3);color:var(--a5)}.ws-bn:disabled{opacity:.35;cursor:not-allowed;transform:none}
+.ws-tabs{display:flex;gap:0;background:var(--bg1);border-bottom:1px solid var(--ln);flex-shrink:0;overflow-x:auto}
+.ws-tab{padding:8px 14px;font-size:12px;color:var(--tx3);cursor:pointer;border-bottom:2px solid transparent;transition:all .15s var(--ease);white-space:nowrap;font-family:var(--mono)}.ws-tab:hover{color:var(--tx2);background:rgba(255,255,255,.02)}.ws-tab.active{color:var(--a);border-bottom-color:var(--a);font-weight:600}
+.ws-body{flex:1;overflow:hidden;display:flex;flex-direction:column}
+.ws-pnl{display:none;flex:1;overflow-y:auto;padding:16px;animation:fadeIn .2s var(--ease)}.ws-pnl.active{display:block}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+
+/* Monitor sub-tabs */
+.pm-tabs{display:flex;gap:2px;padding:4px 12px;background:var(--bg2);border-bottom:1px solid var(--ln);flex-shrink:0;overflow-x:auto}
+.pm-tab{padding:4px 10px;font-size:11px;color:var(--tx3);cursor:pointer;border-radius:4px;transition:all .15s var(--ease);white-space:nowrap;font-family:var(--mono)}.pm-tab:hover{background:rgba(255,255,255,.04);color:var(--tx2)}.pm-tab.active{background:rgba(0,122,255,.08);color:var(--a);font-weight:600}
+
+/* Cards & Grid */
+.card{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;padding:14px;animation:fadeIn .2s var(--ease)}.card-tt{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px;font-weight:600}
+.mg{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
+.mc{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;padding:12px;transition:border-color .15s}.mc:hover{border-color:rgba(0,122,255,.15)}.mc .lb{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}.mc .vl{font-size:22px;font-weight:700;font-family:var(--mono)}.mc .vl.green{color:var(--a3)}.mc .vl.blue{color:var(--a2)}.mc .vl.yellow{color:var(--a6)}.mc .un{font-size:11px;color:var(--tx3);font-weight:400}.mc .bar{height:4px;background:var(--bg);border-radius:2px;margin-top:6px;overflow:hidden}.mc .bar-f{height:100%;border-radius:2px;transition:width .5s var(--ease)}
+
+/* Skeleton loading */
+.skeleton{background:linear-gradient(90deg,var(--bg2) 25%,var(--bg3) 50%,var(--bg2) 75%);background-size:200% 100%;animation:shimmer 1.5s infinite;border-radius:4px}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+
+/* Table */
+.pt{width:100%;border-collapse:collapse;font-size:11px}.pt th{text-align:left;padding:6px 8px;background:var(--bg2);color:var(--tx3);font-weight:500;position:sticky;top:0}.pt td{padding:5px 8px;border-bottom:1px solid var(--ln)}.pt tr:hover{background:rgba(255,255,255,.02)}.pt .pid{font-family:var(--mono);color:var(--a3)}.pt .st{padding:1px 6px;border-radius:3px;font-size:10px}.pt .st.run{background:rgba(52,199,89,.1);color:var(--a3)}.pt .st.sl{background:rgba(52,64,96,.15);color:var(--tx3)}
+
+/* Net/Events */
+.ng{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:10px}.nc{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;padding:12px;transition:border-color .15s}.nc:hover{border-color:rgba(0,122,255,.15)}.nc-t{font-size:11px;color:var(--tx3);margin-bottom:8px;display:flex;align-items:center;gap:6px}.nr{display:flex;justify-content:space-between;padding:2px 0;font-size:11px}.nr .k{color:var(--tx3)}.nr .v{font-family:var(--mono);color:var(--tx2)}
+.ev{display:flex;flex-direction:column;gap:6px}.ei{padding:8px 10px;background:var(--bg1);border:1px solid var(--ln);border-radius:6px;display:flex;gap:10px;font-size:11px;transition:border-color .15s}.ei:hover{border-color:rgba(0,122,255,.15)}.ei .tm{color:var(--tx3);white-space:nowrap;font-family:var(--mono);flex-shrink:0}.ei .tp{padding:1px 6px;border-radius:3px;font-size:10px;flex-shrink:0}.ei .tp.w{background:rgba(255,149,0,.1);color:var(--a6)}.ei .tp.n{background:rgba(52,199,89,.1);color:var(--a3)}.ei .tp.e{background:rgba(255,59,48,.1);color:var(--a5)}.ei .ms{color:var(--tx2);flex:1}
+
+/* Terminal/Console */
+.term{background:#000;border-radius:6px;padding:12px;font-family:var(--mono);font-size:11px;color:var(--a3);min-height:300px;white-space:pre-wrap}
+
+/* Sampler */
+.sg{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:10px}.sc{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;padding:14px;cursor:pointer;transition:all .2s var(--ease);transform:translateZ(0)}.sc:hover{border-color:var(--a);background:rgba(0,122,255,.03);transform:translateY(-2px)}.sc:active{transform:scale(.97)}.sc .ico{font-size:24px;margin-bottom:6px}.sc .nm{font-size:13px;font-weight:600;margin-bottom:2px;font-family:var(--sans)}.sc .ds{font-size:11px;color:var(--tx3)}
+
+/* Files */
+.fi{display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid var(--ln);font-size:12px;transition:background .1s}.fi:hover{background:rgba(255,255,255,.02)}.fi .nm{flex:1;font-family:var(--mono)}.fi .sz,.fi .tm{color:var(--tx3);font-size:11px;font-family:var(--mono)}
+
+/* Toast */
+.toast{position:fixed;bottom:16px;right:16px;padding:8px 14px;border-radius:6px;font-size:12px;z-index:999;animation:toastIn .25s var(--ease);max-width:360px;font-family:var(--mono);box-shadow:0 4px 12px rgba(0,0,0,.3)}.toast.i{background:var(--a);color:#fff}.toast.s{background:var(--a3);color:#000}.toast.w{background:var(--a6);color:#000}.toast.e{background:var(--a5);color:#fff}
+@keyframes toastIn{from{transform:translateY(16px) scale(.95);opacity:0}to{transform:translateY(0) scale(1);opacity:1}}
+
+/* Modal */
+.mo{position:fixed;inset:0;background:rgba(0,0,0,.6);display:none;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(4px)}.mo.show{display:flex}
+.mo-c{background:var(--bg1);border:1px solid var(--ln);border-radius:12px;padding:20px;max-width:400px;width:90%;animation:modalIn .2s var(--ease);box-shadow:0 16px 48px rgba(0,0,0,.5)}
+@keyframes modalIn{from{opacity:0;transform:scale(.95)}to{opacity:1;transform:scale(1)}}
+.mo-c h3{font-size:15px;margin-bottom:12px;font-family:var(--sans)}.mo-c p{font-size:12px;color:var(--tx2);margin-bottom:16px;line-height:1.5;white-space:pre-line}
+.mo-b{display:flex;gap:8px;justify-content:flex-end}.mo-b button{padding:6px 16px;border-radius:4px;font-size:12px;border:none;cursor:pointer;font-weight:600;font-family:var(--mono);transition:all .15s var(--ease);transform:translateZ(0)}.mo-b button:hover{transform:translateY(-1px)}.mo-b button:active{transform:scale(.97)}.mo-b .cn{background:var(--bg2);color:var(--tx2);border:1px solid var(--ln)}.mo-b .cf{background:var(--a5);color:#fff}
+
+/* Guard badge */
+.guard-badge{display:inline-flex;align-items:center;gap:4px;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;margin-left:8px;transition:all .15s}.guard-badge.off{background:rgba(100,116,139,.15);color:var(--tx3)}.guard-badge.on{background:rgba(52,199,89,.1);color:var(--a3)}
+</style>
+</head>
+<body>
+<div class="layout">
+  <!-- ═══ Sidebar ═══ -->
+  <div class="sidebar"><div class="side-nav">
+    <div class="sng"><button class="sng-t"><span>工作台</span><span class="sng-a">▾</span></button><div class="sng-i"><button class="sni active"><span class="sni-ic">🏠</span>工作台</button></div></div>
+    <div class="sng collapsed"><button class="sng-t"><span>工具箱</span><span class="sng-a">▾</span></button><div class="sng-i"><button class="sni"><span class="sni-ic">🧰</span>工具管理</button></div></div>
+    <div class="sng collapsed"><button class="sng-t"><span>任务</span><span class="sng-a">▾</span></button><div class="sng-i"><button class="sni"><span class="sni-ic">📋</span>任务列表</button><button class="sni"><span class="sni-ic">⏱</span>调度管理</button><button class="sni"><span class="sni-ic">📊</span>执行记录</button></div></div>
+    <div class="sng collapsed"><button class="sng-t"><span>系统管理</span><span class="sng-a">▾</span></button><div class="sng-i"><button class="sni"><span class="sni-ic">⚡</span>Skill 管理</button><button class="sni"><span class="sni-ic">👥</span>用户管理</button><button class="sni"><span class="sni-ic">📋</span>审计日志</button><button class="sni"><span class="sni-ic">🔔</span>告警中心</button><button class="sni"><span class="sni-ic">⚙️</span>模型配置</button><button class="sni"><span class="sni-ic">🔌</span>MCP 接入</button></div></div>
+    <div class="sng collapsed"><button class="sng-t"><span>外部系统</span><span class="sng-a">▾</span></button><div class="sng-i"><div style="padding:6px 10px;font-size:11px;color:var(--tx3)">加载中...</div></div></div>
+  </div></div>
+
+  <!-- ═══ Connection Pool ═══ -->
+  <div class="pool">
+    <div class="pool-hd">
+      <div class="pool-tt"><span>🔌 连接池</span><span id="pCnt" style="color:var(--a)"></span></div>
+      <button class="pool-add-btn" onclick="toggleAdd()">+ 新连接</button>
+    </div>
+    <div class="pool-srch"><input placeholder="搜索 Pod / 集群 / 命名空间..." oninput="filterPool(this.value)" aria-label="搜索连接"></div>
+    <div class="pool-ls" id="pLs"></div>
+    <div id="addPnl" class="pool-add">
+      <select id="sCl" aria-label="集群"><option>prod-cluster-1</option><option>prod-cluster-2</option><option>staging-cluster</option><option>dev-cluster</option></select>
+      <select id="sNs" onchange="updPods()" aria-label="命名空间"><option>app-prod</option><option>app-staging</option><option>default</option><option>kube-system</option></select>
+      <div class="pool-add-r"><select id="sPd" aria-label="Pod"></select><button class="btn-add" onclick="addConn()">连接</button></div>
+    </div>
+  </div>
+
+  <!-- ═══ Workspace ═══ -->
+  <div class="ws">
+    <div class="ws-empty" id="wsE"><div class="ico">⚡</div><h3>选择一个连接开始诊断</h3><p>从连接池选择 Pod，或创建新连接</p></div>
+    <div id="wsC" style="display:none;flex:1;display:none;flex-direction:column;overflow:hidden">
+      <div class="ws-hd"><div class="ws-hd-dot" id="wDot"></div><div class="ws-hd-info"><div class="ws-hd-pod" id="wPod"></div><div class="ws-hd-ns" id="wNs"></div></div><div class="ws-hd-rt" id="wRt"></div><div class="ws-hd-ab" id="wAb"></div></div>
+      <div class="ws-tabs" id="wTabs" role="tablist"></div>
+      <div class="ws-body" id="wBody" role="tabpanel"></div>
+    </div>
+  </div>
+</div>
+
+<div class="mo" id="mo" role="dialog" aria-modal="true"><div class="mo-c"><h3 id="moT">确认</h3><p id="moM"></p><div class="mo-b"><button class="cn" onclick="cMo()">取消</button><button class="cf" onclick="dMo()">确认</button></div></div></div>
+
+<script>
+let conns=[
+  {id:'p1/a/user',cluster:'prod-1',ns:'app-prod',pod:'user-service-7b8f9c5d6-abc12',runtime:{type:'java',version:'17.0.2'},pid:12345,uptime:'72h',level:'arthas',state:'connected',arthas:{port:8563,version:'3.7.1'},health:'ok',autoReconnect:true,lastHb:Date.now(),tab:'monitor',pmTab:'ov',sampSt:null,viewMode:'compact',lastUsed:Date.now()},
+  {id:'p1/a/order',cluster:'prod-1',ns:'app-prod',pod:'order-service-5d4a2f8c9-def34',runtime:{type:'java',version:'11.0.18'},pid:67890,uptime:'168h',level:'pod',state:'connected',arthas:null,health:'ok',autoReconnect:false,lastHb:Date.now(),tab:'monitor',pmTab:'ov',sampSt:null,viewMode:'compact',lastUsed:Date.now()-60000},
+  {id:'s1/d/nginx',cluster:'stg-1',ns:'default',pod:'nginx-proxy-1a2b3c4d5-gh678',runtime:{type:'node',version:'18.16'},pid:1111,uptime:'48h',level:'pod',state:'degraded',arthas:null,health:'warn',autoReconnect:true,lastHb:Date.now()-30000,tab:'monitor',pmTab:'ov',sampSt:null,viewMode:'compact',lastUsed:Date.now()-120000},
+];
+let focusId=null, exId=null, moCb=null, sampIv=null;
+
+function renderPool(){const el=document.getElementById('pLs');document.getElementById('pCnt').textContent=`(${conns.length})`;if(!conns.length){el.innerHTML='<div style="padding:24px 16px;text-align:center;animation:fadeIn .3s var(--ease)"><div style="font-size:36px;opacity:.15;margin-bottom:8px">🔌</div><div style="font-size:12px;color:var(--tx2);margin-bottom:4px">暂无连接</div><div style="font-size:11px;color:var(--tx3)">点击上方"+ 新连接"开始</div></div>';return}const active=conns.filter(c=>c.state!=='disconnected'&&c.state!=='dead').sort((a,b)=>b.lastUsed-a.lastUsed),inactive=conns.filter(c=>c.state==='disconnected'||c.state==='dead').sort((a,b)=>b.lastUsed-a.lastUsed);let h='';if(active.length)h+=`<div class="pool-grp" onclick="toggleGrp(this)">活跃连接 <span class="pool-grp-cnt">${active.length}</span></div><div class="pool-grp-items">${active.map(cc).join('')}</div>`;if(inactive.length)h+=`<div class="pool-grp" onclick="toggleGrp(this)">已断开 <span class="pool-grp-cnt">${inactive.length}</span></div><div class="pool-grp-items collapsed">${inactive.map(cc).join('')}</div>`;el.innerHTML=h}
+function cc(c){const f=c.id===focusId,dc={arthas:'arthas',pod:'pod',degraded:'degraded',dead:'dead',off:'off',connecting:'connecting'}[c.state==='connected'?c.level:c.state]||'off',bt={arthas:'Arthas',pod:'Pod',degraded:'⚠ 弱',dead:'✕ 失效',off:'未连',connecting:'...'}[c.state==='connected'?c.level:c.state]||c.state,s=c.pod.split('-').slice(0,-2).join('-'),ex=exId===c.id;return`<div class="cc${f?' focus':''}" onclick="focusConn('${c.id}')" tabindex="0" role="button" aria-label="${s} ${bt}"><div class="cc-acts"><button class="cc-act" title="详情" onclick="event.stopPropagation();toggleEx('${c.id}')" tabindex="-1">⋯</button><button class="cc-act del" title="删除" onclick="event.stopPropagation();confirmDel('${c.id}')" tabindex="-1">✕</button></div><div class="cc-hd"><div class="cc-dot ${dc}"></div><div class="cc-nm">${s}</div><span class="cc-badge ${dc}">${bt}</span></div><div class="cc-meta"><span>${c.cluster}/${c.ns}</span><span>${c.runtime.type}</span></div><div class="cc-ex${ex?' show':''}"><div class="cc-ex-i"><div class="cc-ex-r"><span class="cc-ex-k">Pod</span><span class="cc-ex-v">${c.pod}</span></div><div class="cc-ex-r"><span class="cc-ex-k">运行时</span><span class="cc-ex-v">${c.runtime.type} ${c.runtime.version}</span></div><div class="cc-ex-r"><span class="cc-ex-k">PID / 运行时间</span><span class="cc-ex-v">${c.pid} · ${c.uptime}</span></div>${c.level==='arthas'?`<div class="cc-ex-r"><span class="cc-ex-k">Arthas</span><span class="cc-ex-v">v${c.arthas.version} :${c.arthas.port}</span></div>`:''}<div class="cc-ex-hl ${c.health}">${c.health==='ok'?'✅ 健康':c.health==='warn'?'⚠ 缓慢':'✕ 失效'}${c.health!=='ok'?`<span style="margin-left:auto">${Math.round((Date.now()-c.lastHb)/1000)}s前</span>`:''}</div><label class="cc-ex-ar"><input type="checkbox" ${c.autoReconnect?'checked':''} onclick="event.stopPropagation();getC('${c.id}').autoReconnect=this.checked;toast(this.checked?'自动重连开启':'自动重连关闭','i')"> 自动重连</label><div class="cc-ex-ab">${c.state==='disconnected'||c.state==='dead'?`<button class="cc-btn sc" onclick="event.stopPropagation();reconn('${c.id}')">⚡ 重连</button>`:''}${c.state==='connected'&&c.level!=='arthas'?`<button class="cc-btn st" onclick="event.stopPropagation();upgrade('${c.id}')">🚀 Arthas</button>`:''}${c.level==='arthas'?`<button class="cc-btn sp" onclick="event.stopPropagation();stopA('${c.id}')">⏹ Arthas</button>`:''}${c.state!=='disconnected'&&c.state!=='dead'?`<button class="cc-btn sp" onclick="event.stopPropagation();disc('${c.id}')">🔌 断开</button>`:''}${c.state!=='dead'?`<button class="cc-btn sr" onclick="event.stopPropagation();rstrt('${c.id}')">🔄 重启</button>`:''}</div></div></div></div>`}
+function getC(id){return conns.find(c=>c.id===id)}
+function toggleEx(id){exId=exId===id?null:id;renderPool()}
+function toggleGrp(el){el.nextElementSibling?.classList.toggle('collapsed')}
+function filterPool(q){document.querySelectorAll('.cc').forEach(el=>{el.style.display=el.textContent.toLowerCase().includes(q.toLowerCase())?'':'none'})}
+function focusConn(id){focusId=id;exId=null;renderPool();const c=getC(id);document.getElementById('wsE').style.display='none';const wc=document.getElementById('wsC');wc.style.display='flex';const dc=c.level==='arthas'?'var(--a3)':c.state==='connected'?'var(--a)':c.state==='degraded'?'var(--a6)':'var(--tx3)';document.getElementById('wDot').style.background=dc;document.getElementById('wPod').textContent=c.pod.split('-').slice(0,-2).join('-');document.getElementById('wNs').textContent=`${c.cluster} / ${c.ns}`;document.getElementById('wRt').textContent=`${c.runtime.type} ${c.runtime.version} · PID:${c.pid}`;c.lastUsed=Date.now();let ah='';if(c.level!=='arthas'&&c.state==='connected')ah+=`<button class="ws-bn" onclick="upgrade('${c.id}')">🚀 Arthas</button>`;if(c.level==='arthas')ah+=`<button class="ws-bn" onclick="stopA('${c.id}')">⏹ Arthas</button>`;if(c.state!=='disconnected'&&c.state!=='dead')ah+=`<button class="ws-bn dg" onclick="disc('${c.id}')">断开</button>`;document.getElementById('wAb').innerHTML=ah;rTabs(c);rBody(c)}
+function rTabs(c){const t=[{i:'monitor',ic:'📊',l:'监控'}];if(c.level==='arthas')t.push({i:'sampling',ic:'🔥',l:'采样'},{i:'console',ic:'⚡',l:'Arthas'},{i:'hotfix',ic:'🔧',l:'热修复'},{i:'diag',ic:'🔬',l:'诊断'});if(c.state==='connected')t.push({i:'terminal',ic:'🖥️',l:'终端'},{i:'files',ic:'📂',l:'文件'});t.push({i:'history',ic:'📋',l:'历史'});document.getElementById('wTabs').innerHTML=t.map(x=>`<div class="ws-tab${x.i===c.tab?' active':''}" onclick="swTab('${x.i}')" role="tab" aria-selected="${x.i===c.tab}">${x.ic} ${x.l}</div>`).join('')}
+function rBody(c){document.getElementById('wBody').innerHTML='';const t=c.tab;if(t==='monitor')rMon(c);else if(t==='sampling')rSamp(c);else if(t==='console')rCon(c);else if(t==='terminal')rTerm(c);else if(t==='files')rFiles(c);else if(t==='history')rHist(c);else if(t==='hotfix')rHot(c);else if(t==='diag')rDiag(c)}
+function swTab(t){const c=getC(focusId);if(c){c.tab=t;rTabs(c);rBody(c)}}
+function rMon(c){document.getElementById('wBody').innerHTML=`<div class="pm-tabs">${PM.map(t=>`<div class="pm-tab${t.i===c.pmTab?' active':''}" onclick="swPm('${t.i}')">${t.ic} ${t.l}</div>`).join('')}</div><div id="pmB" style="flex:1;overflow-y:auto;padding:16px"><div class="skeleton" style="height:200px;margin:16px"></div></div>`;setTimeout(()=>rPm(c),300)}
+const PM=[{i:'ov',ic:'📊',l:'概览'},{i:'mt',ic:'📈',l:'指标'},{i:'pr',ic:'⚙️',l:'进程'},{i:'nw',ic:'🌐',l:'网络'},{i:'dk',ic:'💾',l:'磁盘'},{i:'ev',ic:'🔔',l:'事件'},{i:'lg',ic:'📄',l:'日志'},{i:'cf',ic:'🔧',l:'配置'}];
+function rPm(c){const b=document.getElementById('pmB');if(!b)return;const t=c.pmTab;if(t==='ov'){const cpu=(Math.random()*60+5).toFixed(1),mem=Math.floor(Math.random()*500+100),th=Math.floor(Math.random()*80+10),gc=Math.floor(Math.random()*20),rx=Math.floor(Math.random()*200+10),tx=Math.floor(Math.random()*80+5);b.innerHTML=`<div class="mg"><div class="mc"><div class="lb">CPU</div><div class="vl ${cpu>50?'yellow':'green'}">${cpu}<span class="un">%</span></div><div class="bar"><div class="bar-f" style="width:${cpu}%;background:${cpu>50?'var(--a6)':'var(--a3)'}"></div></div></div><div class="mc"><div class="lb">内存</div><div class="vl blue">${mem}<span class="un">MB</span></div><div class="bar"><div class="bar-f" style="width:${mem/40}%;background:var(--a)"></div></div></div><div class="mc"><div class="lb">线程</div><div class="vl">${th}</div></div><div class="mc"><div class="lb">GC</div><div class="vl">${gc}<span class="un">次</span></div></div><div class="mc"><div class="lb">RX</div><div class="vl green">${rx}<span class="un">KB/s</span></div></div><div class="mc"><div class="lb">TX</div><div class="vl blue">${tx}<span class="un">KB/s</span></div></div></div>`}else if(t==='pr'){b.innerHTML=`<table class="pt"><thead><tr><th>PID</th><th>名称</th><th>CPU%</th><th>MEM%</th><th>RSS</th><th>状态</th></tr></thead><tbody><tr><td class="pid">${c.pid}</td><td>${c.runtime.type==='java'?'java -jar app.jar':'node server.js'}</td><td>12.3%</td><td>345%</td><td>1.2G</td><td><span class="st run">运行</span></td></tr><tr><td class="pid">1</td><td>containerd-shim</td><td>0.1%</td><td>12%</td><td>12M</td><td><span class="st run">运行</span></td></tr></tbody></table>`}else if(t==='nw'){b.innerHTML=`<div class="ng"><div class="nc"><div class="nc-t">🌐 eth0</div><div class="nr"><span class="k">RX</span><span class="v">1.2 GB</span></div><div class="nr"><span class="k">TX</span><span class="v">856 MB</span></div></div><div class="nc"><div class="nc-t">🔗 TCP</div><div class="nr"><span class="k">ESTABLISHED</span><span class="v">45</span></div><div class="nr"><span class="k">TIME_WAIT</span><span class="v">12</span></div></div></div>`}else if(t==='ev'){b.innerHTML=`<div class="ev"><div class="ei"><span class="tm">14:30</span><span class="tp w">⚠️</span><span class="ms">内存超过 80%</span></div><div class="ei"><span class="tm">14:28</span><span class="tp n">✅</span><span class="ms">健康检查通过</span></div><div class="ei"><span class="tm">14:25</span><span class="tp e">🔴</span><span class="ms">连接超时</span></div></div>`}else if(t==='dk'){b.innerHTML=`<div class="mg"><div class="mc"><div class="lb">/ 磁盘</div><div class="vl blue">12.3<span class="un">GB / 50GB</span></div><div class="bar"><div class="bar-f" style="width:24%;background:var(--a)"></div></div></div><div class="mc"><div class="lb">IOPS</div><div class="vl green">${Math.floor(Math.random()*500+50)}<span class="un">/s</span></div></div></div>`}else if(t==='lg'){b.innerHTML=`<div class="term" style="font-size:11px">14:30:12 INFO  Application started in 3.2s\n14:30:12 INFO  Tomcat started on port 8080\n14:28:45 INFO  Health check passed</div>`}else if(t==='cf'){b.innerHTML=`<div class="card"><div class="card-tt">容器配置</div><div class="nr"><span class="k" style="color:var(--tx3)">CPU</span><span class="v">500m / 2000m</span></div><div class="nr"><span class="k" style="color:var(--tx3)">Memory</span><span class="v">512Mi / 4Gi</span></div></div>`}else if(t==='mt'){b.innerHTML=`<div class="card"><div class="card-tt">📈 CPU / 内存趋势</div><div style="height:150px;background:var(--bg2);border-radius:4px;display:flex;align-items:center;justify-content:center;color:var(--tx3);font-size:12px">实时图表区域</div></div>`}}
+function swPm(t){const c=getC(focusId);if(c){c.pmTab=t;rPm(c);document.querySelectorAll('.pm-tab').forEach(x=>x.classList.toggle('active',x.textContent.includes({ov:'概览',mt:'指标',pr:'进程',nw:'网络',dk:'磁盘',ev:'事件',lg:'日志',cf:'配置'}[t])))}}
+function rSamp(c){document.getElementById('wBody').innerHTML=`<div style="padding:16px"><div class="card"><div class="card-tt">采样工具</div><div class="sg"><div class="sc" onclick="doSamp('CPU 采样','${c.id}')"><div class="ico">🔥</div><div class="nm">CPU</div><div class="ds">async-profiler</div></div><div class="sc" onclick="doSamp('内存分配','${c.id}')"><div class="ico">🧠</div><div class="nm">内存分配</div><div class="ds">追踪分配路径</div></div><div class="sc" onclick="doSamp('锁竞争','${c.id}')"><div class="ico">🔒</div><div class="nm">锁竞争</div><div class="ds">检测锁等待</div></div><div class="sc" onclick="doSamp('Wall Time','${c.id}')"><div class="ico">⏱️</div><div class="nm">Wall Time</div><div class="ds">线程执行时间</div></div><div class="sc" onclick="doSamp('JFR','${c.id}')"><div class="ico">📹</div><div class="nm">JFR</div><div class="ds">Flight Recorder</div></div><div class="sc" onclick="doSamp('线程 Dump','${c.id}')"><div class="ico">🧵</div><div class="nm">线程 Dump</div><div class="ds">堆栈快照</div></div><div class="sc" onclick="doSamp('Heap Dump','${c.id}')"><div class="ico">📦</div><div class="nm">Heap Dump</div><div class="ds">堆快照</div></div></div></div><div id="sampSt" style="display:none;padding:10px 14px;background:var(--bg1);border:1px solid var(--ln);border-radius:8px;margin-top:10px;align-items:center;gap:8px;animation:fadeIn .2s var(--ease)"><div style="width:8px;height:8px;border-radius:50%;background:var(--a);animation:pulse 1.5s ease infinite"></div><span id="sampTx" style="font-size:12px">采样中...</span><span style="margin-left:auto;color:var(--tx3);font-size:11px" id="sampTm">0s</span></div></div>`}
+function doSamp(type,cid){const c=getC(cid);if(!c)return;c.sampSt={type,sec:0,done:false};const st=document.getElementById('sampSt');if(st)st.style.display='flex';if(sampIv)clearInterval(sampIv);sampIv=setInterval(()=>{const c2=getC(cid);if(c2&&c2.sampSt&&!c2.sampSt.done){c2.sampSt.sec++;const el=document.getElementById('sampTm');if(el)el.textContent=c2.sampSt.sec+'s'}},1000);const st2=document.getElementById('sampTx');if(st2)st2.textContent=type+' 采集中...';setTimeout(()=>{clearInterval(sampIv);toast(type+' 完成，数据保留在 '+c.pod.split('-').slice(0,-2).join('-'),'s')},3000+Math.random()*3000)}
+function rCon(c){document.getElementById('wBody').innerHTML=`<div style="padding:16px"><div class="card"><div class="card-tt">Arthas Console</div><div class="term">[arthas@${c.pid}]$ dashboard\n\nID   NAME                          GROUP      PRIORITY  STATE    %CPU\n1    main                          main       5         RUNNABLE 12.3\n15   arthas-command-execute       system     5         TIMED_WAIT 0.0\n\nMemory: used/max = 345M/2048M(16.8%)\nClasses: loaded=12840 total=25680</div></div></div>`}
+function rTerm(c){const s=c.pod.split('-').slice(0,-2).join('-');document.getElementById('wBody').innerHTML=`<div style="padding:16px"><div class="card"><div class="card-tt">终端</div><div class="term">root@${s}:/# uname -a\nLinux ${c.pod} 5.15.0-91-generic x86_64\n\nroot@${s}:/# java -version\nopenjdk version "${c.runtime.version}" 2022-01-18 LTS</div></div></div>`}
+function rFiles(c){document.getElementById('wBody').innerHTML=`<div style="padding:16px"><div class="card"><div class="card-tt">文件浏览</div><div class="fi"><span>📁</span><span class="nm">app/</span><span class="sz">-</span><span class="tm">-</span></div><div class="fi"><span>📁</span><span class="nm">tmp/</span><span class="sz">-</span><span class="tm">-</span></div><div class="fi"><span>📄</span><span class="nm">arthas-boot.jar</span><span class="sz">3.2 MB</span><span class="tm">2024-01-15</span></div><div class="fi"><span>📄</span><span class="nm">application.jar</span><span class="sz">42.1 MB</span><span class="tm">2024-06-18</span></div></div></div>`}
+function rHist(c){document.getElementById('wBody').innerHTML=`<div style="padding:16px"><div class="card"><div class="card-tt">历史 — ${c.pod.split('-').slice(0,-2).join('-')}</div><table class="pt"><thead><tr><th>时间</th><th>类型</th><th>状态</th><th>操作</th></tr></thead><tbody><tr><td>06-19 14:30</td><td>CPU 采样</td><td><span class="st run">完成</span></td><td style="color:var(--a);cursor:pointer">下载</td></tr><tr><td>06-19 13:15</td><td>线程 Dump</td><td><span class="st run">完成</span></td><td style="color:var(--a);cursor:pointer">下载</td></tr></tbody></table><div style="margin-top:8px;font-size:11px;color:var(--tx3)">💡 数据独立于连接</div></div></div>`}
+function rHot(c){document.getElementById('wBody').innerHTML=`<div style="padding:16px"><div class="card"><div class="card-tt">热修复</div><div style="display:flex;gap:16px;align-items:center;flex-wrap:wrap"><div style="text-align:center"><div style="font-size:28px">📄</div><div style="font-size:11px;color:var(--tx3)">jad</div></div><span style="color:var(--tx3)">→</span><div style="text-align:center"><div style="font-size:28px">✏️</div><div style="font-size:11px;color:var(--tx3)">编辑</div></div><span style="color:var(--tx3)">→</span><div style="text-align:center"><div style="font-size:28px">🔨</div><div style="font-size:11px;color:var(--tx3)">mc</div></div><span style="color:var(--tx3)">→</span><div style="text-align:center"><div style="font-size:28px">⚡</div><div style="font-size:11px;color:var(--tx3)">redefine</div></div></div></div></div>`}
+function rDiag(c){document.getElementById('wBody').innerHTML=`<div style="padding:16px"><div class="card"><div class="card-tt">诊断中心</div><div style="color:var(--tx3);text-align:center;padding:20px">按场景组织 JVM 与 Pod 诊断<br><span style="font-size:11px;margin-top:8px;display:block">需要 Arthas 连接</span></div></div></div>`}
+function reconn(id){const c=getC(id);c.state='connecting';c.health='warn';renderPool();toast('重连中...','i');setTimeout(()=>{c.state='connected';c.level='pod';c.health='ok';c.lastHb=Date.now();renderPool();if(focusId===id)focusConn(id);toast('已重连','s')},1200)}
+function disc(id){const c=getC(id);sMo('断开连接',`断开 ${c.pod.split('-').slice(0,-2).join('-')} ？\n\n采样数据不会被删除`,()=>{c.state='disconnected';c.level='disconnected';c.arthas=null;c.health='off';renderPool();if(focusId===id)focusConn(id);toast('已断开，数据保留','i')})}
+function confirmDel(id){const c=getC(id);sMo('删除连接',`删除 ${c.pod.split('-').slice(0,-2).join('-')} ？\n\n采样记录保留在「历史」中`,()=>{const was=focusId===id;conns=conns.filter(x=>x.id!==id);if(was){focusId=null;document.getElementById('wsE').style.display='flex';document.getElementById('wsC').style.display='none'}exId=null;renderPool();toast('已删除，数据保留','s')})}
+function upgrade(id){const c=getC(id);toast('启动 Arthas...','i');c.state='connecting';renderPool();setTimeout(()=>{c.level='arthas';c.arthas={port:8563,version:'3.7.1'};c.state='connected';c.health='ok';exId=null;renderPool();if(focusId===id)focusConn(id);toast('Arthas 就绪','s')},1000)}
+function stopA(id){const c=getC(id);c.level='pod';c.arthas=null;exId=null;renderPool();if(focusId===id)focusConn(id);toast('Arthas 已停止','i')}
+function rstrt(id){const c=getC(id);sMo('重启 Pod',`重启 ${c.pod.split('-').slice(0,-2).join('-')} ？`,()=>{toast('重启中...','w');c.state='connecting';c.health='warn';c.arthas=null;c.level='pod';renderPool();setTimeout(()=>{c.state='connected';c.health='ok';c.lastHb=Date.now();c.uptime='0h';renderPool();if(focusId===id)focusConn(id);toast('已重启','s')},2000)})}
+function addConn(){const cl=document.getElementById('sCl').value,ns=document.getElementById('sNs').value,pod=document.getElementById('sPd').value,id=`${cl}/${ns}/${pod}`;if(conns.find(c=>c.id===id)){toast('已存在','w');return}const c={id,cluster:cl,ns,pod,runtime:{type:'java',version:'17.0.2'},pid:Math.floor(Math.random()*90000+10000),uptime:'0h',level:'pod',state:'connecting',arthas:null,health:'ok',autoReconnect:false,lastHb:Date.now(),tab:'monitor',pmTab:'ov',sampSt:null,viewMode:'compact',lastUsed:Date.now()};conns.push(c);renderPool();toast('连接中...','i');setTimeout(()=>{c.state='connected';c.health='ok';renderPool();focusConn(id);toast('已连接','s')},800)}
+function toggleAdd(){document.getElementById('addPnl').classList.toggle('show')}
+function updPods(){document.getElementById('sPd').innerHTML=['user-service-x','order-service-y','payment-svc-z','auth-svc','gateway-1'].map(p=>`<option value="${p}">${p}</option>`).join('')}
+setInterval(()=>{conns.forEach(c=>{if(c.state==='connected'){Math.random()<.95?(c.lastHb=Date.now(),c.health='ok'):Math.random()<.3&&(c.health='warn')}});if(focusId){const c=getC(focusId);if(c&&c.tab==='monitor'&&document.getElementById('pmB'))rPm(c)}},8000);
+function toast(m,t){const e=document.createElement('div');e.className='toast '+(t||'i');e.textContent=m;document.body.appendChild(e);setTimeout(()=>e.remove(),3000)}
+function sMo(t,m,cb){document.getElementById('moT').textContent=t;document.getElementById('moM').textContent=m;moCb=cb;document.getElementById('mo').classList.add('show')}
+function cMo(){document.getElementById('mo').classList.remove('show');moCb=null}
+function dMo(){if(moCb)moCb();cMo()}
+document.querySelectorAll('.sng-t').forEach(t=>t.addEventListener('click',()=>{const g=t.closest('.sng');if(g)g.classList.toggle('collapsed')}));
+updPods();renderPool();
+</script>
+</body>
+</html>

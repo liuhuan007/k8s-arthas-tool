@@ -1,6 +1,7 @@
 /**
  * ConnectionPool - 连接池渲染和操作
  * 三栏布局中的中间栏，管理连接卡片、搜索、添加
+ * 对接真实后端 API
  */
 
 const ConnectionPool = (function() {
@@ -10,24 +11,55 @@ const ConnectionPool = (function() {
     render();
     ConnectionStore.subscribe(() => render());
 
-    // 搜索
     const search = document.getElementById('poolSearch');
     if (search) search.addEventListener('input', e => filterPool(e.target.value));
 
-    // 添加按钮
     const addBtn = document.getElementById('poolAddBtn');
     if (addBtn) addBtn.addEventListener('click', toggleAddPanel);
 
-    // 添加确认
     const addConfirm = document.getElementById('poolAddConfirm');
     if (addConfirm) addConfirm.addEventListener('click', addNewConnection);
 
-    // namespace 选择
     const nsSelect = document.getElementById('poolSelNs');
     if (nsSelect) nsSelect.addEventListener('change', () => loadPods());
 
-    // 初始加载 Pod 列表
-    loadPods();
+    // 加载集群列表
+    loadClusters();
+  }
+
+  // ── 集群/Pod 加载 ─────────────────────────────────────────────
+
+  async function loadClusters() {
+    try {
+      const r = await fetch(`${API}/clusters`, { credentials: 'include' });
+      const d = await r.json();
+      if (d.ok && d.clusters) {
+        const sel = document.getElementById('poolSelCluster');
+        if (sel) {
+          sel.innerHTML = d.clusters.map(c => `<option value="${c.name}">${c.name}</option>`).join('');
+        }
+        loadPods();
+      }
+    } catch (e) {
+      console.warn('[Pool] loadClusters failed:', e);
+    }
+  }
+
+  async function loadPods() {
+    const cluster = document.getElementById('poolSelCluster')?.value;
+    const ns = document.getElementById('poolSelNs')?.value;
+    const podSelect = document.getElementById('poolSelPod');
+    if (!podSelect || !cluster || !ns) return;
+    try {
+      const r = await fetch(`${API}/clusters/${encodeURIComponent(cluster)}/pods?namespace=${encodeURIComponent(ns)}`, { credentials: 'include' });
+      const d = await r.json();
+      if (d.ok && d.pods) {
+        podSelect.innerHTML = '<option value="">选择 Pod...</option>' +
+          d.pods.map(p => `<option value="${p.name}" data-containers="${(p.containers||[]).join(',')}">[${p.phase}] ${p.name}</option>`).join('');
+      }
+    } catch (e) {
+      podSelect.innerHTML = '<option value="">加载失败</option>';
+    }
   }
 
   // ── 渲染 ──────────────────────────────────────────────────────
@@ -123,8 +155,6 @@ const ConnectionPool = (function() {
     return html;
   }
 
-  // ── 辅助函数 ──────────────────────────────────────────────────
-
   function getDotClass(c) {
     if (c.state === 'connecting') return 'connecting';
     if (c.state === 'dead') return 'dead';
@@ -149,7 +179,7 @@ const ConnectionPool = (function() {
     return `${map[c.health] || '未知'}${timeAgo ? ' · ' + timeAgo : ''}`;
   }
 
-  // ── 操作 ──────────────────────────────────────────────────────
+  // ── 真实 API 操作 ──────────────────────────────────────────────
 
   function focus(id) {
     ConnectionStore.setFocus(id);
@@ -175,41 +205,40 @@ const ConnectionPool = (function() {
     });
   }
 
-  function loadPods() {
-    const ns = document.getElementById('poolSelNs')?.value;
-    const podSelect = document.getElementById('poolSelPod');
-    if (!podSelect || !ns) return;
-    // TODO: 从后端 API 加载 Pod 列表
-    // fetch(`/api/clusters/${cluster}/pods?namespace=${ns}`)
-    podSelect.innerHTML = '<option value="">选择 Pod...</option>';
-  }
-
-  function addNewConnection() {
+  async function addNewConnection() {
     const cluster = document.getElementById('poolSelCluster')?.value;
     const namespace = document.getElementById('poolSelNs')?.value;
-    const pod = document.getElementById('poolSelPod')?.value;
+    const podSel = document.getElementById('poolSelPod');
+    const pod = podSel?.value;
+    const container = podSel?.selectedOptions?.[0]?.dataset?.containers?.split(',')[0] || '';
     if (!cluster || !namespace || !pod) { toast('请选择完整的连接信息', 'warn'); return; }
 
     const id = `${cluster}/${namespace}/${pod}`;
     if (ConnectionStore.getConnection(id)) { toast('连接已存在', 'warn'); return; }
 
-    ConnectionStore.addConnection({
-      id, cluster, namespace, pod,
-      runtime: { type: 'java', version: '17.0.2' },
-      pid: Math.floor(Math.random() * 90000 + 10000),
-      uptime: '0h',
-      state: 'connecting',
-    });
+    // 先添加到池中（connecting 状态）
+    ConnectionStore.addConnection({ id, cluster, namespace, pod, container });
 
-    toast('连接中...', 'info');
-    // TODO: 调用后端 API 建立连接
-    setTimeout(() => {
+    try {
+      const r = await fetch(`${API}/pod/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ cluster_name: cluster, namespace, pod_name: pod, container })
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || '连接失败');
+
       ConnectionStore.updateConnection(id, {
-        state: 'connected', level: 'pod', health: 'ok', lastHb: Date.now()
+        state: 'connected', level: 'pod', health: 'ok', lastHb: Date.now(),
+        runtime: d.runtime, pid: d.runtime?.pid, pod_conn_id: d.connection_id,
       });
       focus(id);
-      toast('已连接', 'success');
-    }, 800);
+      toast(`Pod 连接成功 (${d.runtime?.runtime_type || 'unknown'})`, 'success');
+    } catch (e) {
+      ConnectionStore.updateConnection(id, { state: 'disconnected', level: 'disconnected', health: 'off' });
+      toast(`连接失败: ${e.message}`, 'error');
+    }
 
     document.getElementById('poolAddPanel')?.classList.remove('show');
   }
@@ -218,39 +247,98 @@ const ConnectionPool = (function() {
     const c = ConnectionStore.getConnection(id);
     const name = (c?.pod || '').split('-').slice(0, -2).join('-') || id;
     showConfirm('删除连接', `删除 ${name} ？\n\n采样记录保留在「历史」中`, () => {
-      ConnectionStore.removeConnection(id);
+      // 先断开再删除
+      if (c?.state === 'connected' || c?.level === 'arthas') {
+        disconnectReal(id).then(() => ConnectionStore.removeConnection(id));
+      } else {
+        ConnectionStore.removeConnection(id);
+      }
       toast('已删除，数据保留', 'success');
     });
   }
 
-  function reconnect(id) {
+  async function reconnect(id) {
+    const c = ConnectionStore.getConnection(id);
+    if (!c) return;
     ConnectionStore.updateConnection(id, { state: 'connecting', health: 'warn' });
-    toast('重连中...', 'info');
-    setTimeout(() => {
-      ConnectionStore.updateConnection(id, { state: 'connected', level: 'pod', health: 'ok', lastHb: Date.now(), arthas: null });
+    try {
+      const r = await fetch(`${API}/pod/connect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ cluster_name: c.cluster, namespace: c.namespace, pod_name: c.pod, container: c.container })
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || '重连失败');
+      ConnectionStore.updateConnection(id, {
+        state: 'connected', level: 'pod', health: 'ok', lastHb: Date.now(),
+        runtime: d.runtime, pid: d.runtime?.pid, pod_conn_id: d.connection_id,
+      });
       toast('已重连', 'success');
-    }, 1200);
+    } catch (e) {
+      ConnectionStore.updateConnection(id, { state: 'disconnected', health: 'off' });
+      toast(`重连失败: ${e.message}`, 'error');
+    }
   }
 
-  function disconnect(id) {
+  async function disconnect(id) {
     const c = ConnectionStore.getConnection(id);
     const name = (c?.pod || '').split('-').slice(0, -2).join('-') || id;
-    showConfirm('断开连接', `断开 ${name} ？\n\n采样数据不会被删除`, () => {
-      ConnectionStore.updateConnection(id, { state: 'disconnected', level: 'disconnected', arthas: null, health: 'off' });
+    showConfirm('断开连接', `断开 ${name} ？\n\n采样数据不会被删除`, async () => {
+      await disconnectReal(id);
       toast('已断开，数据保留', 'info');
     });
   }
 
-  function upgradeArthas(id) {
+  async function disconnectReal(id) {
+    const c = ConnectionStore.getConnection(id);
+    if (!c) return;
+    try {
+      if (c.pod_conn_id) {
+        await fetch(`${API}/pod/disconnect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ connection_id: c.pod_conn_id })
+        });
+      }
+      if (c.level === 'arthas' && c.pod_conn_id) {
+        await fetch(`${API}/arthas/disconnect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ connection_id: c.pod_conn_id })
+        });
+      }
+    } catch (e) {
+      console.warn('[Pool] disconnect API error:', e);
+    }
+    ConnectionStore.updateConnection(id, { state: 'disconnected', level: 'disconnected', arthas: null, health: 'off' });
+  }
+
+  async function upgradeArthas(id) {
+    const c = ConnectionStore.getConnection(id);
+    if (!c) return;
     ConnectionStore.updateConnection(id, { state: 'connecting' });
     toast('启动 Arthas...', 'info');
-    setTimeout(() => {
+    try {
+      const r = await fetch(`${API}/pod/upgrade-to-arthas`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ connection_id: c.pod_conn_id || c.id })
+      });
+      const d = await r.json();
+      if (!d.ok) throw new Error(d.error || 'Arthas 启动失败');
       ConnectionStore.updateConnection(id, {
         level: 'arthas', state: 'connected', health: 'ok',
-        arthas: { port: 8563, version: '3.7.1' }
+        arthas: { port: d.local_port || 8563, version: d.arthas_version || '3.7.1' }
       });
-      toast('Arthas 就绪', 'success');
-    }, 1000);
+      toast(`Arthas 就绪 (${d.arthas_version || ''})`, 'success');
+    } catch (e) {
+      ConnectionStore.updateConnection(id, { state: 'connected', level: 'pod' });
+      toast(`Arthas 启动失败: ${e.message}`, 'error');
+    }
   }
 
   function stopArthas(id) {
@@ -261,13 +349,14 @@ const ConnectionPool = (function() {
   function restart(id) {
     const c = ConnectionStore.getConnection(id);
     const name = (c?.pod || '').split('-').slice(0, -2).join('-') || id;
-    showConfirm('重启 Pod', `重启 ${name} ？`, () => {
+    showConfirm('重启 Pod', `重启 ${name} ？`, async () => {
       toast('重启中...', 'warn');
-      ConnectionStore.updateConnection(id, { state: 'connecting', health: 'warn', arthas: null, level: 'pod' });
-      setTimeout(() => {
-        ConnectionStore.updateConnection(id, { state: 'connected', health: 'ok', lastHb: Date.now(), uptime: '0h' });
-        toast('已重启', 'success');
-      }, 2000);
+      // 先断开
+      await disconnectReal(id);
+      // 重新连接
+      await reconnect(id);
+      ConnectionStore.updateConnection(id, { uptime: '0h' });
+      toast('已重启', 'success');
     });
   }
 
@@ -276,10 +365,40 @@ const ConnectionPool = (function() {
     toast(val ? '自动重连开启' : '自动重连关闭', 'info');
   }
 
+  // ── 心跳 ──────────────────────────────────────────────────────
+
+  let _heartbeatTimer = null;
+
+  function startHeartbeat() {
+    if (_heartbeatTimer) clearInterval(_heartbeatTimer);
+    _heartbeatTimer = setInterval(async () => {
+      for (const c of ConnectionStore.getConnections()) {
+        if (c.state !== 'connected') continue;
+        try {
+          const r = await fetch(`${API}/pod/connections`, { credentials: 'include' });
+          const d = await r.json();
+          const alive = d.ok && d.connections?.some(conn => conn.id === c.pod_conn_id);
+          ConnectionStore.updateConnection(c.id, {
+            health: alive ? 'ok' : 'warn',
+            lastHb: alive ? Date.now() : c.lastHb,
+            state: alive ? c.state : (c.health === 'warn' ? 'dead' : 'degraded'),
+          });
+        } catch (e) {
+          ConnectionStore.updateConnection(c.id, { health: 'warn', lastHb: c.lastHb });
+        }
+      }
+    }, 15000);
+  }
+
+  function stopHeartbeat() {
+    if (_heartbeatTimer) { clearInterval(_heartbeatTimer); _heartbeatTimer = null; }
+  }
+
   return {
     init, render, focus, toggleDetail, toggleGroup, toggleAddPanel, filterPool,
     addNewConnection, confirmDelete, reconnect, disconnect, upgradeArthas,
-    stopArthas, restart, toggleAutoReconnect
+    stopArthas, restart, toggleAutoReconnect, loadPods, loadClusters,
+    startHeartbeat, stopHeartbeat
   };
 })();
 
