@@ -271,6 +271,15 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                 entry = _connections.get(conn_id)
 
             conn = entry.get('conn') if entry else None
+            row_status = row.get('status', 'disconnected')
+            row_level = row.get('level', 'pod')
+            memory_alive = False
+            if conn is not None:
+                try:
+                    memory_alive = conn.is_alive() if hasattr(conn, 'is_alive') else bool(getattr(conn, '_healthy', True))
+                except Exception:
+                    memory_alive = bool(getattr(conn, '_healthy', False))
+            db_ready = row_status in ('ready', 'connected')
 
             connections.append({
                 "id": conn_id,
@@ -280,10 +289,10 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                 "pod_name": row['pod_name'],
                 "container": row.get('container_name', ''),
                 "pod_phase": 'Running',  # 默认值,健康检查会更新
-                "level": row.get('level', 'pod'),
+                "level": row_level,
                 "runtime": None,  # 从内存连接获取
                 "runtime_version": None,
-                "alive": conn is not None and (hasattr(conn, '_healthy') and conn._healthy),
+                "alive": memory_alive or db_ready,
                 "created_at": row.get('created_at', ''),
                 "last_ping_at": row.get('last_ping_at', ''),
                 # Arthas 层元数据
@@ -292,7 +301,8 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                 "arthas_version": row.get('arthas_version'),
                 "arthas_address": row.get('arthas_address'),
                 "mcp_available": row.get('mcp_available', False) or (entry.get('mcp_available', False) if entry else False),
-                "status": row.get('status', 'disconnected'),
+                "status": 'connected' if (memory_alive or db_ready) else row_status,
+                "state": 'connected' if (memory_alive or db_ready) else 'disconnected',
             })
 
             # 如果有活跃连接,补充运行时信息

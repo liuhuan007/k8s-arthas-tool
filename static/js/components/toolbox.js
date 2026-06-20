@@ -170,20 +170,22 @@
     container.innerHTML = filtered.map(r => {
       const statusClass = r.status === 'success' ? 'running' : 'stopped';
       const statusText = r.status === 'success' ? '成功' : '失败';
-      const time = r.distributed_at ? new Date(r.distributed_at).toLocaleString('zh-CN') : '-';
+      const recordTime = r.distributed_at || r.created_at;
+      const time = recordTime ? new Date(recordTime).toLocaleString('zh-CN') : '-';
       const target = `${r.target_cluster || ''} / ${r.target_namespace || ''} / ${r.target_pod || ''}`;
       const duration = r.duration_ms ? `${(r.duration_ms / 1000).toFixed(1)}s` : '-';
-      const toolName = r.tool_name || r.tool_id || '-';
+      const toolName = r.tool_name || r.package_name || r.tool_id || '-';
+      const failReason = formatDistFailureReason(r);
 
       return `
-        <div style="display:grid;grid-template-columns:60px 140px 1fr 100px 80px 100px;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(40,61,90,.2);font-size:12px;align-items:center">
+        <div style="display:grid;grid-template-columns:60px 130px minmax(160px,1fr) minmax(180px,1.2fr) 70px 70px 90px;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(40,61,90,.2);font-size:12px;align-items:center">
           <div><span style="background:rgba(0,122,255,.15);color:var(--a);padding:2px 6px;border-radius:4px;font-size:10px">Pod</span></div>
           <div style="color:var(--tx2);font-size:11px">${esc(time)}</div>
           <div>
             <div style="font-weight:600">${esc(target)}</div>
             <div style="font-size:10px;color:var(--tx3)">${esc(toolName)}</div>
-            ${r.error_message ? `<div style="font-size:10px;color:#ff3b30">${esc(r.error_message)}</div>` : ''}
           </div>
+          <div title="${esc(failReason.full)}" style="font-size:10px;color:${failReason.text === '-' ? 'var(--tx3)' : '#ff6b6b'};line-height:1.45;word-break:break-word">${esc(failReason.text)}</div>
           <div><span class="badge badge-${statusClass}">${statusText}</span></div>
           <div style="color:var(--tx2);font-size:11px">${duration}</div>
           <div>
@@ -193,6 +195,20 @@
         </div>
       `;
     }).join('');
+  }
+
+  function formatDistFailureReason(record) {
+    const raw = [record.error_message, record.stderr].filter(Boolean).join('\n').trim();
+    if (!raw) return { text: '-', full: '' };
+    let reason = raw
+      .replace(/^kubectl cp\s*失败[:：]?\s*/i, '')
+      .replace(/^error:\s*/i, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (/one of src or dest must be a local file specification/i.test(reason)) {
+      reason = 'kubectl cp 目标路径格式错误（已修复，重试即可）';
+    }
+    return { text: reason.length > 90 ? reason.slice(0, 90) + '…' : reason, full: raw };
   }
 
   window.filterDistHistory = function(query) {

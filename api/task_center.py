@@ -2177,16 +2177,22 @@ def _do_distribute(tool_row, cluster, namespace, pod, container, install_path):
     if not local_path or not local_path.exists():
         raise ValueError(f"工具文件不存在: {tool_row.get('file_path', '')}")
 
-    # 构建 kubectl cp 命令
-    cmd_parts = ['kubectl', 'cp', '-n', namespace]
-    if container:
-        cmd_parts.extend(['-c', container])
-    target = f"{cluster}/{pod}:{install_path}" if cluster else f"{pod}:{install_path}"
-    cmd_parts.extend([str(local_path), target])
+    cluster_cfg = _get_cluster_config(cluster)
+    from backend import KubectlExecutor
+    runner = KubectlExecutor(kubeconfig=cluster_cfg.get('kubeconfig', ''), context=cluster_cfg.get('context', ''))
+    install_dir = str(Path(install_path).parent).replace('\\', '/')
 
-    proc = subprocess.run(cmd_parts, capture_output=True, text=True, timeout=120)
-    if proc.returncode != 0:
-        raise RuntimeError(f"kubectl cp 失败: {proc.stderr}")
+    # 先在 Pod 内创建目录；kubectl cp 的目标只允许 pod:path 或 namespace/pod:path，不能拼接集群名。
+    rc_mkdir, out_mkdir, err_mkdir = runner.exec_pod(
+        namespace, pod, container,
+        f'mkdir -p {_safe_pod_path(install_dir)}', timeout=30,
+    )
+    if rc_mkdir != 0:
+        raise RuntimeError(f"创建 Pod 目录失败: {err_mkdir or out_mkdir}")
+
+    rc_cp, out_cp, err_cp = runner.cp_to_pod(namespace, pod, container, str(local_path), install_path)
+    if rc_cp != 0:
+        raise RuntimeError(f"kubectl cp 失败: {err_cp or out_cp}")
 
 
 @task_bp.route('/arthas/source-upload', methods=['POST'])

@@ -1190,11 +1190,17 @@ def check_connections_health():
         conn = _get_conn(conn_id)
         if conn:
             try:
-                status['alive'] = conn.is_alive() if hasattr(conn, 'is_alive') else True
+                status['alive'] = conn.is_alive() if hasattr(conn, 'is_alive') else bool(getattr(conn, '_healthy', True))
             except Exception:
-                status['alive'] = False
+                status['alive'] = bool(getattr(conn, '_healthy', False))
             if not status['alive']:
                 status['reason'] = 'arthas_unreachable'
+        else:
+            row = db.fetch_one('SELECT status, level, local_port, java_pid, arthas_version FROM connections WHERE id = ?', (conn_id,))
+            if row and row.get('level') == 'arthas' and row.get('status') in ('ready', 'connected'):
+                # 后端内存连接可能因页面刷新/进程恢复短暂缺失；保留数据库 ready 的 Arthas 连接为可恢复态。
+                status['alive'] = True
+                status['reason'] = 'db_ready'
         
         # 2. 检查 Pod 是否存在（kubectl get pod）
         if cluster_name and namespace and pod_name:

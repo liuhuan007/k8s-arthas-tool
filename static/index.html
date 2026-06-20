@@ -161,8 +161,8 @@ document.addEventListener('DOMContentLoaded', function() {
         <label class="theme-switcher theme-switcher-menu" title="切换界面风格">
           <span>界面风格</span>
           <select data-theme-switcher aria-label="切换界面风格">
-            <option value="apm">深色 APM</option>
-            <option value="devops">DevOps 工具链</option>
+            <option value="apm">深色APM风格</option>
+            <option value="devops">蓝白DevOps风格</option>
           </select>
         </label>
         <a href="javascript:void(0)" onclick="openChangePasswordModal()">🔑 修改密码</a>
@@ -2095,10 +2095,11 @@ document.addEventListener('DOMContentLoaded', function() {
       <!-- History Table -->
       <div style="background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:10px;overflow:hidden">
         <!-- Table Header -->
-        <div style="display:grid;grid-template-columns:60px 140px 1fr 100px 80px 100px;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(40,61,90,.4);font-size:11px;font-weight:600;color:var(--tx2);text-transform:uppercase">
+        <div style="display:grid;grid-template-columns:60px 130px minmax(160px,1fr) minmax(180px,1.2fr) 70px 70px 90px;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(40,61,90,.4);font-size:11px;font-weight:600;color:var(--tx2);text-transform:uppercase">
           <div>类型</div>
           <div>时间</div>
           <div>目标</div>
+          <div>失败原因</div>
           <div>状态</div>
           <div>耗时</div>
           <div>操作</div>
@@ -2114,19 +2115,6 @@ document.addEventListener('DOMContentLoaded', function() {
       <div id="distHistoryPagination" style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
         <div id="distHistoryCount" style="font-size:11px;color:var(--tx2)">共 0 条记录</div>
         <div id="distHistoryPages" style="display:flex;gap:4px"></div>
-      </div>
-    </div>
-  </div>
-</div>
-
-      <!-- Pagination -->
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-top:12px">
-        <div style="font-size:11px;color:var(--tx2)">共 3 条记录</div>
-        <div style="display:flex;gap:4px">
-          <button class="btn btn-g btn-sm" disabled style="opacity:.5">上一页</button>
-          <button class="btn btn-p btn-sm">1</button>
-          <button class="btn btn-g btn-sm" disabled style="opacity:.5">下一页</button>
-        </div>
       </div>
     </div>
   </div>

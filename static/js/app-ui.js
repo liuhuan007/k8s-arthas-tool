@@ -1341,6 +1341,28 @@ function _inferLevel(c) {
   if (c.status === 'connected') return 'arthas'; // 兼容旧数据
   return 'pod';
 }
+
+function _normalizeConnectionRecord(c) {
+  const conn = { ...(c || {}) };
+  const level = _inferLevel(conn);
+  const rawStatus = String(conn.status || '').toLowerCase();
+  const hasArthasMeta = !!(conn.local_port || conn.arthas_version || conn.java_pid || conn.arthas_address);
+  const connectedLike = ['ready', 'connected', 'running', 'ok', 'healthy', 'degraded'].includes(rawStatus);
+  const connectingLike = ['connecting', 'pending', 'starting'].includes(rawStatus);
+
+  conn.cluster = conn.cluster || conn.cluster_name;
+  conn.pod = conn.pod || conn.pod_name;
+  conn.container = conn.container || conn.container_name;
+  conn.level = level;
+  conn.state = conn.state || (connectedLike ? 'connected' : connectingLike ? 'connecting' : 'disconnected');
+  conn.health = conn.health || (conn.state === 'connected' ? 'ok' : conn.state === 'connecting' ? 'warn' : 'off');
+
+  if (level === 'arthas' && hasArthasMeta) {
+    conn.arthas = conn.arthas || { port: conn.local_port, version: conn.arthas_version };
+    if (rawStatus === 'ready') conn.status = 'connected';
+  }
+  return conn;
+}
 function _getRt(c) {
   if (c.runtime && typeof c.runtime === 'object') {
     // 后端 RuntimeInfo.__dict__ 字段为 runtime_type/version，前端统一为 type/version
@@ -2139,22 +2161,20 @@ async function checkConnectionsHealth() {
       const d = await r.json();
       if (d.results) {
         Object.assign(_connHealth, d.results);
-        // Arthas 断线但 Pod 存活 → 自动降级
+        // Arthas 短暂不可达时保留 Arthas 层，避免刷新/健康检查把可恢复连接误降级成 Pod。
         for (const c of arthasConns) {
           const h = d.results[c.id];
           if (h && h.alive === false && h.pod_exists === true) {
-            c.level = 'pod';
-            delete c.local_port;
-            delete c.java_pid;
-            delete c.arthas_version;
-            delete c.arthas_address;
+            c.status = 'degraded';
+            c.state = 'degraded';
+            c.health = 'warn';
             if (c.id === _currentConnId) {
-              window._connState = 'pod_connected';
+              window._connState = 'arthas_ready';
               if (typeof updateConnectionButton === 'function') updateConnectionButton();
               if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
               if (typeof updateRuntimeDisplay === 'function') updateRuntimeDisplay();
               if (typeof csbRefresh === 'function') csbRefresh();
-              toast('Arthas 连接已断开，已降级为 Pod 连接', 'warn');
+              toast('Arthas 连接暂时不可达，请稍后重试或手动重连', 'warn');
             }
           }
         }
@@ -2180,7 +2200,23 @@ async function checkConnectionsHealth() {
     for (const c of _connections) {
       const h = _connHealth[c.id];
       if (h) {
-        c.status = (h.alive && h.pod_exists !== false) ? 'connected' : 'disconnected';
+        if (h.pod_exists === false) {
+          c.status = 'disconnected';
+          c.state = 'disconnected';
+          c.health = 'off';
+        } else if (h.alive) {
+          c.status = 'connected';
+          c.state = 'connected';
+          c.health = 'ok';
+        } else if (_inferLevel(c) === 'arthas') {
+          c.status = c.status === 'disconnected' ? 'degraded' : (c.status || 'degraded');
+          c.state = c.state === 'disconnected' ? 'degraded' : (c.state || 'degraded');
+          c.health = 'warn';
+        } else {
+          c.status = 'disconnected';
+          c.state = 'disconnected';
+          c.health = 'off';
+        }
       }
     }
     renderConnList();
@@ -2202,7 +2238,7 @@ async function refreshConnectionList() {
     
     // ✅ 使用 ConnectionStore 统一管理状态
     if (typeof ConnectionStore !== 'undefined') {
-      const connections = d.connections || [];
+      const connections = (d.connections || []).map(_normalizeConnectionRecord);
       ConnectionStore.setConnections(connections);
       ConnectionStore._persist();
       console.log('[refreshConnectionList] Updated ConnectionStore with', connections.length, 'connections');
@@ -6357,11 +6393,11 @@ document.addEventListener('DOMContentLoaded', async function() {
     const d = await r.json();
     if (r.ok && d.ok && d.connections) {
       console.log('[初始化] 从数据库加载连接:', d.connections.length, '个');
-      _connections = d.connections;
+      _connections = d.connections.map(_normalizeConnectionRecord);
       
       // ✅ 同步到 ConnectionStore (确保连接中心能正确渲染)
       if (typeof ConnectionStore !== 'undefined') {
-        ConnectionStore.setConnections(d.connections);
+        ConnectionStore.setConnections(_connections);
         ConnectionStore._persist();
         console.log('[初始化] 已同步到 ConnectionStore');
       }
