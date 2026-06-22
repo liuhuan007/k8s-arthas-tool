@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Skill Market 交互 Demo</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b0f18;
+    --bg1: #111822;
+    --bg2: #18202e;
+    --ln: #1e293b;
+    --ln2: #334155;
+    --tx: #e2e8f0;
+    --tx2: #94a3b8;
+    --tx3: #64748b;
+    --a: #38bdf8;
+    --a2: #a78bfa;
+    --a3: #34d399;
+    --a5: #f87171;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'Inter', system-ui, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg); color: var(--tx);
+    font-family: var(--sans); min-height: 100vh;
+    display: flex; justify-content: center; padding: 40px 20px;
+  }
+  .demo-container {
+    width: 100%; max-width: 860px;
+    background: var(--bg1);
+    border: 1px solid var(--ln);
+    border-radius: 12px;
+    overflow: hidden;
+    box-shadow: 0 20px 60px rgba(0,0,0,.6);
+    display: flex; flex-direction: column;
+    max-height: 90vh;
+  }
+
+  /* ── Topbar ── */
+  .topbar {
+    display: flex; align-items: center;
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--ln);
+    gap: 12px;
+    flex-shrink: 0;
+  }
+  .logo {
+    width: 22px; height: 22px;
+    background: var(--a);
+    clip-path: polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%);
+    flex-shrink: 0;
+  }
+  .logo-text {
+    font-family: var(--sans);
+    font-weight: 700; font-size: 13px;
+    letter-spacing: -.3px;
+    color: var(--tx);
+  }
+  .logo-text em { color: var(--a); font-style: normal; }
+
+  /* ── Tabs ── */
+  .tabs {
+    display: flex; gap: 2px;
+    padding: 0 18px;
+    border-bottom: 1px solid var(--ln);
+    flex-shrink: 0;
+    background: var(--bg);
+  }
+  .tab {
+    padding: 10px 16px 9px;
+    font-size: 12px; font-weight: 500;
+    color: var(--tx3);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all .15s;
+    user-select: none;
+    background: none; border-top: none; border-left: none; border-right: none;
+    font-family: var(--sans);
+  }
+  .tab:hover { color: var(--tx2); }
+  .tab.active {
+    color: var(--a);
+    border-bottom-color: var(--a);
+  }
+
+  /* ── Sub tabs ── */
+  .sub-tabs {
+    display: flex; gap: 4px;
+    padding: 14px 18px 0;
+    flex-shrink: 0;
+  }
+  .st {
+    padding: 5px 12px;
+    font-size: 11px; font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    background: none; color: var(--tx3);
+    transition: all .15s;
+    font-family: var(--sans);
+  }
+  .st:hover { color: var(--tx2); border-color: var(--ln); }
+  .st.active {
+    background: var(--a); color: #0b0f18;
+    border-color: var(--a); font-weight: 600;
+  }
+
+  /* ── Content area ── */
+  .content {
+    padding: 16px 18px 18px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  .panel { display: none; }
+  .panel.active { display: block; }
+
+  /* ── Source table ── */
+  .tbl-wrap {
+    border: 1px solid var(--ln);
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .tbl { width: 100%; border-collapse: collapse; }
+  .tbl th {
+    background: var(--bg2);
+    padding: 9px 12px;
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .6px;
+    color: var(--tx3);
+    text-align: left;
+    border-bottom: 1px solid var(--ln);
+  }
+  .tbl td {
+    padding: 9px 12px;
+    font-size: 12px;
+    border-bottom: 1px solid var(--ln);
+    color: var(--tx);
+  }
+  .tbl tr:last-child td { border-bottom: none; }
+  .tbl tr:hover td { background: rgba(255,255,255,.015); }
+
+  /* ── Buttons ── */
+  .btn {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 5px 11px;
+    font-size: 11px; font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    border: 1px solid var(--ln);
+    background: none; color: var(--tx2);
+    font-family: var(--mono);
+    transition: all .12s;
+    line-height: 1;
+  }
+  .btn:hover { border-color: var(--a); color: var(--a); background: rgba(56,189,248,.05); }
+  .btn-p { background: var(--a); color: #0b0f18; font-weight: 600; border-color: var(--a); }
+  .btn-p:hover { filter: brightness(1.1); background: var(--a); color: #0b0f18; }
+  .btn-d { border-color: rgba(248,113,113,.25); color: var(--a5); }
+  .btn-d:hover { background: rgba(248,113,113,.1); border-color: var(--a5); }
+  .btn-w { border-color: rgba(251,191,36,.25); color: #fbbf24; }
+  .btn-w:hover { background: rgba(251,191,36,.1); border-color: #fbbf24; }
+  .btn-sm { padding: 3px 8px; font-size: 10px; }
+  .btn-ghost { border-color: transparent; color: var(--tx3); }
+  .btn-ghost:hover { border-color: var(--ln); color: var(--tx2); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-row { display: flex; gap: 6px; align-items: center; }
+  .btn-group { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+
+  /* ── Badges ── */
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 10px; font-weight: 600;
+  }
+  .bg-green { background: rgba(52,211,153,.12); color: var(--a3); border: 1px solid rgba(52,211,153,.25); }
+  .bg-blue { background: rgba(56,189,248,.12); color: var(--a); border: 1px solid rgba(56,189,248,.25); }
+  .bg-amber { background: rgba(251,191,36,.12); color: #fbbf24; border: 1px solid rgba(251,191,36,.25); }
+  .bg-gray { background: rgba(107,127,160,.12); color: var(--tx2); border: 1px solid rgba(107,127,160,.25); }
+  .bg-purple { background: rgba(167,139,250,.12); color: var(--a2); border: 1px solid rgba(167,139,250,.25); }
+
+  /* ── Input / Select ── */
+  .fi {
+    padding: 7px 10px; font-size: 12px;
+    background: var(--bg2); border: 1px solid var(--ln);
+    border-radius: 4px; color: var(--tx);
+    outline: none; font-family: var(--mono);
+    transition: border-color .15s; width: 100%;
+  }
+  .fi:focus { border-color: var(--a); }
+  .fi::placeholder { color: var(--tx3); }
+
+  /* ── Skill cards grid ── */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 10px;
+  }
+  .local-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 10px;
+  }
+  .card {
+    background: var(--bg2);
+    border: 1px solid var(--ln);
+    border-radius: 6px;
+    padding: 14px;
+    transition: border-color .15s;
+  }
+  .card:hover { border-color: var(--ln2); }
+  .card-name {
+    font-size: 13px; font-weight: 600;
+    color: var(--tx); margin-bottom: 2px;
+  }
+  .card-meta {
+    font-size: 10px; color: var(--tx3);
+    margin-bottom: 6px;
+    display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  }
+  .card-desc {
+    font-size: 11px; color: var(--tx2);
+    margin-bottom: 10px;
+    line-height: 1.4;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .card-actions {
+    display: flex; gap: 6px; align-items: center;
+  }
+
+  /* ── Modal ── */
+  .modal-bg {
+    position: fixed; inset: 0;
+    background: rgba(11,15,24,.85);
+    display: none; align-items: center; justify-content: center;
+    z-index: 999; backdrop-filter: blur(4px);
+  }
+  .modal-bg.open { display: flex; }
+  .modal {
+    background: var(--bg1);
+    border: 1px solid var(--ln2);
+    border-radius: 8px;
+    width: 460px; max-width: 92vw;
+    box-shadow: 0 20px 60px rgba(0,0,0,.7);
+    animation: mi .18s ease;
+  }
+  @keyframes mi { from { transform: translateY(-8px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
+  .modal-hd {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--ln);
+  }
+  .modal-tt { font-size: 14px; font-weight: 700; color: var(--tx); font-family: var(--sans); }
+  .modal-cl { background: none; border: none; color: var(--tx2); cursor: pointer; font-size: 16px; padding: 2px 6px; }
+  .modal-cl:hover { color: var(--tx); }
+  .modal-bd { padding: 16px; }
+  .modal-ft {
+    display: flex; gap: 8px; justify-content: flex-end;
+    padding: 10px 16px 14px;
+    border-top: 1px solid var(--ln);
+  }
+  .fg { margin-bottom: 12px; }
+  .fl {
+    display: block;
+    font-size: 10px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: .8px;
+    color: var(--tx3); margin-bottom: 4px;
+  }
+  .fl span { color: var(--a5); }
+  .desc { font-size: 11px; color: var(--tx3); line-height: 1.5; margin-bottom: 12px; }
+
+  /* ── Toast ── */
+  .toast-container {
+    position: fixed; top: 16px; right: 16px; z-index: 9999;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  .toast {
+    padding: 8px 14px;
+    border-radius: 6px;
+    font-size: 12px;
+    font-family: var(--mono);
+    animation: ti .18s ease;
+    max-width: 340px;
+    box-shadow: 0 4px 20px rgba(0,0,0,.5);
+  }
+  .toast-success { background: rgba(52,211,153,.15); color: var(--a3); border: 1px solid rgba(52,211,153,.3); }
+  .toast-error { background: rgba(248,113,113,.15); color: var(--a5); border: 1px solid rgba(248,113,113,.3); }
+  .toast-info { background: rgba(56,189,248,.15); color: var(--a); border: 1px solid rgba(56,189,248,.3); }
+  @keyframes ti { from { transform: translateX(30px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+
+  .empty-state {
+    text-align: center; padding: 40px 20px;
+    color: var(--tx3); font-size: 12px;
+  }
+  .empty-icon { font-size: 28px; margin-bottom: 8px; opacity: .5; }
+  .filter-bar {
+    display: flex; gap: 8px; align-items: center;
+    margin-bottom: 12px; flex-wrap: wrap;
+  }
+  .filter-bar .fi { width: 200px; }
+  .stat-row {
+    display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap;
+  }
+  .stat-item {
+    background: var(--bg2);
+    border: 1px solid var(--ln);
+    border-radius: 6px;
+    padding: 8px 14px;
+    min-width: 80px;
+  }
+  .stat-val { font-size: 18px; font-weight: 700; color: var(--a); font-family: var(--sans); }
+  .stat-lbl { font-size: 9px; color: var(--tx3); text-transform: uppercase; letter-spacing: .6px; margin-top: 1px; }
+</style>
+</head>
+<body>
+
+<div class="toast-container" id="toastContainer"></div>
+
+<div class="demo-container">
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="logo"></div>
+    <span class="logo-text">Arthas <em>K8s</em></span>
+    <span style="font-size:11px;color:var(--tx3);margin-left:auto">Admin</span>
+  </div>
+
+  <!-- Main tabs -->
+  <div class="tabs">
+    <button class="tab" onclick="switchMainTab('skills')" id="tabMainSkills">📋 本地技能</button>
+    <button class="tab active" onclick="switchMainTab('market')" id="tabMainMarket">🏪 技能市场</button>
+  </div>
+
+  <!-- ====== Skill Market Panel ====== -->
+  <div id="marketPanel" class="panel active">
+    <!-- Sub tabs -->
+    <div class="sub-tabs">
+      <button class="st active" data-sub="sources" onclick="switchSubTab('sources')">📡 市场源</button>
+      <button class="st" data-sub="browse" onclick="switchSubTab('browse')">🔍 浏览技能</button>
+    </div>
+
+    <!-- Content -->
+    <div class="content">
+      <!-- Sources panel -->
+      <div id="panelSources" class="panel active">
+        <div class="btn-row" style="margin-bottom:10px">
+          <button class="btn btn-p" onclick="openModal('addSourceModal')">＋ 添加市场源</button>
+          <span style="font-size:11px;color:var(--tx3);margin-left:auto">管理 GitHub 仓库来源</span>
+        </div>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead>
+              <tr><th>名称</th><th>仓库地址</th><th>分支</th><th>技能数</th><th>最近同步</th><th>操作</th></tr>
+            </thead>
+            <tbody id="sourceTableBody">
+              <tr>
+                <td><strong>官方市场</strong></td>
+                <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px">github.com/k8s-arthas-tool/skill-marketplace</td>
+                <td>main</td>
+                <td><span class="badge bg-blue">12</span></td>
+                <td style="font-size:11px">2026-06-21 08:15</td>
+                <td>
+                  <div class="btn-row">
+                    <button class="btn btn-sm" onclick="syncSource(this)">🔄 同步</button>
+                    <button class="btn btn-sm" onclick="editSource(this)">✏ 编辑</button>
+                    <button class="btn btn-sm btn-d" onclick="removeSource(this)">🗑 删除</button>
+                  </div>
+                </td>
+              </tr>
+              <tr>
+                <td><strong>Team 性能工具</strong></td>
+                <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px">github.com/my-team/perf-skills.git</td>
+                <td>main</td>
+                <td><span class="badge bg-blue">5</span></td>
+                <td style="font-size:11px">2026-06-20 14:30</td>
+                <td>
+                  <div class="btn-row">
+                    <button class="btn btn-sm" onclick="syncSource(this)">🔄 同步</button>
+                    <button class="btn btn-sm" onclick="editSource(this)">✏ 编辑</button>
+                    <button class="btn btn-sm btn-d" onclick="removeSource(this)">🗑 删除</button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Browse panel -->
+      <div id="panelBrowse" class="panel">
+        <div class="filter-bar">
+          <input class="fi" id="browseSearch" placeholder="搜索技能名称..." onkeyup="filterBrowse()">
+          <select class="fi" style="width:140px" id="browseFilter" onchange="filterBrowse()">
+            <option value="">全部分类</option>
+            <option value="quick">快速诊断</option>
+            <option value="tool">工具</option>
+            <option value="scenario">场景方案</option>
+            <option value="ai">智能诊断</option>
+          </select>
+          <span style="font-size:11px;color:var(--tx3)" id="browseCount">共 12 个技能</span>
+        </div>
+        <div class="grid" id="browseGrid"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====== Skills Panel (本地技能) ====== -->
+  <div id="skillsPanel" class="panel">
+    <div class="content">
+      <div class="btn-row" style="margin-bottom:10px">
+        <span style="font-size:11px;color:var(--tx3);margin-left:auto">本地已注册的技能</span>
+      </div>
+      <div class="stats-row" style="margin-bottom:12px">
+        <span class="badge bg-green" id="localStats">—</span>
+      </div>
+      <div class="local-grid" id="localGrid"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Skill Modal -->
+<div class="modal-bg" id="editSkillModal">
+  <div class="modal" style="width:520px">
+    <div class="modal-hd">
+      <span class="modal-tt">编辑 Skill</span>
+      <button class="modal-cl" onclick="closeModal('editSkillModal')">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="fg">
+        <label class="fl">名称 <span>*</span></label>
+        <input class="fi" id="editName" disabled style="opacity:.6">
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div class="fg">
+          <label class="fl">分类</label>
+          <select class="fi" id="editCategory">
+            <option value="quick">快速诊断</option>
+            <option value="tool">工具</option>
+            <option value="scenario">场景方案</option>
+            <option value="ai">智能诊断</option>
+          </select>
+        </div>
+        <div class="fg">
+          <label class="fl">版本</label>
+          <input class="fi" id="editVersion">
+        </div>
+      </div>
+      <div class="fg">
+        <label class="fl">描述</label>
+        <textarea class="fi" id="editDescription" style="min-height:60px;resize:vertical"></textarea>
+      </div>
+      <div class="fg">
+        <label class="fl">来源</label>
+        <input class="fi" id="editSource" disabled style="opacity:.6">
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn" onclick="closeModal('editSkillModal')">取消</button>
+      <button class="btn btn-p" onclick="saveSkillEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Edit Source Modal -->
+<div class="modal-bg" id="editSourceModal">
+  <div class="modal">
+    <div class="modal-hd">
+      <span class="modal-tt">编辑市场源</span>
+      <button class="modal-cl" onclick="closeModal('editSourceModal')">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="fg">
+        <label class="fl">名称 <span>*</span></label>
+        <input class="fi" id="editSourceName" placeholder="例如: 官方市场">
+      </div>
+      <div class="fg">
+        <label class="fl">仓库 URL <span>*</span></label>
+        <input class="fi" id="editSourceUrl" placeholder="https://github.com/user/repo">
+      </div>
+      <div class="fg">
+        <label class="fl">分支</label>
+        <input class="fi" id="editSourceBranch" value="main">
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn" onclick="closeModal('editSourceModal')">取消</button>
+      <button class="btn btn-p" onclick="saveSourceEdit()">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Source Modal -->
+<div class="modal-bg" id="addSourceModal">
+  <div class="modal">
+    <div class="modal-hd">
+      <span class="modal-tt">添加市场源</span>
+      <button class="modal-cl" onclick="closeModal('addSourceModal')">✕</button>
+    </div>
+    <div class="modal-bd">
+      <div class="desc">添加一个 GitHub 仓库作为技能来源。系统会自动扫描仓库中的 skill 定义文件。</div>
+      <div class="fg">
+        <label class="fl">名称 <span>*</span></label>
+        <input class="fi" id="inpName" placeholder="例如: 官方市场">
+      </div>
+      <div class="fg">
+        <label class="fl">仓库 URL <span>*</span></label>
+        <input class="fi" id="inpUrl" placeholder="https://github.com/user/repo">
+      </div>
+      <div class="fg">
+        <label class="fl">分支</label>
+        <input class="fi" id="inpBranch" value="main">
+      </div>
+    </div>
+    <div class="modal-ft">
+      <button class="btn" onclick="closeModal('addSourceModal')">取消</button>
+      <button class="btn btn-p" onclick="addSource()">添加</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ── Mock data ──────────────────────────────────────────────────────────────
+const SKILLS = [
+  { name: 'cpu-profiler',      version: '1.0.0', cat: 'tool',   desc: 'async-profiler CPU 采样，生成火焰图',      source: '官方市场', installed: false, latest: null },
+  { name: 'jfr-recording',     version: '1.0.0', cat: 'tool',   desc: 'Java Flight Recorder 录制 (JDK 11+)',       source: '官方市场', installed: false, latest: null },
+  { name: 'thread-dump',       version: '2.1.0', cat: 'quick',  desc: '线程快照 + 状态分析 + 死锁检测',              source: '官方市场', installed: true,  latest: '2.2.0' },
+  { name: 'heap-dump',         version: '1.0.0', cat: 'quick',  desc: 'Heap Dump 快照（触发 Full GC）',              source: '官方市场', installed: true,  latest: null },
+  { name: 'cpu-high-diagnosis',version: '1.2.0', cat: 'scenario',desc: 'CPU 飙高场景: dashboard → thread → trace',  source: '官方市场', installed: false, latest: null },
+  { name: 'memory-leak-diagnosis',version:'1.0.0',cat:'scenario',desc: 'OOM 排查: memory → heapdump → MAT 分析',    source: '官方市场', installed: false, latest: null },
+  { name: 'deadlock-detector',  version: '1.1.0', cat: 'quick',  desc: '死锁自动检测 + 阻塞线程快照',                 source: '官方市场', installed: false, latest: null },
+  { name: 'api-slow-analyzer', version: '0.9.0', cat: 'scenario',desc: 'API 慢请求追踪: trace → watch → 调用链',     source: '官方市场', installed: true,  latest: '1.0.0' },
+  { name: 'gc-analyzer',       version: '1.0.0', cat: 'tool',   desc: 'GC 日志分析 + 内存回收评估',                  source: '官方市场', installed: false, latest: null },
+  { name: 'ai-diagnose',       version: '2.0.0', cat: 'ai',     desc: 'AI 诊断分析: 根因定位 + 修复建议',            source: '官方市场', installed: false, latest: null },
+  { name: 'class-conflict',    version: '1.0.0', cat: 'tool',   desc: '类冲突检测: sc → jad → ClassLoader 分析',    source: 'Team 性能工具', installed: true,  latest: null },
+  { name: 'connection-check',  version: '1.2.0', cat: 'quick',  desc: 'Pod 连接健康检查 + 网络诊断',                  source: 'Team 性能工具', installed: false, latest: null },
+];
+
+let editTarget = null; // currently editing skill reference
+let editSourceTarget = null; // currently editing source row reference
+
+const CAT_LABELS = { quick: '快速诊断', tool: '工具', scenario: '场景方案', ai: '智能诊断' };
+
+// ── Init ────────────────────────────────────────────────────────────────────
+function init() {
+  renderGrid(SKILLS);
+  renderLocal();
+}
+
+// ── Tab switching ───────────────────────────────────────────────────────────
+function switchMainTab(tab) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+  if (tab === 'skills') {
+    document.getElementById('tabMainSkills').classList.add('active');
+    document.getElementById('skillsPanel').classList.add('active');
+    renderLocal();
+  } else {
+    document.getElementById('tabMainMarket').classList.add('active');
+    document.getElementById('marketPanel').classList.add('active');
+  }
+}
+
+// ── Local skills ────────────────────────────────────────────────────────────
+function renderLocal() {
+  const el = document.getElementById('localGrid');
+  const installed = SKILLS.filter(s => s.installed);
+  document.getElementById('localStats').textContent = `共 ${installed.length} 个已安装技能`;
+  if (!installed.length) {
+    el.innerHTML = '<div class="empty-state">暂无已安装的技能</div>';
+    return;
+  }
+  el.innerHTML = installed.map(s => {
+    const cat = CAT_LABELS[s.cat] || s.cat;
+    const hasUpdate = s.latest !== null;
+    return `<div class="card" style="${hasUpdate?'border-color:rgba(251,191,36,.3)':''}">
+      <div class="card-name">${s.name}</div>
+      <div class="card-meta">
+        <span class="badge bg-purple">${cat}</span>
+        <span>v${s.version}</span>
+        <span>| ${s.source}</span>
+        ${hasUpdate ? `<span class="badge bg-amber">⚠ v${s.latest} 可用</span>` : ''}
+      </div>
+      <div class="card-desc">${s.desc}</div>
+      <div class="card-actions">
+        <button class="btn btn-sm" onclick="editSkill('${s.name}')">✏ 编辑</button>
+        <button class="btn btn-sm btn-d" onclick="uninstallSkill('${s.name}')">卸载</button>
+        ${hasUpdate ? `<button class="btn btn-w btn-sm" onclick="updateSkill('${s.name}')">⬆ 更新</button>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function switchSubTab(sub) {
+  document.querySelectorAll('[data-sub]').forEach(b => b.classList.remove('active'));
+  document.querySelectorAll('#marketPanel .panel').forEach(p => p.classList.remove('active'));
+  document.querySelector(`[data-sub="${sub}"]`).classList.add('active');
+  document.getElementById('panel' + sub.charAt(0).toUpperCase() + sub.slice(1)).classList.add('active');
+}
+
+// ── Browse grid ─────────────────────────────────────────────────────────────
+function renderGrid(skills) {
+  const el = document.getElementById('browseGrid');
+  document.getElementById('browseCount').textContent = `共 ${skills.length} 个技能`;
+  if (!skills.length) {
+    el.innerHTML = '<div class="empty-state">没有匹配的技能</div>';
+    return;
+  }
+  el.innerHTML = skills.map(s => {
+    const cat = CAT_LABELS[s.cat] || s.cat;
+    let statusHtml = '';
+    let actionHtml = '';
+    if (s.installed) {
+      if (s.latest) {
+        statusHtml = `<span class="badge bg-amber">⚠ v${s.version} → v${s.latest}</span>`;
+        actionHtml = `<button class="btn btn-w btn-sm" onclick="updateSkill('${s.name}')">⬆ 更新</button> <button class="btn btn-sm" onclick="editSkill('${s.name}')">✏ 编辑</button>`;
+      } else {
+        statusHtml = `<span class="badge bg-green">✓ v${s.version}</span>`;
+        actionHtml = `<button class="btn btn-sm" onclick="editSkill('${s.name}')">✏ 编辑</button>`;
+      }
+    } else {
+      actionHtml = `<button class="btn btn-p btn-sm" onclick="installSkill('${s.name}')">安装</button>`;
+    }
+    return `<div class="card">
+      <div class="card-name">${s.name}</div>
+      <div class="card-meta">
+        <span class="badge bg-purple">${cat}</span>
+        <span>v${s.version}</span>
+        <span>| ${s.source}</span>
+        ${statusHtml}
+      </div>
+      <div class="card-desc">${s.desc}</div>
+      <div class="card-actions">${actionHtml}</div>
+    </div>`;
+  }).join('');
+}
+
+function filterBrowse() {
+  const kw = document.getElementById('browseSearch').value.toLowerCase().trim();
+  const cat = document.getElementById('browseFilter').value;
+  let filtered = SKILLS.filter(s => {
+    if (cat && s.cat !== cat) return false;
+    if (kw && !s.name.toLowerCase().includes(kw) && !s.desc.toLowerCase().includes(kw)) return false;
+    return true;
+  });
+  renderGrid(filtered);
+}
+
+// ── Install / Update / Edit / Uninstall ────────────────────────────────────
+function installSkill(name) {
+  toast(`"${name}" 安装成功`, 'success');
+  const s = SKILLS.find(x => x.name === name);
+  if (s) { s.installed = true; s.latest = null; }
+  filterBrowse();
+  renderLocal();
+}
+
+function updateSkill(name) {
+  toast(`"${name}" 已更新到最新版本`, 'success');
+  const s = SKILLS.find(x => x.name === name);
+  if (s) { s.latest = null; s.version = s.version.replace(/\d+$/, m => parseInt(m)+1); }
+  filterBrowse();
+  renderLocal();
+}
+
+function editSkill(name) {
+  const s = SKILLS.find(x => x.name === name);
+  if (!s) return;
+  editTarget = s;
+  document.getElementById('editName').value = s.name;
+  document.getElementById('editCategory').value = s.cat;
+  document.getElementById('editVersion').value = s.version;
+  document.getElementById('editDescription').value = s.desc;
+  document.getElementById('editSource').value = s.source;
+  openModal('editSkillModal');
+}
+
+function saveSkillEdit() {
+  if (!editTarget) return;
+  editTarget.cat = document.getElementById('editCategory').value;
+  editTarget.version = document.getElementById('editVersion').value.trim();
+  editTarget.desc = document.getElementById('editDescription').value.trim();
+  toast(`"${editTarget.name}" 已更新`, 'success');
+  closeModal('editSkillModal');
+  editTarget = null;
+  renderLocal();
+  filterBrowse();
+}
+
+function uninstallSkill(name) {
+  if (!confirm(`确定要卸载 "${name}" 吗？`)) return;
+  const s = SKILLS.find(x => x.name === name);
+  if (s) { s.installed = false; s.latest = null; }
+  toast(`"${name}" 已卸载`, 'info');
+  renderLocal();
+  filterBrowse();
+}
+
+function syncSource(btn) {
+  btn.textContent = '⏳ 同步中';
+  btn.disabled = true;
+  setTimeout(() => {
+    btn.textContent = '🔄 同步';
+    btn.disabled = false;
+    const row = btn.closest('tr');
+    const badge = row.querySelector('.badge');
+    if (badge) badge.textContent = '8';
+    toast('同步完成，发现新技能', 'info');
+  }, 1200);
+}
+
+function editSource(btn) {
+  const row = btn.closest('tr');
+  editSourceTarget = row;
+  const cells = row.querySelectorAll('td');
+  const name = cells[0].textContent.trim();
+  const url = cells[1].textContent.trim();
+  const branch = cells[2].textContent.trim();
+  document.getElementById('editSourceName').value = name;
+  document.getElementById('editSourceUrl').value = url;
+  document.getElementById('editSourceBranch').value = branch;
+  openModal('editSourceModal');
+}
+
+function saveSourceEdit() {
+  if (!editSourceTarget) return;
+  const name = document.getElementById('editSourceName').value.trim();
+  const url = document.getElementById('editSourceUrl').value.trim();
+  const branch = document.getElementById('editSourceBranch').value.trim() || 'main';
+  if (!name || !url) { toast('名称和 URL 不能为空', 'error'); return; }
+  const cells = editSourceTarget.querySelectorAll('td');
+  cells[0].innerHTML = '<strong>' + escHtml(name) + '</strong>';
+  cells[1].textContent = url;
+  cells[2].textContent = branch;
+  toast('市场源已更新', 'success');
+  closeModal('editSourceModal');
+  editSourceTarget = null;
+}
+
+function removeSource(btn) {
+  if (!confirm('确定要删除这个市场源吗？')) return;
+  const row = btn.closest('tr');
+  row.style.opacity = '.3';
+  setTimeout(() => { row.remove(); toast('市场源已删除', 'info'); }, 400);
+}
+
+function escHtml(s) {
+  if (s == null) return '';
+  var d = document.createElement('div');
+  d.appendChild(document.createTextNode(String(s)));
+  return d.innerHTML;
+}
+
+// ── Add source modal ────────────────────────────────────────────────────────
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+
+function addSource() {
+  const name = document.getElementById('inpName').value.trim();
+  const url = document.getElementById('inpUrl').value.trim();
+  if (!name || !url) { toast('名称和 URL 不能为空', 'error'); return; }
+  closeModal('addSourceModal');
+  document.getElementById('inpName').value = '';
+  document.getElementById('inpUrl').value = '';
+  // Add row to table
+  const tbody = document.getElementById('sourceTableBody');
+  const row = document.createElement('tr');
+  row.innerHTML = `<td><strong>${escHtml(name)}</strong></td>
+    <td style="max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px">${escHtml(url)}</td>
+    <td>main</td>
+    <td><span class="badge bg-blue">0</span></td>
+    <td style="font-size:11px">刚刚</td>
+    <td><div class="btn-row">
+      <button class="btn btn-sm" onclick="syncSource(this)">🔄 同步</button>
+      <button class="btn btn-sm" onclick="editSource(this)">✏ 编辑</button>
+      <button class="btn btn-sm btn-d" onclick="removeSource(this)">🗑 删除</button>
+    </div></td>`;
+  tbody.appendChild(row);
+  toast(`市场源 "${name}" 已添加`, 'success');
+}
+
+// ── Toast ───────────────────────────────────────────────────────────────────
+function toast(msg, type) {
+  type = type || 'info';
+  const c = document.getElementById('toastContainer');
+  const d = document.createElement('div');
+  d.className = 'toast toast-' + type;
+  d.textContent = msg;
+  c.appendChild(d);
+  setTimeout(() => d.remove(), 3000);
+}
+
+// Boot
+init();
+</script>
+</body>
+</html>

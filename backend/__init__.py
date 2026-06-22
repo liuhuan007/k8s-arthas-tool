@@ -13,6 +13,8 @@ from .core.arthas_agent import ArthasAgentManager
 from .core.arthas_client import ArthasHttpClient
 from .core.pod_connection import PodConnection, RuntimeInfo
 from .core.connection import ArthasConnection, PF_BASE_PORT
+from .core.connection_pool import ConnectionPool, PoolConnection, WorkspaceState, WorkspaceTab
+from .core.port_allocator import PortAllocator, PortExhaustedError, get_port_allocator
 from .core.profiler import ProfilerWorkflow
 
 # 监控模块
@@ -40,6 +42,13 @@ __all__ = [
     'RuntimeInfo',
     'ArthasConnection',
     'PF_BASE_PORT',
+    'ConnectionPool',
+    'PoolConnection',
+    'WorkspaceState',
+    'WorkspaceTab',
+    'PortAllocator',
+    'PortExhaustedError',
+    'get_port_allocator',
     'ProfilerWorkflow',
     # 监控
     'KubectlRunner',

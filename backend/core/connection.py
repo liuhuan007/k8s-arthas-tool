@@ -8,12 +8,11 @@ Arthas 连接管理 - 整合 Agent、Port-Forward、HTTP Client
 import logging
 import socket
 import subprocess
-import threading
 import time
 from typing import Optional, Tuple, Callable
 
 from .connection_state import ConnectionState
-from .arthas_executor import ArthasCommandExecutor
+
 
 log = logging.getLogger(__name__)
 
@@ -101,9 +100,7 @@ class ArthasConnection:
       这样可以在不破坏现有 API 的情况下实现双层连接架构。
     """
 
-    _port_counter = PF_BASE_PORT
-    _used_ports: set = set()
-    _port_lock = threading.Lock()  # 端口分配线程安全锁
+    _port_allocator = None  # 延迟初始化：由 get_port_allocator() 设置
 
     def __init__(self, executor, target, state_manager=None):
         from .arthas_agent import ArthasAgentManager
@@ -134,25 +131,27 @@ class ArthasConnection:
         self._pod_connected = False  # Pod 连接是否成功
         self._arthas_ready = False   # Arthas 是否就绪
         self._on_state_change: Optional[Callable[[ConnectionState, str], None]] = None
+        self._managed_by_pool = False  # 由 ConnectionPool 管理时跳过直接 state_manager 同步
 
     # ── Port allocation ────────────────────────────────────────────────────────
 
     @classmethod
+    def _get_allocator(cls):
+        """获取端口分配器（延迟初始化）"""
+        if cls._port_allocator is None:
+            from .port_allocator import get_port_allocator
+            cls._port_allocator = get_port_allocator()
+        return cls._port_allocator
+
+    @classmethod
     def _alloc_port(cls) -> int:
-        """分配端口，线程安全，优先复用已释放的端口"""
-        with cls._port_lock:
-            for port in range(PF_BASE_PORT + 1, PF_MAX_PORT + 1):
-                if port not in cls._used_ports:
-                    cls._used_ports.add(port)
-                    return port
-        raise RuntimeError(f"Port range exhausted: {PF_MAX_PORT} maximum reached. "
-                           "Restart service or increase PF_MAX_PORT.")
+        """分配端口，委托给 PortAllocator"""
+        return cls._get_allocator().acquire()
 
     @classmethod
     def _release_port(cls, port: int):
-        """释放端口，允许后续复用"""
-        with cls._port_lock:
-            cls._used_ports.discard(port)
+        """释放端口，委托给 PortAllocator"""
+        cls._get_allocator().release(port)
 
     # ── Port-forward helpers ───────────────────────────────────────────────────
 
@@ -202,8 +201,23 @@ class ArthasConnection:
     # ── State change callback ────────────────────────────────────────────────
 
     def _notify_state_change(self, state: ConnectionState, message: str):
-        """Notify state change through ConnectionStateManager and callback."""
-        # ✅ 关键修复: 通过 ConnectionStateManager 统一状态转换
+        """Notify state change through ConnectionStateManager and callback.
+
+        状态同步策略（避免双重写入）：
+          - 独立模式（_managed_by_pool=False）：直接写入 state_manager
+          - 池管理模式（_managed_by_pool=True）：只通知回调，
+            ConnectionPool.update_state() 负责同步到 state_manager
+        """
+        # 池管理模式：跳过 state_manager，由 ConnectionPool.update_state() 统一处理
+        if self._managed_by_pool:
+            if self._on_state_change is not None:
+                try:
+                    self._on_state_change(state, message)
+                except Exception as e:
+                    log.debug("state change callback error: %s", e)
+            return
+
+        # 独立模式：直接写入 state_manager
         if self.state_manager and self.connection_id:
             try:
                 # 获取当前状态
@@ -287,10 +301,8 @@ class ArthasConnection:
             else:
                 self._notify_state_change(ConnectionState.HTTP_REUSABLE, "Existing HTTP connection reusable")
                 log.info("Arthas already ready (port=%d) — reusing", self.local_port)
-                if not self.arthas_version and hasattr(self.client, '_last_version') and self.client._last_version:
-                    self.arthas_version = self.client._last_version
                 if not self.arthas_version:
-                    self._fetch_version()
+                    self.arthas_version = self.client.fetch_version()
                 self._notify_state_change(ConnectionState.READY, f"Arthas ready (port {self.local_port})")
                 return True, f"Arthas 已就绪，复用 (port {self.local_port})"
 
@@ -358,18 +370,17 @@ class ArthasConnection:
             self.client = client
             self.http_client = client  # 兼容
             self.arthas_address = f"http://127.0.0.1:{self.local_port}"
-            # Step 4: 获取 Arthas 版本信息（优先用 ping 缓存）
-            if hasattr(client, '_last_version') and self.client._last_version:
-                self.arthas_version = client._last_version
-                log.info("Arthas version (from ping cache): %s", self.arthas_version)
-            else:
-                self._fetch_version()
+            # Step 4: 获取 Arthas 版本信息
+            self.arthas_version = client.fetch_version()
             version_suffix = f"  Arthas {self.arthas_version}" if self.arthas_version else ""
 
             self._arthas_ready = True
             self._notify_state_change(ConnectionState.READY, f"Arthas ready (port {self.local_port})")
             return True, f"Arthas 诊断环境就绪{version_suffix} (port {self.local_port}, pid {self.java_pid})"
         else:
+            self._stop_port_forward()
+            self._release_port(self.local_port)
+            self.local_port = 0
             self._notify_state_change(ConnectionState.RETRY_PING, "HTTP ping failed, will retry")
             self._notify_state_change(ConnectionState.FAILED, "Arthas HTTP API 未响应")
             return False, _http_timeout_error("Arthas HTTP API 未响应")
@@ -403,44 +414,6 @@ class ArthasConnection:
 
         # 第二步：Arthas 连接
         return self.connect_arthas(timeout=timeout - 10)
-
-    def _fetch_version(self):
-        """获取 Arthas 版本号"""
-        if not self.client:
-            return
-        try:
-            version = self.client.get_version(retries=2, delay=1.0)
-            if version:
-                self.arthas_version = version
-                log.info("Arthas version: %s", version)
-                return
-            # 兜底：用 exec_once 手动解析
-            resp = ArthasCommandExecutor.execute(self, "version", timeout_ms=5000, skip_audit=True, skip_history=True)
-            if resp.get("state") in ("SUCCEEDED", "succeeded"):
-                body = resp.get("body", {})
-                # body 可能是 dict 或 JSON 字符串
-                if isinstance(body, str):
-                    try:
-                        import json
-                        body = json.loads(body)
-                    except Exception:
-                        body = {}
-                if isinstance(body, dict):
-                    for r in body.get("results", []):
-                        v = r.get("version", "")
-                        if v:
-                            self.arthas_version = str(v)
-                            log.info("Arthas version: %s", v)
-                            return
-                # 从 message 字段提取
-                raw = str(resp.get("body", "")) + str(resp.get("message", ""))
-                import re
-                m = re.search(r'(\d+\.\d+\.\d+[\.\-\w]*)', raw)
-                if m:
-                    self.arthas_version = m.group(1)
-                    log.info("Arthas version (from regex): %s", m.group(1))
-        except Exception as e:
-            log.debug("fetch version failed: %s", e)
 
     def is_alive(self) -> bool:
         """检查 Arthas 连接是否存活"""

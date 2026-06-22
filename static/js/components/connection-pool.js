@@ -61,18 +61,20 @@ const ConnectionPool = (function() {
     input.setAttribute('spellcheck', 'false');
     input.setAttribute('data-lpignore', 'true');
     input.setAttribute('data-form-type', 'other');
-    input.setAttribute('name', input.id ? `${input.id}_filter_${Date.now()}` : `filter_${Date.now()}`);
-    const clearUnexpectedFill = () => {
-      const value = (input.value || '').trim().toLowerCase();
-      const looksLikeCredential = value === 'admin' || value === 'administrator' || value.includes('@');
-      if (document.activeElement !== input || looksLikeCredential) input.value = '';
+    input.removeAttribute('name');
+    const clearIfUnexpected = () => {
+      const v = (input.value || '').trim().toLowerCase();
+      if (v === 'admin' || v === 'administrator' || v.includes('@')) {
+        input.value = '';
+      }
     };
     input.readOnly = true;
-    [250, 800, 1500].forEach(delay => {
-      setTimeout(() => { input.readOnly = false; clearUnexpectedFill(); }, delay);
-    });
-    input.addEventListener('focus', () => { input.readOnly = false; clearUnexpectedFill(); }, { once: true });
-    input.addEventListener('mousedown', () => { input.readOnly = false; }, { once: true });
+    let ready = false;
+    const enable = () => { if (!ready) { ready = true; input.readOnly = false; } };
+    const guard = setInterval(() => { clearIfUnexpected(); if (ready) clearInterval(guard); }, 200);
+    setTimeout(() => { enable(); }, 3000);
+    input.addEventListener('focus', enable, { once: true });
+    input.addEventListener('mousedown', enable, { once: true });
   }
 
   async function loadClusters() {

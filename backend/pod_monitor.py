@@ -13,6 +13,7 @@ Pod Monitor Backend
 """
 
 import subprocess, json, re, time, threading
+import logging
 from datetime import datetime, timezone
 from collections import deque
 from dataclasses import dataclass, field, asdict
@@ -758,20 +759,29 @@ def collect_pod_snapshot(runner: KubectlRunner, ns: str, pod: str,
 # ── 后台轮询（存入历史缓冲）──────────────────────────────────────────────────────
 
 _poll_threads = {}  # type: Dict[str, threading.Thread]  # key -> thread
-_poll_stop = {}     # type: Dict[str, bool]  # key -> bool
+_poll_stop = {}     # type: Dict[str, threading.Event]  # key -> stop event
+_poll_lock = threading.Lock()
+_poll_log = logging.getLogger(__name__)
 
 
 def start_metrics_polling(runner: KubectlRunner, cluster: str,
                            ns: str, pod: str, container: str = ""):
     key = f"{cluster}/{ns}/{pod}"
-    _poll_stop[key] = False
+    with _poll_lock:
+        old_thread = _poll_threads.get(key)
+        if old_thread and old_thread.is_alive():
+            _poll_log.debug("metrics polling already running: %s", key)
+            return False
+
+        stop_event = threading.Event()
+        _poll_stop[key] = stop_event
 
     with _metrics_lock:
         if key not in _metrics_history:
             _metrics_history[key] = deque(maxlen=MAX_HISTORY)
 
     def _poll():
-        while not _poll_stop.get(key, True):
+        while not stop_event.is_set():
             try:
                 # 轻量采集：只采集 top + container 内部指标（不重复拉 pod JSON）
                 ts = datetime.now().isoformat()
@@ -797,16 +807,40 @@ def start_metrics_polling(runner: KubectlRunner, cluster: str,
                     _metrics_history[key].append(point)
             except Exception:
                 pass
-            time.sleep(POLL_INTERVAL)
+            stop_event.wait(POLL_INTERVAL)
+
+        with _poll_lock:
+            if _poll_threads.get(key) is threading.current_thread():
+                _poll_threads.pop(key, None)
+            if _poll_stop.get(key) is stop_event:
+                _poll_stop.pop(key, None)
 
     t = threading.Thread(target=_poll, daemon=True, name=f"poll-{key}")
-    t.start()
     _poll_threads[key] = t
+    t.start()
+    return True
 
 
 def stop_metrics_polling(cluster: str, ns: str, pod: str):
     key = f"{cluster}/{ns}/{pod}"
-    _poll_stop[key] = True
+    with _poll_lock:
+        stop_event = _poll_stop.get(key)
+        thread = _poll_threads.get(key)
+        if stop_event:
+            stop_event.set()
+    if thread and thread.is_alive():
+        thread.join(timeout=2)
+
+
+def stop_all_metrics_polling():
+    with _poll_lock:
+        events = list(_poll_stop.values())
+        threads = list(_poll_threads.values())
+        for stop_event in events:
+            stop_event.set()
+    for thread in threads:
+        if thread and thread.is_alive():
+            thread.join(timeout=2)
 
 
 def get_metrics_history(cluster: str, ns: str, pod: str):  # type: (str, str, str) -> list

@@ -63,6 +63,7 @@ class MockDatabase:
                 arthas_command TEXT,
                 handler TEXT,
                 created_by INTEGER,
+                marketplace_id INTEGER,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(name, version)

@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>K8s Arthas - Demo</title>
+<style>
+:root {
+  --bg: #0f172a;
+  --surface: #1e293b;
+  --surface2: #334155;
+  --border: #475569;
+  --primary: #3b82f6;
+  --primary2: #60a5fa;
+  --success: #10b981;
+  --warning: #f59e0b;
+  --text: #f1f5f9;
+  --muted: #94a3b8;
+  --radius: 12px;
+  --font: 'IBM Plex Mono', -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { 
+  font-family: var(--font); 
+  background: var(--bg); 
+  color: var(--text); 
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+.header {
+  padding: 32px 48px;
+  border-bottom: 1px solid var(--border);
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), transparent);
+}
+.header h1 {
+  font-size: 28px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+.header h1 span { color: var(--primary); }
+.header p {
+  color: var(--muted);
+  font-size: 14px;
+  max-width: 600px;
+}
+
+.main {
+  flex: 1;
+  padding: 48px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 24px;
+  max-width: 1200px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 24px;
+  transition: all 0.2s ease;
+  cursor: pointer;
+  text-decoration: none;
+  color: inherit;
+  display: block;
+}
+.card:hover {
+  border-color: var(--primary);
+  transform: translateY(-4px);
+  box-shadow: 0 12px 40px rgba(59, 130, 246, 0.2);
+}
+
+.card-icon {
+  width: 48px;
+  height: 48px;
+  background: linear-gradient(135deg, var(--primary), var(--primary2));
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  margin-bottom: 16px;
+}
+
+.card-title {
+  font-size: 18px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+
+.card-desc {
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.card-tags {
+  display: flex;
+  gap: 8px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+.tag {
+  background: var(--surface2);
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.footer {
+  padding: 24px 48px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+}
+
+@media (max-width: 768px) {
+  .header, .main { padding: 24px; }
+  .grid { grid-template-columns: 1fr; }
+}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>K8s Arthas <span>Demo</span></h1>
+  <p>组件演示与风格预览集合</p>
+</div>
+
+<div class="main">
+  <div class="grid">
+    
+    <a href="demo/style-demo.html" class="card">
+      <div class="card-icon">🎨</div>
+      <div class="card-title">UI 风格演示</div>
+      <div class="card-desc">展示多套界面主题风格，包含登录页、工作台等组件的样式预览</div>
+      <div class="card-tags">
+        <span class="tag">CSS 变量</span>
+        <span class="tag">主题切换</span>
+        <span class="tag">组件样式</span>
+      </div>
+    </a>
+    
+    <a href="demo/demo-connection-pool.html" class="card">
+      <div class="card-icon">🔌</div>
+      <div class="card-title">连接池管理</div>
+      <div class="card-desc">Arthas 连接池的交互演示，包含连接状态、搜索筛选等 UI 功能</div>
+      <div class="card-tags">
+        <span class="tag">连接管理</span>
+        <span class="tag">状态展示</span>
+        <span class="tag">交互设计</span>
+      </div>
+    </a>
+
+    <a href="demo/skill-marketplace.html" class="card">
+      <div class="card-icon" style="background:linear-gradient(135deg,#38bdf8,#a78bfa)">🏪</div>
+      <div class="card-title">技能市场</div>
+      <div class="card-desc">Skill 市场管理交互演示，包含市场源管理、技能浏览/安装/更新等完整流程</div>
+      <div class="card-tags">
+        <span class="tag">市场源管理</span>
+        <span class="tag">技能浏览</span>
+        <span class="tag">版本更新</span>
+      </div>
+    </a>
+    
+  </div>
+</div>
+
+<div class="footer">
+  K8s Arthas Diagnostic Tool &copy; 2026
+</div>
+
+</body>
+</html>

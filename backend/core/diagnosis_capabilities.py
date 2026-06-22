@@ -547,212 +547,66 @@ BUILTIN_SKILLS = [
 ]
 
 
-def _seed_skill_registry(conn):
-    """初始化 skill_registry 表数据"""
-    cursor = conn.cursor()
-
-    # 检查是否已初始化
-    cursor.execute("SELECT COUNT(*) FROM skill_registry")
-    if cursor.fetchone()[0] > 0:
-        log.info("skill_registry 已存在,跳过初始化")
-        return
-
-    log.info("开始初始化 skill_registry...")
-
-    for skill in BUILTIN_SKILLS:
+def _seed_skills(cursor, skills, source="builtin"):
+    """通用 skill 种子函数"""
+    inserted = 0
+    for skill in skills:
+        cursor.execute(
+            "SELECT id FROM skill_registry WHERE name = ?", (skill["name"],)
+        )
+        if cursor.fetchone() is not None:
+            continue
         cursor.execute(
             '''
             INSERT INTO skill_registry (
                 name, version, description, category, level, risk_level,
                 estimated_duration, source, status, dsl, parameters_schema,
-                llm_prompt, arthas_command, handler, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                llm_prompt, arthas_command, handler, created_by, marketplace_id
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''',
             (
-                skill['name'],
-                skill['version'],
-                skill.get('description', ''),
-                skill['category'],
-                skill.get('level', 1),
-                skill.get('risk_level', 'low'),
-                skill.get('estimated_duration', 10),
-                skill.get('source', 'builtin'),
-                'published',  # 内置Skill直接发布
-                skill.get('dsl'),
-                skill.get('parameters_schema', '{}'),
-                skill.get('llm_prompt'),
-                skill.get('arthas_command'),
-                skill.get('handler'),
-                None,  # created_by (系统创建)
+                skill["name"],
+                skill["version"],
+                skill.get("description", ""),
+                skill["category"],
+                skill.get("level", 1),
+                skill.get("risk_level", "low"),
+                skill.get("estimated_duration", 10),
+                source,
+                "published",
+                skill.get("dsl"),
+                skill.get("parameters_schema", "{}"),
+                skill.get("llm_prompt"),
+                skill.get("arthas_command"),
+                skill.get("handler"),
+                None,
+                None,
             )
         )
-
-    log.info(f"skill_registry 初始化完成,共插入 {len(BUILTIN_SKILLS)} 个Skill")
+        inserted += 1
+    return inserted
 
 
 def init_skill_registry(conn):
     """初始化 skill_registry 表"""
-    _seed_skill_registry(conn)
-    _seed_profiler_skills(conn)
-    _seed_ai_skills(conn)
-    _seed_mcp_skills(conn)
+    cursor = conn.cursor()
 
+    cursor.execute("SELECT COUNT(*) FROM skill_registry")
+    if cursor.fetchone()[0] == 0:
+        n = _seed_skills(cursor, BUILTIN_SKILLS, "builtin")
+        log.info("Builtin skills seeded: %d", n)
 
-def _seed_profiler_skills(conn):
-    """初始化 Profiler 类 Skill（Phase 7 T01）
-
-    Profiler skills are seeded separately from BUILTIN_SKILLS so they can be
-    added to existing deployments without re-seeding the entire table.
-    Each skill is inserted only if no record with the same name exists.
-    """
     from models.skills.profiler_skills import PROFILER_SKILLS
+    n = _seed_skills(cursor, PROFILER_SKILLS, "builtin")
+    if n:
+        log.info("Profiler skills 已插入 skill_registry: %d 个", n)
 
-    cursor = conn.cursor()
-
-    inserted = 0
-    for skill in PROFILER_SKILLS:
-        cursor.execute(
-            "SELECT id FROM skill_registry WHERE name = ?", (skill["name"],)
-        )
-        if cursor.fetchone() is not None:
-            continue
-
-        cursor.execute(
-            '''
-            INSERT INTO skill_registry (
-                name, version, description, category, level, risk_level,
-                estimated_duration, source, status, dsl, parameters_schema,
-                llm_prompt, arthas_command, handler, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
-            (
-                skill["name"],
-                skill["version"],
-                skill.get("description", ""),
-                skill["category"],
-                skill.get("level", 1),
-                skill.get("risk_level", "low"),
-                skill.get("estimated_duration", 10),
-                skill.get("source", "builtin"),
-                "published",
-                skill.get("dsl"),
-                skill.get("parameters_schema", "{}"),
-                skill.get("llm_prompt"),
-                skill.get("arthas_command"),
-                skill.get("handler"),
-                None,
-            )
-        )
-        inserted += 1
-
-    if inserted > 0:
-        log.info("Profiler skills 已插入 skill_registry: %d 个", inserted)
-    else:
-        log.info("Profiler skills 已存在，跳过插入")
-
-
-def _seed_ai_skills(conn):
-    """初始化 AI 类 Skill（Phase 7 T02）
-
-    AI skills are seeded separately from BUILTIN_SKILLS and PROFILER_SKILLS
-    so they can be added to existing deployments without re-seeding the
-    entire table. Each skill is inserted only if no record with the same
-    name exists.
-    """
     from models.skills.ai_skills import AI_SKILLS
+    n = _seed_skills(cursor, AI_SKILLS, "builtin")
+    if n:
+        log.info("AI skills 已插入 skill_registry: %d 个", n)
 
-    cursor = conn.cursor()
-
-    inserted = 0
-    for skill in AI_SKILLS:
-        cursor.execute(
-            "SELECT id FROM skill_registry WHERE name = ?", (skill["name"],)
-        )
-        if cursor.fetchone() is not None:
-            continue
-
-        cursor.execute(
-            '''
-            INSERT INTO skill_registry (
-                name, version, description, category, level, risk_level,
-                estimated_duration, source, status, dsl, parameters_schema,
-                llm_prompt, arthas_command, handler, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
-            (
-                skill["name"],
-                skill["version"],
-                skill.get("description", ""),
-                skill["category"],
-                skill.get("level", 1),
-                skill.get("risk_level", "low"),
-                skill.get("estimated_duration", 10),
-                skill.get("source", "builtin"),
-                "published",
-                skill.get("dsl"),
-                skill.get("parameters_schema", "{}"),
-                skill.get("llm_prompt"),
-                skill.get("arthas_command"),
-                skill.get("handler"),
-                None,
-            )
-        )
-        inserted += 1
-
-    if inserted > 0:
-        log.info("AI skills 已插入 skill_registry: %d 个", inserted)
-    else:
-        log.info("AI skills 已存在，跳过插入")
-
-
-def _seed_mcp_skills(conn):
-    """初始化 MCP 类 Skill（Phase 7 T03）
-
-    MCP skills are seeded separately from BUILTIN_SKILLS so they can be
-    added to existing deployments without re-seeding the entire table.
-    Each skill is inserted only if no record with the same name exists.
-    """
     from models.skills.mcp_skills import MCP_SKILLS
-
-    cursor = conn.cursor()
-
-    inserted = 0
-    for skill in MCP_SKILLS:
-        cursor.execute(
-            "SELECT id FROM skill_registry WHERE name = ?", (skill["name"],)
-        )
-        if cursor.fetchone() is not None:
-            continue
-
-        cursor.execute(
-            '''
-            INSERT INTO skill_registry (
-                name, version, description, category, level, risk_level,
-                estimated_duration, source, status, dsl, parameters_schema,
-                llm_prompt, arthas_command, handler, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ''',
-            (
-                skill["name"],
-                skill["version"],
-                skill.get("description", ""),
-                skill["category"],
-                skill.get("level", 1),
-                skill.get("risk_level", "low"),
-                skill.get("estimated_duration", 10),
-                skill.get("source", "builtin"),
-                "published",
-                skill.get("dsl"),
-                skill.get("parameters_schema", "{}"),
-                skill.get("llm_prompt"),
-                skill.get("arthas_command"),
-                skill.get("handler"),
-                None,
-            )
-        )
-        inserted += 1
-
-    if inserted > 0:
-        log.info("MCP skills 已插入 skill_registry: %d 个", inserted)
-    else:
-        log.info("MCP skills 已存在，跳过插入")
+    n = _seed_skills(cursor, MCP_SKILLS, "builtin")
+    if n:
+        log.info("MCP skills 已插入 skill_registry: %d 个", n)

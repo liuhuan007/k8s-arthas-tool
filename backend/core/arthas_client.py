@@ -50,13 +50,11 @@ class ArthasHttpClient:
         return json.loads(raw)
 
     def ping(self, retries: int = 3, delay: float = 1.5) -> bool:
-        """Ping with retry — 发送 version 命令检测连通性，同时提取版本号"""
+        """Ping with retry — 发送 version 命令检测连通性"""
         for i in range(retries):
             try:
                 r = self._post({"action": "exec", "command": "version"}, timeout=5)
                 if r.get("state") in ("SUCCEEDED", "succeeded"):
-                    # 顺便提取版本号缓存到实例属性
-                    self._last_version = self._extract_version(r)
                     return True
             except Exception as e:
                 log.debug("ping attempt %d failed: %s", i + 1, e)
@@ -85,17 +83,26 @@ class ArthasHttpClient:
             return m.group(1)
         return None
 
-    def get_version(self, retries: int = 2, delay: float = 1.0) -> Optional[str]:
+    def fetch_version(self, retries: int = 2, delay: float = 1.0) -> Optional[str]:
         """获取 Arthas 版本号，返回版本字符串或 None"""
         for i in range(retries):
             try:
                 r = self._post({"action": "exec", "command": "version"}, timeout=8)
                 if r.get("state") in ("SUCCEEDED", "succeeded"):
-                    return self._extract_version(r)
+                    v = self._extract_version(r)
+                    if v:
+                        return v
             except Exception as e:
-                log.debug("get_version attempt %d failed: %s", i + 1, e)
+                log.debug("fetch_version attempt %d failed: %s", i + 1, e)
             if i < retries - 1:
                 time.sleep(delay)
+        # 兜底：用 exec_once
+        try:
+            r = self.exec_once("version", timeout_ms=8000)
+            if r.get("state") in ("SUCCEEDED", "succeeded"):
+                return self._extract_version(r)
+        except Exception as e:
+            log.debug("fetch_version exec_once fallback failed: %s", e)
         return None
 
     # ── One-shot commands ──────────────────────────────────────────────────────

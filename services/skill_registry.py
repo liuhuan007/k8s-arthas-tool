@@ -453,6 +453,7 @@ class SkillRegistry:
             'arthas_command': skill_data.get('arthas_command'),
             'handler': skill_data.get('handler'),
             'created_by': created_by,
+            'marketplace_id': skill_data.get('marketplace_id'),
         })
 
     def _get_skill(self, skill_id: int) -> Optional[Dict[str, Any]]:

@@ -47,6 +47,7 @@ from backend import (
     ARTHAS_DEFAULT_JAR,
     collect_pod_snapshot,
     get_metrics_history, start_metrics_polling, stop_metrics_polling,
+    ConnectionPool,
 )
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -59,6 +60,42 @@ app = Flask(__name__,
 )
 app.secret_key = Config.SECRET_KEY
 app.config['SEND_FILE_MAX_AGE_DEFAULT'] = 0
+
+_MONITOR_SNAPSHOT_TTL = 8
+_monitor_snapshot_cache = {}
+_monitor_snapshot_locks = {}
+_monitor_snapshot_guard = threading.Lock()
+
+
+def _collect_monitor_snapshot_cached(runner, cluster: str, ns: str, pod: str, container: str):
+    if not cluster or not ns or not pod:
+        return collect_pod_snapshot(runner, ns, pod, container)
+
+    key = f"{cluster}/{ns}/{pod}/{container or ''}"
+    now = time.monotonic()
+    with _monitor_snapshot_guard:
+        cached = _monitor_snapshot_cache.get(key)
+        if cached and now - cached[0] <= _MONITOR_SNAPSHOT_TTL:
+            return cached[1]
+        key_lock = _monitor_snapshot_locks.setdefault(key, threading.Lock())
+
+    with key_lock:
+        now = time.monotonic()
+        with _monitor_snapshot_guard:
+            cached = _monitor_snapshot_cache.get(key)
+            if cached and now - cached[0] <= _MONITOR_SNAPSHOT_TTL:
+                return cached[1]
+
+        result = collect_pod_snapshot(runner, ns, pod, container)
+        if not isinstance(result, dict) or not result.get("error"):
+            with _monitor_snapshot_guard:
+                _monitor_snapshot_cache[key] = (time.monotonic(), result)
+                if len(_monitor_snapshot_cache) > 128:
+                    oldest = sorted(_monitor_snapshot_cache.items(), key=lambda item: item[1][0])[:32]
+                    for old_key, _ in oldest:
+                        _monitor_snapshot_cache.pop(old_key, None)
+                        _monitor_snapshot_locks.pop(old_key, None)
+        return result
 
 
 @app.after_request
@@ -655,6 +692,18 @@ from backend.app_context import (
 _state_manager = _get_state_manager()
 
 _start_phase5_services()
+
+# ✅ 初始化连接池
+from backend.core.connection_pool import ConnectionPool
+_connection_pool = ConnectionPool(state_manager=_state_manager, max_connections=20)
+_connection_pool.start_heartbeat(interval=5)
+print("[OK] 连接池初始化成功")
+
+# 注册连接池 API
+from api.pool_apis import pool_bp, init_pool_api
+app.register_blueprint(pool_bp, url_prefix='/api/pool')
+init_pool_api(_connection_pool, db, _make_runner, _state_manager)
+print("[OK] 连接池 API 注册成功")
 
 
 # ── Phase 5: 启动恢复（实际 Arthas 连接重建）─────────────────────────────────
@@ -1850,9 +1899,12 @@ def pod_snapshot():
     ns = d.get('namespace', 'default')
     pod = d.get('pod_name', '')
     container = d.get('container', '')
+    auth_err, auth_code = AuthorizationService.require_namespace_access(current_user, d.get('cluster_name', ''), ns)
+    if auth_err:
+        return jsonify(auth_err), auth_code
     
     try:
-        result = collect_pod_snapshot(runner, ns, pod, container)
+        result = _collect_monitor_snapshot_cached(runner, d.get('cluster_name', ''), ns, pod, container)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1881,7 +1933,7 @@ def monitor_pod():
     
     container = d.get('container', '')
     try:
-        result = collect_pod_snapshot(runner, ns, pod, container)
+        result = _collect_monitor_snapshot_cached(runner, cluster, ns, pod, container)
         return jsonify({"metrics": result})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1938,16 +1990,20 @@ def get_metrics():
 def start_polling():
     """启动指标轮询"""
     d = request.json or {}
-    runner, err = _make_runner(d.get('cluster_name', ''))
+    cluster_name = d.get('cluster_name') or d.get('cluster', '')
+    runner, err = _make_runner(cluster_name)
     if err:
         return jsonify({"error": err}), 400
     
     ns = d.get('namespace', 'default')
     pod = d.get('pod_name', '')
     container = d.get('container', '')
+    auth_err, auth_code = AuthorizationService.require_namespace_access(current_user, cluster_name, ns)
+    if auth_err:
+        return jsonify(auth_err), auth_code
     
-    start_metrics_polling(runner, d.get('cluster_name', ''), ns, pod, container)
-    return jsonify({"ok": True})
+    started = start_metrics_polling(runner, cluster_name, ns, pod, container)
+    return jsonify({"ok": True, "started": bool(started)})
 
 
 @app.route('/api/monitor/stop-polling', methods=['POST'])
@@ -1955,7 +2011,11 @@ def start_polling():
 def stop_polling():
     """停止指标轮询"""
     d = request.json or {}
-    stop_metrics_polling(d.get('cluster', ''), d.get('namespace', ''), d.get('pod', ''))
+    stop_metrics_polling(
+        d.get('cluster') or d.get('cluster_name', ''),
+        d.get('namespace', ''),
+        d.get('pod') or d.get('pod_name', ''),
+    )
     return jsonify({"ok": True})
 
 
@@ -2481,6 +2541,7 @@ def download_local_file(filename: str):
 
 if __name__ == "__main__":
     import argparse
+    import atexit
     
     parser = argparse.ArgumentParser(description="K8s Arthas Tool Server")
     parser.add_argument("--port", type=int, default=Config.DEFAULT_PORT)
@@ -2493,6 +2554,29 @@ if __name__ == "__main__":
     _sync_clusters_to_db()
     # Phase 5: 从数据库恢复上次活跃的连接
     _recover_connections_on_startup()
+    # 注册退出清理钩子，释放所有 kubectl port-forward 进程
+    def _cleanup_port_forwards():
+        try:
+            from backend.pod_monitor import stop_all_metrics_polling
+            stop_all_metrics_polling()
+        except Exception as e:
+            print(f"[CLEANUP] 停止监控轮询失败: {e}")
+        try:
+            with _connections_lock:
+                entries = list(_connections.items())
+                _connections.clear()
+            for _, entry in entries:
+                conn = entry.get("conn") if isinstance(entry, dict) else None
+                if conn and hasattr(conn, "disconnect"):
+                    conn.disconnect()
+        except Exception as e:
+            print(f"[CLEANUP] 清理活跃连接失败: {e}")
+        try:
+            from backend.core.connection_pool import connection_pool
+            connection_pool.disconnect_all()
+        except Exception as e:
+            print(f"[CLEANUP] 清理 port-forward 进程失败: {e}")
+    atexit.register(_cleanup_port_forwards)
     # 校验生产环境安全配置
     Config.validate_production()
     print(f"[START] K8s Arthas Tool v2026.03.23 -> http://{args.host}:{args.port}")

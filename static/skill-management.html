@@ -150,11 +150,20 @@
                 <h1>⚡ <span>Skill 管理</span></h1>
                 <div class="btn-row">
                     <button class="ab ab-g" onclick="loadSkills()">↻ 刷新</button>
-                    <button class="ab ab-w" onclick="showImportModal()">⬆ 导入</button>
+                    <button class="ab ab-g" onclick="showGitHubImportModal()">GitHub 导入</button>
+                    <button class="ab ab-w" onclick="showImportModal()">⬆ 文件导入</button>
                     <button class="ab ab-p" onclick="showCreateModal()">＋ 创建 Skill</button>
                 </div>
             </div>
 
+            <!-- Tab bar -->
+            <div style="display:flex;gap:4px;margin-bottom:14px;border-bottom:1px solid var(--ln);padding-bottom:8px">
+                <button class="ab ab-p ab-sm" style="border-radius:4px" onclick="switchTab('local')" id="tabBtnLocal">📋 本地技能</button>
+                <button class="ab ab-g ab-sm" style="border-radius:4px" onclick="switchTab('market')" id="tabBtnMarket">🏪 技能市场</button>
+            </div>
+
+            <!-- ── 本地技能 Tab ── -->
+            <div id="tabLocal">
             <!-- Stats -->
             <div class="stats-bar" id="statsBar">
                 <div class="stat-card"><div class="stat-val" id="statTotal">—</div><div class="stat-lbl">总计</div></div>
@@ -210,7 +219,48 @@
                     </tbody>
                 </table>
             </div>
-        </div>
+            </div> <!-- /tabLocal -->
+
+            <!-- ── 技能市场 Tab ── -->
+            <div id="tabMarket" style="display:none">
+
+            <div style="display:flex;gap:4px;margin-bottom:14px">
+                <button class="mkt-tab ab ab-p ab-sm" data-tab="sources" onclick="switchMarketTab('sources')" style="border-radius:4px">📡 市场源</button>
+                <button class="mkt-tab ab ab-g ab-sm" data-tab="browse" onclick="switchMarketTab('browse')" style="border-radius:4px">🔍 浏览技能</button>
+            </div>
+
+            <!-- 市场源 -->
+            <div id="tab-sources">
+                <div style="margin-bottom:10px">
+                    <button class="ab ab-p" onclick="showAddSourceModal()">＋ 添加市场源</button>
+                </div>
+                <div class="tbl-wrap">
+                    <table class="tbl">
+                        <thead><tr><th>名称</th><th>仓库地址</th><th>分支</th><th>技能数</th><th>最近同步</th><th>操作</th></tr></thead>
+                        <tbody id="sourceTableBody"><tr><td colspan="6" class="empty-msg">加载中...</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 浏览技能 -->
+            <div id="tab-browse" style="display:none">
+                <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
+                    <input class="fi" id="browseSearch" placeholder="搜索技能名称/描述..." style="max-width:240px" onkeyup="if(event.key==='Enter')loadBrowse()">
+                    <select class="fs" id="browseCategory" onchange="loadBrowse()" style="width:130px">
+                        <option value="">全部分类</option>
+                        <option value="quick">快速诊断</option>
+                        <option value="tool">工具</option>
+                        <option value="scenario">场景方案</option>
+                        <option value="ai">智能诊断</option>
+                    </select>
+                    <button class="ab ab-g ab-sm" onclick="loadBrowse()">搜索</button>
+                    <span style="font-size:11px;color:var(--tx3);margin-left:auto" id="browseCount"></span>
+                </div>
+                <div id="browseContainer"><div class="empty-msg">请先同步市场源</div></div>
+            </div>
+
+            </div> <!-- /tabMarket -->
+        </div> <!-- /admin-content -->
     </div>
 
     <!-- 导入 Skill 模态框 -->
@@ -275,8 +325,70 @@
         </div>
     </div>
 
+    <!-- 添加市场源 模态框 -->
+    <div class="modal-bg" id="addSourceModal">
+        <div class="modal">
+            <div class="mhd"><span class="m-tt">添加市场源</span><button class="m-cl" onclick="closeMktModal('addSourceModal')">✕</button></div>
+            <div class="mbd">
+                <div class="fg"><label class="fl">名称 *</label><input class="fi" id="addSourceName" placeholder="例如: 官方市场"></div>
+                <div class="fg"><label class="fl">仓库 URL *</label><input class="fi" id="addSourceUrl" placeholder="https://github.com/user/repo"></div>
+                <div class="fg"><label class="fl">分支</label><input class="fi" id="addSourceBranch" placeholder="main" value="main"></div>
+                <div class="err-box" id="addSourceError"></div>
+            </div>
+            <div class="mft">
+                <button class="ab ab-g" onclick="closeMktModal('addSourceModal')">取消</button>
+                <button class="ab ab-p" onclick="addSource()">添加</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 编辑市场源 模态框 -->
+    <div class="modal-bg" id="editSourceModal">
+        <div class="modal">
+            <div class="mhd"><span class="m-tt">编辑市场源</span><button class="m-cl" onclick="closeMktModal('editSourceModal')">✕</button></div>
+            <div class="mbd">
+                <div class="fg"><label class="fl">名称 *</label><input class="fi" id="editSourceName" placeholder="例如: 官方市场"></div>
+                <div class="fg"><label class="fl">仓库 URL *</label><input class="fi" id="editSourceUrl" placeholder="https://github.com/user/repo"></div>
+                <div class="fg"><label class="fl">分支</label><input class="fi" id="editSourceBranch" placeholder="main" value="main"></div>
+                <div class="err-box" id="editSourceError"></div>
+            </div>
+            <div class="mft">
+                <button class="ab ab-g" onclick="closeMktModal('editSourceModal')">取消</button>
+                <button class="ab ab-p" onclick="saveSourceEdit()">保存</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- GitHub 导入 模态框 -->
+    <div class="modal-bg" id="gitHubImportModal">
+        <div class="modal wide">
+            <div class="mhd"><span class="m-tt">从 GitHub 导入 Skill</span><button class="m-cl" onclick="closeMktModal('gitHubImportModal')">✕</button></div>
+            <div class="mbd">
+                <div class="fg"><label class="fl">仓库 URL *</label><input class="fi" id="ghRepoUrl" placeholder="https://github.com/user/skill-repo"></div>
+                <div class="fg"><label class="fl">分支</label><input class="fi" id="ghBranch" placeholder="main" value="main"></div>
+                <div style="margin-bottom:10px">
+                    <button class="ab ab-p" onclick="previewGitHubRepo()">扫描仓库</button>
+                </div>
+                <div id="ghPreviewArea"></div>
+                <div class="err-box" id="ghImportError"></div>
+            </div>
+            <div class="mft">
+                <button class="ab ab-g" onclick="closeMktModal('gitHubImportModal')">关闭</button>
+            </div>
+        </div>
+    </div>
+
     <script src="js/skill-management.js"></script>
+    <script src="js/skill-marketplace.js"></script>
     <script>
+    function switchTab(tab) {
+        document.getElementById('tabLocal').style.display = tab === 'local' ? 'block' : 'none';
+        document.getElementById('tabMarket').style.display = tab === 'market' ? 'block' : 'none';
+        document.getElementById('tabBtnLocal').className = tab === 'local' ? 'ab ab-p ab-sm' : 'ab ab-g ab-sm';
+        document.getElementById('tabBtnMarket').className = tab === 'market' ? 'ab ab-p ab-sm' : 'ab ab-g ab-sm';
+        if (tab === 'market') switchMarketTab('sources');
+    }
+
     (async function() {
       try {
         const resp = await fetch('api/auth/current').then(r => r.json());
@@ -294,7 +406,7 @@
         }
         const el = document.getElementById('currentUser');
         if (el) el.textContent = '👤 ' + (resp.user.username || '—');
-        // Init
+        // Init local tab
         loadStats();
         loadSkills();
       } catch (e) {

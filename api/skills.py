@@ -394,3 +394,223 @@ def execute_agent_tool(tool_name):
     except Exception as e:
         log.error(f"Execute agent tool failed: {e}")
         return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Skill Marketplace API
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@skills_bp.route('/marketplace/sources', methods=['GET'])
+@login_required
+def list_marketplace_sources():
+    """列出市场源"""
+    try:
+        from services.skill_marketplace import get_skill_marketplace
+        sources = get_skill_marketplace().list_sources()
+        return jsonify({'ok': True, 'sources': sources, 'total': len(sources)})
+    except Exception as e:
+        log.error(f"List marketplace sources failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@skills_bp.route('/marketplace/sources', methods=['POST'])
+@login_required
+def add_marketplace_source():
+    """添加市场源"""
+    try:
+        data = request.get_json()
+        if not data or not data.get('name') or not data.get('repo_url'):
+            return jsonify({'ok': False, 'error': 'name and repo_url are required'}), 400
+
+        from services.skill_marketplace import get_skill_marketplace
+        source_id = get_skill_marketplace().add_source(
+            name=data['name'],
+            repo_url=data['repo_url'],
+            branch=data.get('branch', 'main')
+        )
+        return jsonify({'ok': True, 'source_id': source_id, 'message': 'Source added'}), 201
+    except Exception as e:
+        log.error(f"Add marketplace source failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@skills_bp.route('/marketplace/sources/<int:source_id>', methods=['PUT'])
+@login_required
+def update_marketplace_source(source_id):
+    """更新市场源"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'ok': False, 'error': 'no data'}), 400
+        if data.get('name') is not None and not data['name'].strip():
+            return jsonify({'ok': False, 'error': 'name cannot be empty'}), 400
+        if data.get('repo_url') is not None and not data['repo_url'].strip():
+            return jsonify({'ok': False, 'error': 'repo_url cannot be empty'}), 400
+
+        from services.skill_marketplace import get_skill_marketplace
+        get_skill_marketplace().update_source(
+            source_id,
+            name=data.get('name'),
+            repo_url=data.get('repo_url'),
+            branch=data.get('branch')
+        )
+        return jsonify({'ok': True, 'message': 'Source updated'})
+    except Exception as e:
+        log.error(f"Update marketplace source failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@skills_bp.route('/marketplace/sources/<int:source_id>', methods=['DELETE'])
+@login_required
+def remove_marketplace_source(source_id):
+    """删除市场源"""
+    try:
+        from services.skill_marketplace import get_skill_marketplace
+        get_skill_marketplace().remove_source(source_id)
+        return jsonify({'ok': True, 'message': 'Source removed'})
+    except Exception as e:
+        log.error(f"Remove marketplace source failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@skills_bp.route('/marketplace/sources/<int:source_id>/sync', methods=['POST'])
+@login_required
+def sync_marketplace_source(source_id):
+    """异步同步市场源（立即返回，后台执行）"""
+    try:
+        from services.skill_marketplace import get_skill_marketplace
+        status = get_skill_marketplace().sync_source_async(source_id)
+        return jsonify({'ok': True, 'sync_status': status})
+    except Exception as e:
+        log.error(f"Sync marketplace source failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@skills_bp.route('/marketplace/sources/<int:source_id>/sync-status', methods=['GET'])
+@login_required
+def sync_marketplace_status(source_id):
+    """查询同步状态"""
+    try:
+        from services.skill_marketplace import get_skill_marketplace
+        status = get_skill_marketplace().get_sync_status(source_id)
+        return jsonify({'ok': True, 'sync_status': status})
+    except Exception as e:
+        log.error(f"Sync status check failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@skills_bp.route('/marketplace/browse', methods=['GET'])
+@login_required
+def browse_marketplace():
+    """浏览市场技能"""
+    try:
+        source_id = request.args.get('source_id', type=int)
+        keyword = request.args.get('keyword')
+        category = request.args.get('category')
+
+        from services.skill_marketplace import get_skill_marketplace
+        skills = get_skill_marketplace().browse(source_id=source_id, keyword=keyword, category=category)
+        return jsonify({'ok': True, 'skills': skills, 'total': len(skills)})
+    except Exception as e:
+        log.error(f"Browse marketplace failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@skills_bp.route('/marketplace/install/<int:source_id>/<skill_name>', methods=['POST'])
+@login_required
+def install_marketplace_skill(source_id, skill_name):
+    """安装市场技能"""
+    try:
+        from services.skill_marketplace import get_skill_marketplace
+        skill_id = get_skill_marketplace().install(source_id, skill_name, current_user.id)
+        return jsonify({'ok': True, 'skill_id': skill_id, 'message': f'Skill "{skill_name}" installed'}), 201
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+    except Exception as e:
+        log.error(f"Install marketplace skill failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@skills_bp.route('/marketplace/updates', methods=['GET'])
+@login_required
+def check_marketplace_updates():
+    """检查可更新技能"""
+    try:
+        from services.skill_marketplace import get_skill_marketplace
+        updates = get_skill_marketplace().check_updates()
+        return jsonify({'ok': True, 'updates': updates, 'total': len(updates)})
+    except Exception as e:
+        log.error(f"Check marketplace updates failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@skills_bp.route('/marketplace/update/<int:skill_id>', methods=['POST'])
+@login_required
+def update_marketplace_skill(skill_id):
+    """更新市场技能"""
+    try:
+        from services.skill_marketplace import get_skill_marketplace
+        new_skill_id = get_skill_marketplace().update_skill(skill_id, current_user.id)
+        return jsonify({'ok': True, 'skill_id': new_skill_id, 'message': 'Skill updated'})
+    except ValueError as e:
+        return jsonify({'ok': False, 'error': str(e)}), 400
+    except Exception as e:
+        log.error(f"Update marketplace skill failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500
+
+
+@skills_bp.route('/registry/import-from-github', methods=['POST'])
+@login_required
+def import_from_github():
+    """从 GitHub 仓库直接导入 skill（不经过市场）"""
+    try:
+        data = request.get_json()
+        if not data or not data.get('repo_url'):
+            return jsonify({'ok': False, 'error': 'repo_url is required'}), 400
+
+        repo_url = data['repo_url']
+        branch = data.get('branch', 'main')
+        selected = data.get('selected_skills')  # None 表示全部
+
+        import tempfile, os, subprocess, shutil
+        from pathlib import Path
+        from services.skill_marketplace import SkillMarketplace
+
+        temp_dir = tempfile.mkdtemp(prefix="github_import_")
+        try:
+            result = subprocess.run(
+                ["git", "clone", "--depth", "1", "-b", branch, repo_url, temp_dir],
+                capture_output=True, text=True, timeout=120
+            )
+            if result.returncode != 0:
+                raise RuntimeError(f"git clone failed: {result.stderr.strip()}")
+
+            scanner = SkillMarketplace()
+            discovered = scanner._scan_repo(temp_dir)
+
+            if selected:
+                discovered = [s for s in discovered if s.get("name") in selected]
+
+            registry = get_skill_registry()
+            imported = []
+            for skill_meta in discovered:
+                skill_dir = Path(temp_dir) / skill_meta.get("path", skill_meta.get("name", ""))
+                skill_data = scanner._load_skill_file(skill_dir)
+                if not skill_data:
+                    continue
+                skill_data["source"] = "imported"
+                try:
+                    sid = registry.import_skill(skill_data, current_user.id)
+                    imported.append({"name": skill_data.get("name"), "skill_id": sid})
+                except Exception as e:
+                    log.warning("Import skill '%s' failed: %s", skill_data.get("name"), e)
+
+            return jsonify({'ok': True, 'imported': imported, 'total': len(imported)})
+
+        finally:
+            if os.path.exists(temp_dir):
+                shutil.rmtree(temp_dir, ignore_errors=True)
+
+    except Exception as e:
+        log.error(f"Import from GitHub failed: {e}")
+        return jsonify({'ok': False, 'error': str(e)}), 500

@@ -2,12 +2,16 @@
 Kubectl 封装 - 底层 kubectl 操作
 """
 import json
+import os
 import subprocess
 import logging
+import threading
 from typing import List, Dict, Tuple, Optional
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
+_KUBECTL_MAX_PARALLEL = max(1, int(os.getenv("K8S_ARTHAS_KUBECTL_MAX_PARALLEL", "8")))
+_kubectl_semaphore = threading.BoundedSemaphore(_KUBECTL_MAX_PARALLEL)
 
 
 class KubectlExecutor:
@@ -30,6 +34,9 @@ class KubectlExecutor:
     def _run(self, args: List, timeout: int = 30) -> Tuple[int, str, str]:
         cmd = self._base_cmd() + args
         log.debug("kubectl: %s", " ".join(cmd))
+        acquired = _kubectl_semaphore.acquire(timeout=min(max(timeout, 1), 10))
+        if not acquired:
+            return -1, "", f"kubectl 并发过高，请稍后重试 (limit={_KUBECTL_MAX_PARALLEL})"
         try:
             r = subprocess.run(cmd, capture_output=True, timeout=timeout)
             # Pod 终端输出统一为 UTF-8；Windows 下 text=True 会使用系统默认编码（GBK）导致中文乱码
@@ -40,6 +47,8 @@ class KubectlExecutor:
             return -1, "", f"kubectl 超时 ({timeout}s)"
         except FileNotFoundError:
             return -1, "", "kubectl 未找到，请确认已安装并在 PATH 中"
+        finally:
+            _kubectl_semaphore.release()
 
     # ── cluster queries ────────────────────────────────────────────────────────
 

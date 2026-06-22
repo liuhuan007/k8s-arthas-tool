@@ -480,6 +480,29 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_source ON skill_registry(source)")
             log.info("Schema initialized: skill_registry table created")
 
+            # marketplace_id 列（延迟添加，兼容已有库）
+            try:
+                cursor.execute("SELECT marketplace_id FROM skill_registry LIMIT 1")
+            except Exception:
+                cursor.execute("ALTER TABLE skill_registry ADD COLUMN marketplace_id INTEGER")
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_skill_registry_marketplace ON skill_registry(marketplace_id)")
+                log.info("Schema migrated: skill_registry.marketplace_id added")
+
+            # skill_marketplace 表（市场来源）
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS skill_marketplace (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    repo_url TEXT NOT NULL UNIQUE,
+                    branch TEXT DEFAULT 'main',
+                    enabled INTEGER DEFAULT 1,
+                    last_sync_at TIMESTAMP,
+                    skills_cache TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            log.info("Schema initialized: skill_marketplace table created")
+
             # step_logs 表（步骤级日志）
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS step_logs (
@@ -638,9 +661,6 @@ class Database:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_case_matches_execution_id ON case_matches(execution_id)")
             log.info("Schema initialized: case_matches table created")
 
-            # ── Phase 7 T02: Seed AI Skills into skill_registry ────────────────
-            _seed_ai_skills(cursor)
-
             # 创建默认 admin 账户
             cursor.execute('SELECT COUNT(*) FROM users')
             if cursor.fetchone()[0] == 0:
@@ -658,50 +678,6 @@ class Database:
 
 # 延迟初始化的单例实例 (避免循环导入)
 _db_instance: Optional['Database'] = None
-
-
-def _seed_ai_skills(cursor):
-    """将 AI 技能种子数据插入 skill_registry 表。
-
-    与 models/skills/profiler_skills.py 的模式一致：
-    通过 INSERT OR IGNORE 保证幂等，仅在首次初始化时插入。
-    """
-    try:
-        from models.skills.ai_skills import AI_SKILLS
-    except ImportError:
-        log.debug("data.ai_skills not available, skipping AI skill seeding")
-        return
-
-    inserted = 0
-    for skill in AI_SKILLS:
-        cursor.execute(
-            '''INSERT OR IGNORE INTO skill_registry (
-                name, version, description, category, level,
-                risk_level, estimated_duration, source, status,
-                parameters_schema, handler, created_by
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''',
-            (
-                skill['name'],
-                skill['version'],
-                skill.get('description', ''),
-                skill['category'],
-                skill['level'],
-                skill.get('risk_level', 'low'),
-                skill.get('estimated_duration', 30),
-                skill.get('source', 'builtin'),
-                'draft',
-                skill.get('parameters_schema', '{}'),
-                skill.get('handler', ''),
-                None,
-            )
-        )
-        if cursor.rowcount > 0:
-            inserted += 1
-
-    if inserted > 0:
-        log.info("AI skills seeded into skill_registry: %d new entries", inserted)
-    else:
-        log.debug("AI skills already present in skill_registry, skipped")
 
 
 def get_db() -> 'Database':

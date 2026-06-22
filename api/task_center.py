@@ -1139,6 +1139,19 @@ def init_task_tables():
         init_capabilities_table(conn)
         # Phase 7 T01: 初始化 skill_registry 内置 Skill（含 Profiler skills）
         init_skill_registry(conn)
+        # Phase 7 T04: 初始化默认市场源
+        try:
+            from services.skill_marketplace import get_skill_marketplace
+            mkt = get_skill_marketplace()
+            existing = mkt.list_sources()
+            if not existing:
+                mkt.add_source(
+                    name="K8s Arthas Tool 官方市场",
+                    repo_url="https://github.com/k8s-arthas-tool/skill-marketplace"
+                )
+                log.info("Default marketplace source created")
+        except Exception as e:
+            log.warning("Failed to init default marketplace source: %s", e)
         for column, ddl in {
             'status': "ALTER TABLE diagnosis_capabilities ADD COLUMN status TEXT DEFAULT 'active'",
             'is_builtin': 'ALTER TABLE diagnosis_capabilities ADD COLUMN is_builtin INTEGER DEFAULT 1',

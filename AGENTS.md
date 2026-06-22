@@ -184,3 +184,18 @@ See `deploy/rbac.yaml` for minimal permissions:
 - **Login flow**: `login.html` → authenticate → redirect to `index.html`
 - **Admin pages**: `static/user-management.html` (user CRUD), `static/audit-logs.html` (audit logs)
 - **Frontend**: Include `{credentials: 'include'}` in fetch calls to send session cookie
+
+## Skill 调度规则 (using-superpowers)
+
+收到任何消息后，在回复/行动前必须：
+1. 检查是否有 skill 适用（哪怕 1% 可能也要调用）
+2. 调用 skill 后再行动，不跳过
+
+优先级：
+- Process skills（brainstorming, debugging）先于 Implementation skills
+- 用户指令 > skill 指令 > 系统默认
+
+前端页面功能触发规则：
+- 涉及前端页面/组件/UI功能时，必须调用 `ui-ux-pro-max` skill
+- 涉及前端设计/样式/交互时，必须调用 `frontend-design` skill
+- 必要时给出可运行的 demo HTML 交互页面，供用户预览确认后再正式实现。demo 需遵循项目规范：原生 JavaScript（不用框架）、暗色主题、CSS 变量、与现有 static/ 结构一致。统一入口：`http://127.0.0.1:5001/demo.html`，demo 文件存放于 `static/demo/`

@@ -2793,6 +2793,7 @@ function switchTab(n) {
   if(tab!=='monitor') {
     clearInterval(window._histTimer);
     window._histTimer = null;
+    stopMonitorBackendPolling();
   }
   if(tab==='profiler') {
     setTimeout(() => {
@@ -5288,6 +5289,8 @@ async function loadConnectionProfilerLogs(connId) {
 // ── Pod Monitor ───────────────────────────────────────────────────────────────
 window._monitorSnapshotInflight = window._monitorSnapshotInflight || null;
 window._monitorSnapshotLast = window._monitorSnapshotLast || { key: '', at: 0 };
+window._monitorPollingKey = window._monitorPollingKey || '';
+window._monitorPollingPayload = window._monitorPollingPayload || null;
 
 function renderMonitorMessage(message, type = 'info') {
   const color = type === 'error' ? 'var(--a5)' : type === 'warn' ? 'var(--a4)' : 'var(--tx3)';
@@ -5296,6 +5299,18 @@ function renderMonitorMessage(message, type = 'info') {
     const el = document.getElementById(id);
     if (el) el.innerHTML = html;
   });
+}
+
+function stopMonitorBackendPolling() {
+  const payload = window._monitorPollingPayload;
+  if (!payload) return;
+  fetch(`${API}/monitor/stop-polling`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(payload),
+  }).catch(() => {});
+  window._monitorPollingPayload = null;
+  window._monitorPollingKey = '';
 }
 
 async function loadSnap(silent = false) {
@@ -5337,7 +5352,12 @@ async function loadSnap(silent = false) {
     const lcsel = document.getElementById('logCtr');
     if(lcsel) lcsel.innerHTML = ctrs.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
     // start history polling
-    fetch(`${API}/monitor/start-polling`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(t)}).catch(()=>{});
+    if (window._monitorPollingKey !== snapKey) {
+      stopMonitorBackendPolling();
+      fetch(`${API}/monitor/start-polling`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(t)}).catch(()=>{});
+      window._monitorPollingKey = snapKey;
+      window._monitorPollingPayload = t;
+    }
     clearInterval(window._histTimer);
     window._histTimer = setInterval(async () => {
       // 只在监控 tab 激活且指标子 tab 可见时才请求

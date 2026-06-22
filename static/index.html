@@ -67,6 +67,10 @@ document.addEventListener('DOMContentLoaded', function() {
 <!-- ✅ 新增: 统一状态管理 -->
 <script src="js/core/connection-store.js?v=20260619ac"></script>
 
+<!-- ✅ 新增: 连接池管理 -->
+<link rel="stylesheet" href="css/connection-pool.css?v=20260620a">
+<script src="js/connection-pool.js?v=20260620a"></script>
+
 <!-- ✅ 新增: WebSocket 实时推送 -->
 <script src="js/core/websocket-client.js?v=20260505a"></script>
 
@@ -259,7 +263,7 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="pool-tt"><span>🔌 连接池</span><span id="poolCount" style="color:var(--a)"></span></div>
     <button class="pool-add-btn" id="poolAddBtn">+ 新连接</button>
   </div>
-  <div class="pool-srch"><input type="search" id="poolSearch" placeholder="搜索 Pod / 集群 / 命名空间..." aria-label="搜索连接" name="pool_filter_query" inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other"></div>
+  <div class="pool-srch"><form action="#" autocomplete="off" style="display:contents" onsubmit="return false"><input type="text" id="poolSearch" placeholder="搜索 Pod / 集群 / 命名空间..." aria-label="搜索连接" name="" inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other"></form></div>
   <div class="pool-ls" id="poolList"></div>
 </div>
 
@@ -967,7 +971,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="cp-title">🎯 命令面板</div>
             <div class="cp-cst" id="cpSt"></div>
           </div>
-          <div class="cp-search"><input id="cmdSearch" placeholder="搜索命令..." oninput="filterCmds(this.value)" autocomplete="off"></div>
+          <div class="cp-search"><input id="cmdSearch" placeholder="搜索命令..." oninput="filterCmds(this.value)" autocomplete="new-password"></div>
           <div class="cp-cats" id="cmdPal"></div>
         </div>
         <div class="ac-right">
@@ -1454,7 +1458,7 @@ document.addEventListener('DOMContentLoaded', function() {
           </span>
           <input class="xterm-input" id="termInput"
             onkeydown="termKeyDown(event)"
-            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false">
+            autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false">
           <div class="xterm-spin" id="termSpin" style="display:none"></div>
         </div>
       </div>
