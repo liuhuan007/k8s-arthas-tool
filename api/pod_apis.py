@@ -17,6 +17,11 @@ from flask import request, jsonify
 from flask_login import login_required, current_user
 from services.authorization_service import AuthorizationService
 from services.cache_service import query_cache, invalidate_connection_cache
+from backend.app_context import (
+    get_connection_entry as _shared_get_connection_entry,
+    register_connection as _register_connection,
+    unregister_connection as _unregister_connection,
+)
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +42,9 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
     
     def _get_connection_entry(conn_id: str):
         """获取连接对象 (从统一连接池)"""
+        entry = _shared_get_connection_entry(conn_id)
+        if entry:
+            return entry
         with _connections_lock:
             return _connections.get(conn_id)
     
@@ -73,35 +81,34 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         conn_id = _make_pod_conn_id(cluster_name, namespace, pod_name)
         
         # ✅ 修复: 从统一连接池检查是否已有连接
-        with _connections_lock:
-            if conn_id in _connections:
-                entry = _connections[conn_id]
-                conn = entry.get('conn')
-                # 检查连接是否存活且是 Pod 级别
-                if conn and hasattr(conn, '_healthy') and conn._healthy:
-                    from dataclasses import asdict
-                    
-                    runtime_data = asdict(conn.runtime_info) if hasattr(conn, 'runtime_info') and conn.runtime_info else None
-                    log.info("[Pod Connect Reuse] conn_id=%s, runtime_info=%s", conn_id, runtime_data)
-                    
-                    # 如果 runtime_info 缺失,重新检测
-                    if not runtime_data or not runtime_data.get('runtime_type'):
-                        log.warning("[Pod Connect Reuse] runtime_info 缺失,重新检测")
-                        if hasattr(conn, '_detect_runtime'):
-                            conn._runtime_info = conn._detect_runtime(timeout=10)
-                            runtime_data = asdict(conn.runtime_info) if conn.runtime_info else None
-                    
-                    return jsonify({
-                        "ok": True,
-                        "connection_id": conn_id,
-                        "message": "Pod 连接已存在，复用",
-                        "pod_phase": getattr(conn, 'pod_phase', 'Running'),
-                        "runtime": runtime_data,
-                        "reused": True
-                    })
-                else:
-                    # 连接失效,移除
-                    _connections.pop(conn_id, None)
+        entry = _get_connection_entry(conn_id)
+        if entry:
+            conn = entry.get('conn')
+            # 检查连接是否存活且是 Pod 级别
+            if conn and hasattr(conn, '_healthy') and conn._healthy:
+                from dataclasses import asdict
+
+                runtime_data = asdict(conn.runtime_info) if hasattr(conn, 'runtime_info') and conn.runtime_info else None
+                log.info("[Pod Connect Reuse] conn_id=%s, runtime_info=%s", conn_id, runtime_data)
+
+                # 如果 runtime_info 缺失,重新检测
+                if not runtime_data or not runtime_data.get('runtime_type'):
+                    log.warning("[Pod Connect Reuse] runtime_info 缺失,重新检测")
+                    if hasattr(conn, '_detect_runtime'):
+                        conn._runtime_info = conn._detect_runtime(timeout=10)
+                        runtime_data = asdict(conn.runtime_info) if conn.runtime_info else None
+
+                return jsonify({
+                    "ok": True,
+                    "connection_id": conn_id,
+                    "message": "Pod 连接已存在，复用",
+                    "pod_phase": getattr(conn, 'pod_phase', 'Running'),
+                    "runtime": runtime_data,
+                    "reused": True
+                })
+            else:
+                # 连接失效,移除
+                _unregister_connection(conn_id)
         
         # 创建新连接
         target = PodTarget(
@@ -119,13 +126,7 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                     return jsonify({"ok": False, **msg}), 400
                 return jsonify({"ok": False, "error": msg}), 400
             
-            with _connections_lock:
-                _connections[conn_id] = {
-                    "conn": conn,
-                    "user_id": current_user.id,
-                    "level": "pod",  # ✅ 标记为 Pod 连接
-                    "created_at": datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                }
+            _register_connection(conn_id, conn, user_id=current_user.id, level="pod")
             
             # 持久化到数据库（保存完整上下文）
             now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -172,18 +173,7 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
     
     def cleanup_pod_connection_by_id(conn_id: str) -> bool:
         """按连接 ID 清理 Pod 连接,供全局失效连接清理复用。"""
-        entry = None
-        with _connections_lock:
-            entry = _connections.pop(conn_id, None)
-        if entry:
-            conn = entry.get('conn')
-            if conn:
-                try:
-                    conn.disconnect()
-                except Exception:
-                    pass
-            return True
-        return False
+        return _unregister_connection(conn_id) is not None
 
     # 将清理函数挂到 Flask app，避免跨闭包直接访问 _pod_connections
     app.cleanup_pod_connection_by_id = cleanup_pod_connection_by_id
@@ -210,18 +200,7 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             log.info("[断开] 连接不存在（可能已断开）: %s", conn_id)
             return jsonify({"ok": True, "message": "连接已断开"})
 
-        # 释放连接资源 (Pod 或 Arthas)
-        with _connections_lock:
-            removed_entry = _connections.pop(conn_id, None)
-        
-        # 释放连接资源
-        if removed_entry:
-            conn = removed_entry.get('conn')
-            if conn:
-                try:
-                    conn.disconnect()
-                except Exception:
-                    pass
+        _unregister_connection(conn_id)
 
         # 3. 更新数据库状态为 disconnected（而非删除）
         now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -347,16 +326,14 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
         # ✅ 修复: 主动检查 Pod 连接健康状态，不健康的连接直接拒绝
         if hasattr(pod_conn, '_healthy') and not pod_conn._healthy:
             log.warning("[Upgrade Arthas] Pod 连接不健康，清理后要求重连: %s", pod_conn_id)
-            with _connections_lock:
-                _connections.pop(pod_conn_id, None)
+            _unregister_connection(pod_conn_id)
             return jsonify({"error": "Pod 连接已失效，请重新连接"}), 400
 
         # ✅ 修复: 检查 port-forward 进程是否存活
         if hasattr(pod_conn, '_pf_proc') and pod_conn._pf_proc is not None:
             if pod_conn._pf_proc.poll() is not None:
                 log.warning("[Upgrade Arthas] port-forward 进程已退出，清理连接: %s", pod_conn_id)
-                with _connections_lock:
-                    _connections.pop(pod_conn_id, None)
+                _unregister_connection(pod_conn_id)
                 return jsonify({"error": "port-forward 已断开，请重新连接 Pod"}), 400
         auth_err, auth_code = AuthorizationService.require_namespace_access(
             current_user, pod_conn.target.cluster_name, pod_conn.target.namespace)
@@ -397,13 +374,13 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             is_reused = '复用' in msg or '已在运行' in msg
             mcp_available = arthas_conn.agent_mgr._check_mcp_available(arthas_conn.target.arthas_http_port)
             
-            with _connections_lock:
-                _connections[pod_conn_id] = {
-                    "conn": arthas_conn,
-                    "user_id": current_user.id,
-                    "level": "arthas",  # ✅ 升级为 Arthas 连接
-                    "mcp_available": mcp_available
-                }
+            _register_connection(
+                pod_conn_id,
+                arthas_conn,
+                user_id=current_user.id,
+                level="arthas",
+                mcp_available=mcp_available,
+            )
             
             now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
             upgrade_data = {

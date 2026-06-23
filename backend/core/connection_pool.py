@@ -35,6 +35,7 @@ class ConnectionState(Enum):
     POD_CONNECTED = "pod_connected"
     ARTHAS_UPGRADING = "arthas_upgrading"
     ARTHAS_READY = "arthas_ready"
+    FAILED = "failed"
     DEGRADED = "degraded"      # 心跳超时 > 3 次
     DEAD = "dead"              # 心跳超时 > 10 次
 
@@ -88,6 +89,7 @@ class PoolConnection:
     heartbeat_failures: int = 0
     auto_reconnect: bool = False
     mcp_available: bool = False
+    level: Optional[str] = None
     created_at: float = field(default_factory=time.time)
     
     @property
@@ -116,6 +118,7 @@ class PoolConnection:
             "heartbeat_failures": self.heartbeat_failures,
             "auto_reconnect": self.auto_reconnect,
             "mcp_available": self.mcp_available,
+            "level": self.level,
             "created_at": self.created_at,
             # 从 conn 对象提取信息
             "local_port": getattr(self.conn, 'local_port', 0),
@@ -170,7 +173,7 @@ class ConnectionPool:
     # ── 连接管理 ──────────────────────────────────────────────────────────────
     
     def add(self, conn_id: str, conn: Any, user_id: Optional[int] = None,
-            mcp_available: bool = False) -> bool:
+            mcp_available: bool = False, level: Optional[str] = None) -> bool:
         """添加连接到池中
         
         Args:
@@ -198,6 +201,7 @@ class ConnectionPool:
                 user_id=user_id,
                 state=ConnectionState.ARTHAS_READY,  # 假设添加时已就绪
                 mcp_available=mcp_available,
+                level=level,
             )
             self._connections[conn_id] = pool_conn
             
@@ -215,6 +219,51 @@ class ConnectionPool:
             
             return True
     
+    def upsert(self, conn_id: str, conn: Any, user_id: Optional[int] = None,
+               mcp_available: bool = False,
+               state: ConnectionState = ConnectionState.ARTHAS_READY,
+               level: Optional[str] = None) -> bool:
+        """Add a connection or replace the runtime object for an existing one.
+
+        Returns True when a new pool entry is created, False when an existing
+        entry is updated in place.
+        """
+        with self._lock:
+            pool_conn = self._connections.get(conn_id)
+            if pool_conn:
+                pool_conn.conn = conn
+                pool_conn.user_id = user_id
+                pool_conn.mcp_available = mcp_available
+                pool_conn.state = state
+                pool_conn.level = level
+                pool_conn.heartbeat_failures = 0
+                pool_conn.last_heartbeat = None
+                self._workspace_store.get_or_create(conn_id)
+                return False
+
+            if len(self._connections) >= self._max_connections:
+                log.warning("Connection pool full (%d/%d)",
+                            len(self._connections), self._max_connections)
+                return False
+
+            self._connections[conn_id] = PoolConnection(
+                conn_id=conn_id,
+                conn=conn,
+                user_id=user_id,
+                state=state,
+                mcp_available=mcp_available,
+                level=level,
+            )
+            self._workspace_store.get_or_create(conn_id)
+
+            if self._on_connection_added:
+                try:
+                    self._on_connection_added(conn_id)
+                except Exception as e:
+                    log.debug("on_connection_added callback error: %s", e)
+
+            return True
+
     def remove(self, conn_id: str) -> bool:
         """从池中移除连接（断开 + 清理）
         

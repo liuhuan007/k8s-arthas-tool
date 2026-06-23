@@ -13,6 +13,7 @@ Pod Monitor Backend
 """
 
 import subprocess, json, re, time, threading
+import os
 import logging
 from datetime import datetime, timezone
 from collections import deque
@@ -24,6 +25,8 @@ _metrics_history = {}  # type: Dict[str, Deque]  # key="{cluster}/{ns}/{pod}" ->
 _metrics_lock = threading.Lock()
 MAX_HISTORY = 60   # 保留最近 60 个点
 POLL_INTERVAL = 15  # 秒
+_KUBECTL_MAX_PARALLEL = max(1, int(os.getenv("K8S_ARTHAS_KUBECTL_MAX_PARALLEL", "8")))
+_kubectl_semaphore = threading.BoundedSemaphore(_KUBECTL_MAX_PARALLEL)
 
 
 class KubectlRunner:
@@ -44,6 +47,9 @@ class KubectlRunner:
         if ns:
             cmd += ["-n", ns]
         cmd += list(args)
+        acquired = _kubectl_semaphore.acquire(timeout=min(max(timeout, 1), 10))
+        if not acquired:
+            return -1, "", f"kubectl 并发过高，请稍后重试 (limit={_KUBECTL_MAX_PARALLEL})"
         try:
             r = subprocess.run(
                 cmd, capture_output=True,
@@ -58,6 +64,8 @@ class KubectlRunner:
             return -1, "", f"超时({timeout}s)"
         except FileNotFoundError:
             return -1, "", "kubectl 未找到"
+        finally:
+            _kubectl_semaphore.release()
 
     def exec_pod(self, ns: str, pod: str, container: str, cmd_str: str, timeout: int = 10):
         args = ["exec", pod, "-n", ns]

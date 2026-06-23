@@ -98,6 +98,30 @@ def _collect_monitor_snapshot_cached(runner, cluster: str, ns: str, pod: str, co
         return result
 
 
+def _resolve_monitor_payload(data: dict) -> dict:
+    cluster = data.get('cluster_name') or data.get('cluster') or ''
+    ns = data.get('namespace') or 'default'
+    pod = data.get('pod_name') or data.get('pod') or ''
+    container = data.get('container') or ''
+    conn_id = data.get('connection_id') or data.get('conn_id') or ''
+    if conn_id and (not cluster or not pod):
+        row = db.fetch_one(
+            'SELECT cluster_name, namespace, pod_name, container_name FROM connections WHERE id = ?',
+            (conn_id,),
+        )
+        if row:
+            cluster = cluster or row.get('cluster_name', '')
+            ns = data.get('namespace') or row.get('namespace', ns)
+            pod = pod or row.get('pod_name', '')
+            container = container or row.get('container_name', '')
+    return {
+        'cluster_name': cluster,
+        'namespace': ns,
+        'pod_name': pod,
+        'container': container,
+    }
+
+
 @app.after_request
 def add_no_cache_headers(response):
     """Avoid stale UI assets while the diagnosis/task-center frontend is evolving quickly."""
@@ -684,6 +708,10 @@ from backend.app_context import (
     conn_health_lock as _conn_health_lock,
     recovery_status as _recovery_status,
     get_state_manager as _get_state_manager,
+    set_connection_pool as _set_connection_pool,
+    register_connection as _register_connection,
+    unregister_connection as _unregister_connection,
+    get_connection_entry as _get_connection_entry,
     ensure_connection as _ensure_connection,
     check_conn_owner as _check_conn_owner,
     get_conn as _get_conn,
@@ -696,6 +724,7 @@ _start_phase5_services()
 # ✅ 初始化连接池
 from backend.core.connection_pool import ConnectionPool
 _connection_pool = ConnectionPool(state_manager=_state_manager, max_connections=20)
+_set_connection_pool(_connection_pool)
 _connection_pool.start_heartbeat(interval=5)
 print("[OK] 连接池初始化成功")
 
@@ -788,8 +817,12 @@ def _recover_connections_on_startup():
             # 尝试连接（非阻塞验证）
             ok, msg = conn.connect()
             if ok:
-                with _connections_lock:
-                    _connections[conn_id] = {"conn": conn, "user_id": row.get('user_id')}
+                _register_connection(
+                    conn_id,
+                    conn,
+                    user_id=row.get('user_id'),
+                    level=row.get('level') or 'arthas',
+                )
                 recovered.append(conn_id)
                 db.update('connections', {
                     'status': 'recovered',
@@ -824,13 +857,13 @@ def _check_conn_owner(conn_id: str) -> bool:
     """检查当前用户是否是连接的拥有者（admin 拥有所有权限）"""
     if current_user.is_admin:
         return True
-    entry = _connections.get(conn_id)
+    entry = _get_connection_entry(conn_id)
     return entry and entry.get('user_id') == current_user.id
 
 
 def _get_conn(conn_id: str):
     """获取连接对象(带权限检查)"""
-    entry = _connections.get(conn_id)
+    entry = _get_connection_entry(conn_id)
     if not entry:
         return None
     
@@ -884,8 +917,13 @@ def arthas_connect():
         # 检测 MCP 端点是否可用
         mcp_available = conn.agent_mgr._check_mcp_available(conn.target.arthas_http_port)
         
-        with _connections_lock:
-            _connections[conn_id] = {"conn": conn, "user_id": current_user.id, "mcp_available": mcp_available}
+        _register_connection(
+            conn_id,
+            conn,
+            user_id=current_user.id,
+            level="arthas",
+            mcp_available=mcp_available,
+        )
         
         # 持久化连接到数据库（UPSERT）
         now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -945,16 +983,12 @@ def arthas_connect():
 def arthas_disconnect():
     """断开 Arthas 连接"""
     d = request.json or {}
-    conn_id = d.get('conn_id', '')
+    conn_id = d.get('conn_id') or d.get('connection_id') or ''
     
-    if conn_id in _connections:
+    if _get_connection_entry(conn_id):
         if not _check_conn_owner(conn_id):
             return jsonify({"state": "FAILED", "message": "无权操作此连接"}), 403
-        with _connections_lock:
-            entry = _connections.pop(conn_id, None)
-        conn = entry.get('conn') if entry else None
-        if conn:
-            conn.disconnect()
+        _unregister_connection(conn_id)
         
         # 从数据库删除连接记录
         db.delete('connections', 'id = ?', (conn_id,))
@@ -974,12 +1008,11 @@ def arthas_disconnect():
 
 def _ensure_connection(conn_id: str, d: dict):
     """确保连接存在，若内存中不存在则自动重建（线程安全）"""
-    with _connections_lock:
-        if conn_id and conn_id in _connections:
-            # 检查连接所有者
-            if not _check_conn_owner(conn_id):
-                return None, "无权操作此连接"
-            return _connections[conn_id].get('conn'), None
+    entry = _get_connection_entry(conn_id) if conn_id else None
+    if entry:
+        if not _check_conn_owner(conn_id):
+            return None, "无权操作此连接"
+        return entry.get('conn'), None
 
     # 从请求参数中提取连接信息并自动重建
     cluster_name = d.get('cluster_name', '')
@@ -1097,8 +1130,7 @@ def _ensure_connection(conn_id: str, d: dict):
                 'updated_at': now_ts,
             })
         
-        if conn_id not in _connections:
-            _connections[conn_id] = {"conn": conn, "user_id": current_user.id}
+        _register_connection(conn_id, conn, user_id=current_user.id, level="arthas")
     log.info("Auto-reconnected: %s", conn_id)
     return conn, None
 
@@ -1197,17 +1229,7 @@ def cleanup_stale_connections():
             denied.append(conn_id)
             continue
 
-        entry = None
-        with _connections_lock:
-            entry = _connections.pop(conn_id, None)
-        
-        # 安全获取 conn 对象
-        conn = entry.get('conn') if entry else None
-        if conn:
-            try:
-                conn.disconnect()
-            except Exception as e:
-                log.warning(f"断开连接 {conn_id} 失败: {e}")
+        _unregister_connection(conn_id)
 
         cleanup_pod = getattr(app, 'cleanup_pod_connection_by_id', None)
         if cleanup_pod:
@@ -1356,15 +1378,7 @@ def cleanup_ttl_connections():
             continue
 
         # 清理内存
-        with _connections_lock:
-            entry = _connections.pop(conn_id, None)
-        if entry:
-            conn = entry.get('conn')
-            if conn:
-                try:
-                    conn.disconnect()
-                except Exception as e:
-                    log.warning("[cleanup-ttl] Disconnect %s failed: %s", conn_id, e)
+        _unregister_connection(conn_id)
 
         # 清理健康记录
         with _conn_health_lock:
@@ -1892,19 +1906,20 @@ def download_profiler_result(task_id: str):
 def pod_snapshot():
     """获取 Pod 快照"""
     d = request.json or {}
-    runner, err = _make_runner(d.get('cluster_name', ''))
+    target = _resolve_monitor_payload(d)
+    runner, err = _make_runner(target['cluster_name'])
     if err:
         return jsonify({"error": err}), 400
     
-    ns = d.get('namespace', 'default')
-    pod = d.get('pod_name', '')
-    container = d.get('container', '')
-    auth_err, auth_code = AuthorizationService.require_namespace_access(current_user, d.get('cluster_name', ''), ns)
+    ns = target['namespace']
+    pod = target['pod_name']
+    container = target['container']
+    auth_err, auth_code = AuthorizationService.require_namespace_access(current_user, target['cluster_name'], ns)
     if auth_err:
         return jsonify(auth_err), auth_code
     
     try:
-        result = _collect_monitor_snapshot_cached(runner, d.get('cluster_name', ''), ns, pod, container)
+        result = _collect_monitor_snapshot_cached(runner, target['cluster_name'], ns, pod, container)
         return jsonify(result)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
@@ -1916,9 +1931,10 @@ def pod_snapshot():
 def monitor_pod():
     """获取 Pod 实时指标（CPU/内存/网络/进程列表）"""
     d = request.json or {}
-    cluster = d.get('cluster', '')
-    ns = d.get('namespace', 'default')
-    pod = d.get('pod', '')
+    target = _resolve_monitor_payload(d)
+    cluster = target['cluster_name']
+    ns = target['namespace']
+    pod = target['pod_name']
     
     if not cluster or not pod:
         return jsonify({"error": "参数不全"}), 400
@@ -1931,7 +1947,7 @@ def monitor_pod():
     if auth_err:
         return jsonify(auth_err), auth_code
     
-    container = d.get('container', '')
+    container = target['container']
     try:
         result = _collect_monitor_snapshot_cached(runner, cluster, ns, pod, container)
         return jsonify({"metrics": result})
@@ -1990,14 +2006,15 @@ def get_metrics():
 def start_polling():
     """启动指标轮询"""
     d = request.json or {}
-    cluster_name = d.get('cluster_name') or d.get('cluster', '')
+    target = _resolve_monitor_payload(d)
+    cluster_name = target['cluster_name']
     runner, err = _make_runner(cluster_name)
     if err:
         return jsonify({"error": err}), 400
     
-    ns = d.get('namespace', 'default')
-    pod = d.get('pod_name', '')
-    container = d.get('container', '')
+    ns = target['namespace']
+    pod = target['pod_name']
+    container = target['container']
     auth_err, auth_code = AuthorizationService.require_namespace_access(current_user, cluster_name, ns)
     if auth_err:
         return jsonify(auth_err), auth_code

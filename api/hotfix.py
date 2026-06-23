@@ -20,38 +20,40 @@ _hotfix_service = HotfixService()
 def _get_connection(conn_id: str):
     """从全局连接池获取连接,支持自动重建"""
     try:
-        from backend.app_context import connections, connections_lock, ensure_connection
+        from backend.app_context import (
+            connections,
+            connections_lock,
+            ensure_connection,
+            get_connection_entry,
+            unregister_connection,
+        )
     except ImportError:
         return None, "服务未初始化"
     
     # ✅ 第一步: 尝试从内存获取
     with connections_lock:
         available = list(connections.keys())
-        log.info(f"[_get_connection] 查找 conn_id={conn_id}, 可用连接: {available}")
-        
-        if conn_id in connections:
-            entry = connections[conn_id]
-            log.info(f"[_get_connection] 内存中找到连接, entry.user_id={entry.get('user_id')}, current_user.id={current_user.id}")
-            
-            # 检查权限
-            if entry.get('user_id') != current_user.id and not current_user.is_admin:
-                log.warning(f"[权限拒绝] conn_id={conn_id}, entry.user_id={entry.get('user_id')}, current_user.id={current_user.id}")
-                return None, "无权操作此连接"
-            
-            conn = entry.get('conn')
-            if not conn:
-                return None, "连接对象为空"
-            
-            # ✅ 关键修复: 验证 Arthas 连接是否完整
-            if not hasattr(conn, 'http_client') or conn.http_client is None:
-                log.warning(f"[_get_connection] 连接不完整, http_client=None, 删除并重建 conn_id={conn_id}")
-                # 删除不完整的连接
-                with connections_lock:
-                    if conn_id in connections:
-                        del connections[conn_id]
-                # 继续执行后续的重建逻辑
-            else:
-                return conn, None
+    log.info(f"[_get_connection] 查找 conn_id={conn_id}, 可用连接: {available}")
+
+    entry = get_connection_entry(conn_id)
+    if entry:
+        log.info(f"[_get_connection] 内存中找到连接, entry.user_id={entry.get('user_id')}, current_user.id={current_user.id}")
+
+        # 检查权限
+        if entry.get('user_id') != current_user.id and not current_user.is_admin:
+            log.warning(f"[权限拒绝] conn_id={conn_id}, entry.user_id={entry.get('user_id')}, current_user.id={current_user.id}")
+            return None, "无权操作此连接"
+
+        conn = entry.get('conn')
+        if not conn:
+            return None, "连接对象为空"
+
+        # ✅ 关键修复: 验证 Arthas 连接是否完整
+        if not hasattr(conn, 'http_client') or conn.http_client is None:
+            log.warning(f"[_get_connection] 连接不完整, http_client=None, 删除并重建 conn_id={conn_id}")
+            unregister_connection(conn_id)
+        else:
+            return conn, None
     
     # ✅ 第二步: 内存中不存在,尝试自动重建
     log.info(f"[_get_connection] 内存中未找到,尝试自动重建 conn_id={conn_id}")

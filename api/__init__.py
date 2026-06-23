@@ -12,7 +12,13 @@ def get_connection_by_id(conn_id: str):
     import logging
     log = logging.getLogger(__name__)
 
-    from backend.app_context import connections, connections_lock
+    from backend.app_context import connections, connections_lock, get_connection_pool
+    pool = get_connection_pool()
+    if pool is not None:
+        conn = pool.get_connection(conn_id)
+        if conn:
+            return conn
+
     with connections_lock:
         entry = connections.get(conn_id)
     if entry:
@@ -26,7 +32,7 @@ def get_connection_by_id(conn_id: str):
 def _recover_connection_from_db(conn_id: str, log):
     """从数据库恢复连接到内存池。"""
     from models.db import db
-    from backend.app_context import connections, connections_lock, make_runner
+    from backend.app_context import connections, connections_lock, make_runner, register_connection
 
     row = db.fetch_one(
         'SELECT cluster_name, namespace, pod_name, container_name, status '
@@ -65,8 +71,7 @@ def _recover_connection_from_db(conn_id: str, log):
 
         ok, msg = conn.connect()
         if ok:
-            with connections_lock:
-                connections[conn_id] = {"conn": conn, "user_id": None, "level": "arthas"}
+            register_connection(conn_id, conn, user_id=None, level="arthas")
             log.info("[recovery] Connection %s recovered from DB", conn_id)
             return conn
         else:

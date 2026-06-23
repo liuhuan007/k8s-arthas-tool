@@ -129,3 +129,60 @@ def test_max_connections_backpressure():
     assert pool.add("d", conns[3]) is False  # pool full
 
     assert pool.stats()["total_connections"] == 3
+
+
+def test_upsert_replaces_existing_connection_and_preserves_focus():
+    pool = ConnectionPool()
+    pod_conn = _dummy_conn()
+    arthas_conn = _dummy_conn()
+    arthas_conn.local_port = 32001
+
+    assert pool.upsert("cluster/ns/pod", pod_conn, user_id=7) is True
+    assert pool.set_focus("cluster/ns/pod") is True
+
+    assert pool.upsert("cluster/ns/pod", arthas_conn, user_id=7, mcp_available=True) is False
+
+    focused = pool.get_focused()
+    assert focused is not None
+    assert focused.conn is arthas_conn
+    assert focused.user_id == 7
+    assert focused.mcp_available is True
+    assert pool.stats()["total_connections"] == 1
+    pod_conn.disconnect.assert_not_called()
+
+
+def test_app_context_register_keeps_compat_dict_and_pool_in_sync():
+    from backend import app_context
+
+    original_pool = app_context.get_connection_pool()
+    original_connections = dict(app_context.connections)
+    pool = ConnectionPool()
+    app_context.connections.clear()
+    app_context.set_connection_pool(pool)
+    try:
+        conn = _dummy_conn()
+        app_context.register_connection(
+            "cluster/ns/pod",
+            conn,
+            user_id=42,
+            level="arthas",
+            mcp_available=True,
+        )
+
+        assert app_context.connections["cluster/ns/pod"]["conn"] is conn
+        assert pool.get_connection("cluster/ns/pod") is conn
+        assert pool.get_focused_id() == "cluster/ns/pod"
+
+        entry = app_context.get_connection_entry("cluster/ns/pod")
+        assert entry["conn"] is conn
+        assert entry["user_id"] == 42
+        assert entry["level"] == "arthas"
+
+        assert app_context.unregister_connection("cluster/ns/pod") is conn
+        assert "cluster/ns/pod" not in app_context.connections
+        assert pool.get("cluster/ns/pod") is None
+    finally:
+        pool.disconnect_all()
+        app_context.connections.clear()
+        app_context.connections.update(original_connections)
+        app_context.set_connection_pool(original_pool)

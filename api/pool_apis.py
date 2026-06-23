@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from flask import Blueprint, request, jsonify
 from flask_login import login_required, current_user
+from backend.app_context import register_connection, unregister_connection
 
 log = logging.getLogger(__name__)
 
@@ -134,9 +135,13 @@ def pool_connect():
     # 检测 MCP 端点
     mcp_available = conn.agent_mgr._check_mcp_available(conn.target.arthas_http_port)
     
-    # 添加到连接池
-    _pool.add(conn_id, conn, user_id=current_user.id, mcp_available=mcp_available)
-    _pool.set_focus(conn_id)
+    register_connection(
+        conn_id,
+        conn,
+        user_id=current_user.id,
+        level="arthas",
+        mcp_available=mcp_available,
+    )
     
     # 持久化到数据库
     from datetime import datetime
@@ -220,8 +225,8 @@ def pool_remove(conn_id):
     if not _check_conn_owner(conn_id):
         return jsonify({"error": "无权操作此连接"}), 403
     
-    ok = _pool.remove(conn_id)
-    if not ok:
+    conn = unregister_connection(conn_id)
+    if conn is None:
         return jsonify({"error": "连接不存在"}), 404
     
     # 从数据库删除

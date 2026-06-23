@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 # 格式: {conn_id: {"conn": ArthasConnection, "user_id": int, ...}}
 connections: Dict[str, dict] = {}
 connections_lock = threading.Lock()
+connection_pool = None
 
 # Phase 5: 连接健康状态缓存
 # 格式: {conn_id: {"status": "healthy"|"unhealthy"|"unknown", "last_check_at": str, "latency_ms": float|None}}
@@ -51,6 +52,105 @@ def get_state_manager():
         _state_manager.schedule_ttl_cleanup(interval_seconds=1800)
         log.info("ConnectionStateManager initialized with TTL cleanup (30min interval)")
     return _state_manager
+
+
+def set_connection_pool(pool):
+    """Register the process-wide ConnectionPool used by legacy APIs."""
+    global connection_pool
+    connection_pool = pool
+
+
+def get_connection_pool():
+    """Return the process-wide ConnectionPool if it has been initialized."""
+    return connection_pool
+
+
+def _pool_state_for_level(level: Optional[str]):
+    from backend.core.connection_pool import ConnectionState as PoolState
+
+    if level == "pod":
+        return PoolState.POD_CONNECTED
+    if level == "arthas":
+        return PoolState.ARTHAS_READY
+    return PoolState.CONNECTING
+
+
+def register_connection(conn_id: str, conn, user_id: Optional[int] = None,
+                        level: Optional[str] = None,
+                        mcp_available: bool = False,
+                        focus: bool = True):
+    """Store a runtime connection in both the compatibility map and pool."""
+    entry = {
+        "conn": conn,
+        "user_id": user_id,
+        "level": level,
+        "mcp_available": mcp_available,
+    }
+    with connections_lock:
+        connections[conn_id] = entry
+
+    pool = get_connection_pool()
+    if pool is not None:
+        try:
+            setattr(conn, "_managed_by_pool", True)
+        except Exception:
+            pass
+        pool.upsert(
+            conn_id,
+            conn,
+            user_id=user_id,
+            mcp_available=mcp_available,
+            state=_pool_state_for_level(level),
+            level=level,
+        )
+        if focus:
+            pool.set_focus(conn_id)
+    return entry
+
+
+def get_connection_entry(conn_id: str) -> Optional[dict]:
+    """Return a compatibility-shaped entry, preferring ConnectionPool."""
+    pool = get_connection_pool()
+    if pool is not None:
+        pool_conn = pool.get(conn_id)
+        if pool_conn:
+            return {
+                "conn": pool_conn.conn,
+                "user_id": pool_conn.user_id,
+                "level": pool_conn.level,
+                "mcp_available": pool_conn.mcp_available,
+            }
+
+    with connections_lock:
+        return connections.get(conn_id)
+
+
+def unregister_connection(conn_id: str, disconnect: bool = True):
+    """Remove a runtime connection from both stores and return the object."""
+    entry = None
+    with connections_lock:
+        entry = connections.pop(conn_id, None)
+
+    conn = entry.get("conn") if entry else None
+    pool = get_connection_pool()
+    removed_from_pool = False
+    if pool is not None:
+        pool_conn = pool.get(conn_id)
+        if pool_conn and conn is None:
+            conn = pool_conn.conn
+        if pool_conn:
+            if disconnect:
+                pool.remove(conn_id)
+                removed_from_pool = True
+            else:
+                pool._connections.pop(conn_id, None)
+
+    if disconnect and conn and not removed_from_pool:
+        try:
+            conn.disconnect()
+        except Exception:
+            pass
+    return conn
 
 
 # ── Helper functions ────────────────────────────────────────────────────────
@@ -94,14 +194,14 @@ def check_conn_owner(conn_id: str) -> bool:
     from flask_login import current_user
     if current_user.is_admin:
         return True
-    entry = connections.get(conn_id)
+    entry = get_connection_entry(conn_id)
     return entry and entry.get('user_id') == current_user.id
 
 
 def get_conn(conn_id: str):
     """获取连接对象(带权限检查)"""
     from flask_login import current_user
-    entry = connections.get(conn_id)
+    entry = get_connection_entry(conn_id)
     if not entry:
         return None
 
@@ -123,11 +223,11 @@ def ensure_connection(conn_id: str, d: dict):
     from backend import PodTarget, ArthasConnection
     from services.authorization_service import AuthorizationService
 
-    with connections_lock:
-        if conn_id and conn_id in connections:
-            if not check_conn_owner(conn_id):
-                return None, "无权操作此连接"
-            return connections[conn_id].get('conn'), None
+    entry = get_connection_entry(conn_id) if conn_id else None
+    if entry:
+        if not check_conn_owner(conn_id):
+            return None, "无权操作此连接"
+        return entry.get('conn'), None
 
     # 从请求参数中提取连接信息并自动重建
     cluster_name = d.get('cluster_name', '')
@@ -242,8 +342,7 @@ def ensure_connection(conn_id: str, d: dict):
                 'updated_at': now_ts,
             })
 
-        if conn_id not in connections:
-            connections[conn_id] = {"conn": conn, "user_id": current_user.id}
+        register_connection(conn_id, conn, user_id=current_user.id, level="arthas")
 
     log.info("Auto-reconnected: %s", conn_id)
     return conn, None

@@ -27,6 +27,7 @@ from backend.app_context import (
     connections, connections_lock,
     get_state_manager, make_runner,
     check_conn_owner, get_conn, ensure_connection,
+    register_connection, unregister_connection, get_connection_entry,
     save_arthas_command,
 )
 from services.authorization_service import AuthorizationService
@@ -124,8 +125,13 @@ def arthas_connect():
 
         mcp_available = conn.agent_mgr._check_mcp_available(conn.target.arthas_http_port)
 
-        with connections_lock:
-            connections[conn_id] = {"conn": conn, "user_id": current_user.id, "mcp_available": mcp_available}
+        register_connection(
+            conn_id,
+            conn,
+            user_id=current_user.id,
+            level="arthas",
+            mcp_available=mcp_available,
+        )
 
         now_ts = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         if db.exists('connections', 'id = ?', (conn_id,)):
@@ -168,16 +174,12 @@ def arthas_connect():
 def arthas_disconnect():
     """断开 Arthas 连接"""
     d = request.json or {}
-    conn_id = d.get('conn_id', '')
+    conn_id = d.get('conn_id') or d.get('connection_id') or ''
 
-    if conn_id in connections:
+    if get_connection_entry(conn_id):
         if not check_conn_owner(conn_id):
             return jsonify({"state": "FAILED", "message": "无权操作此连接"}), 403
-        with connections_lock:
-            entry = connections.pop(conn_id, None)
-        conn = entry.get('conn') if entry else None
-        if conn:
-            conn.disconnect()
+        unregister_connection(conn_id)
 
         db.delete('connections', 'id = ?', (conn_id,))
 
