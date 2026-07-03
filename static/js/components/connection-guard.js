@@ -95,7 +95,8 @@ const ConnectionGuard = (function () {
     if (!container) return;
 
     const runtimeInfo = window._runtimeInfo;
-    const runtimeType = runtimeInfo && (runtimeInfo.runtime_type || runtimeInfo.type);
+    const runtimeTypeRaw = runtimeInfo && (runtimeInfo.runtime_type || runtimeInfo.type);
+    const runtimeType = runtimeTypeRaw ? String(runtimeTypeRaw).toLowerCase() : '';
     const runtimeVersion = runtimeInfo && (runtimeInfo.version || runtimeInfo.runtime_version || '');
     const isJava = runtimeType === 'java';
 
@@ -116,13 +117,14 @@ const ConnectionGuard = (function () {
       if (isJava) {
         // 场景 B: 需要 Arthas，Pod 已连接且是 Java
         const rtIcon = _getRuntimeIcon(runtimeType);
+        const rtLabel = runtimeTypeRaw || runtimeType;
         const rtVer = runtimeVersion ? ` ${runtimeVersion}` : '';
         html = `
           <div class="cg-card">
             <div class="cg-icon">⚡</div>
             <div class="cg-body">
               <div class="cg-title">此功能需要 Arthas 诊断环境</div>
-              <div class="cg-desc">当前 Pod 已连接 (${rtIcon} ${runtimeType}${rtVer})，可一键启动 Arthas</div>
+              <div class="cg-desc">当前 Pod 已连接 (${rtIcon} ${rtLabel}${rtVer})，可一键启动 Arthas</div>
               <button class="cg-btn cg-btn-primary" onclick="window.upgradeToArthas && upgradeToArthas()">⚡ 启动 Arthas</button>
             </div>
           </div>`;
@@ -133,7 +135,7 @@ const ConnectionGuard = (function () {
             <div class="cg-icon">⚡</div>
             <div class="cg-body">
               <div class="cg-title">此功能需要 Arthas 诊断环境</div>
-              <div class="cg-desc">当前运行时为 ${runtimeType || '未知'}，Arthas 仅支持 Java 应用。<br>请选择一个 Java 应用的 Pod。</div>
+              <div class="cg-desc">当前运行时为 ${runtimeTypeRaw || runtimeType || '未知'}，Arthas 仅支持 Java 应用。<br>请选择一个 Java 应用的 Pod。</div>
             </div>
           </div>`;
       }

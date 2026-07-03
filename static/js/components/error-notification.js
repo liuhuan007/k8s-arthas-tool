@@ -216,8 +216,7 @@ function extractPodPhase(errorMessage) {
 function extractRuntime(errorMessage) {
   const patterns = [
     /运行时[：:]\s*(\w+)/i,
-    /runtime[：:]\s*(\w+)/i,
-    /(java|node|python|go|unknown)/i
+    /runtime[：:]\s*(\w+)/i
   ];
   
   for (const pattern of patterns) {

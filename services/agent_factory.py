@@ -233,7 +233,7 @@ class AgentFactory:
 
         if provider == "codebuddy" and "codebuddy" in self.AGENT_TYPES:
             return "codebuddy"
-        elif provider in ["openai", "deepseek", "ollama"] and "fallback" in self.AGENT_TYPES:
+        elif provider in ["openai", "deepseek", "ollama", "newapi", "openai-compatible"] and "fallback" in self.AGENT_TYPES:
             return "fallback"
         elif "codebuddy" in self.AGENT_TYPES:
             # 默认优先使用 CodeBuddy

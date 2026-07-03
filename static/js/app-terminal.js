@@ -10,10 +10,124 @@ const _T = {
   user:      'root', // shell user
   running:   false,  // command executing
   connected: false,
+  targetKey: '',
+  sessionToken: 0,
 };
 
 // ── DOM helpers ────────────────────────────────────────────────────────────────
 const termOut = () => document.getElementById('termOut');
+
+function termTargetKey(t) {
+  const target = t || (typeof getT === 'function' ? getT() : {});
+  return [target.cluster_name || '', target.namespace || 'default', target.pod_name || '', target.container || ''].join('/');
+}
+
+function termResetRuntime(t, opts = {}) {
+  const target = t || (typeof getT === 'function' ? getT() : {});
+  const nextKey = termTargetKey(target);
+  if (!opts.force && _T.targetKey === nextKey) return false;
+  _T.sessionToken++;
+  _T.targetKey = nextKey;
+  _T.hist = [];
+  _T.histIdx = -1;
+  _T.cwd = '/';
+  _T.host = target.pod_name ? target.pod_name.split('-').slice(0, 2).join('-') || 'pod' : 'pod';
+  _T.user = 'root';
+  _T.running = false;
+  _T.connected = false;
+  tabPopupHide();
+  const out = termOut();
+  if (out) out.innerHTML = '';
+  const input = document.getElementById('termInput');
+  if (input) { input.value = ''; input.disabled = false; }
+  const spin = document.getElementById('termSpin');
+  if (spin) spin.style.display = 'none';
+  const btn = document.getElementById('termConnBtn');
+  if (btn) { btn.textContent = '连接'; btn.className = 'xterm-conn'; }
+  termUpdatePrompt();
+  const title = document.getElementById('termTitle');
+  if (title) title.textContent = `root@${_T.host} — ${target.namespace || 'default'}/${target.pod_name || 'pod'}`;
+  if (!opts.silent && target.pod_name) {
+    termLine(`已切换终端目标: ${target.namespace || 'default'}/${target.pod_name}`, 'xl-sys');
+  }
+  return true;
+}
+
+function termSyncTarget(opts = {}) {
+  const t = typeof getT === 'function' ? getT() : {};
+  termResetRuntime(t, opts);
+  return t;
+}
+
+function hardenTerminalInputAutofill() {
+  const input = document.getElementById('termInput');
+  if (!input) return;
+  input.setAttribute('autocomplete', 'off');
+  input.setAttribute('autocorrect', 'off');
+  input.setAttribute('autocapitalize', 'off');
+  input.setAttribute('spellcheck', 'false');
+  input.setAttribute('data-lpignore', 'true');
+  input.setAttribute('data-1p-ignore', 'true');
+  input.setAttribute('data-bwignore', 'true');
+  input.setAttribute('data-form-type', 'other');
+  input.removeAttribute('name');
+  const clearIfUnexpected = () => {
+    const v = (input.value || '').trim().toLowerCase();
+    if (v === 'admin' || v === 'administrator') {
+      input.value = '';
+    }
+  };
+  clearIfUnexpected();
+  [120, 350, 800].forEach(delay => setTimeout(clearIfUnexpected, delay));
+  if (input.dataset.noAutofillReady) return;
+  input.dataset.noAutofillReady = '1';
+  input.readOnly = true;
+  let ready = false;
+  const enable = () => { if (!ready) { ready = true; input.readOnly = false; } };
+  const guard = setInterval(() => {
+    clearIfUnexpected();
+    if (ready) clearInterval(guard);
+  }, 200);
+  setTimeout(enable, 3000);
+  input.addEventListener('focus', enable, { once: true });
+  input.addEventListener('mousedown', enable, { once: true });
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', hardenTerminalInputAutofill);
+} else {
+  hardenTerminalInputAutofill();
+}
+
+function isTerminalPanelVisible() {
+  const panel = document.getElementById('panel-terminal');
+  return !!panel && (panel.classList.contains('on') || panel.classList.contains('ws-mounted-panel') || panel.offsetParent !== null);
+}
+
+function syncTerminalFromFocusedConnection(opts = {}) {
+  if (!window.ConnectionStore || typeof ConnectionStore.getFocusConnection !== 'function') return;
+  const conn = ConnectionStore.getFocusConnection();
+  if (!conn) return;
+  if (typeof syncPodTargetFromConnection === 'function') syncPodTargetFromConnection(conn);
+  const changed = termSyncTarget({ silent: opts.silent ?? !isTerminalPanelVisible() });
+  if (changed && opts.autoConnect !== false && isTerminalPanelVisible()) {
+    setTimeout(() => termInit(), 0);
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => {
+    if (window.ConnectionStore && typeof ConnectionStore.subscribe === 'function') {
+      ConnectionStore.subscribe((state, oldState) => {
+        if (state.currentConnId !== oldState.currentConnId) syncTerminalFromFocusedConnection();
+      });
+    }
+  });
+} else if (window.ConnectionStore && typeof ConnectionStore.subscribe === 'function') {
+  ConnectionStore.subscribe((state, oldState) => {
+    if (state.currentConnId !== oldState.currentConnId) syncTerminalFromFocusedConnection();
+  });
+}
 
 function termScroll() {
   const el = termOut(); el.scrollTop = el.scrollHeight;
@@ -73,13 +187,15 @@ function termUpdatePrompt() {
 
 // ── Connection ─────────────────────────────────────────────────────────────────
 async function termInit() {
+  hardenTerminalInputAutofill();
   if(window.ConnectionGuard && !ConnectionGuard.guard('terminal')) return;
-  const t = getT();
+  const t = termSyncTarget({ silent: true });
   if(!t.cluster_name || !t.pod_name) {
     toast('请先在左侧配置集群和 Pod','warn');
     return;
   }
 
+  const sessionToken = _T.sessionToken;
   const btn = document.getElementById('termConnBtn');
   btn.textContent = '连接中...';
 
@@ -96,6 +212,7 @@ async function termInit() {
   try {
     // Use 10s timeout for cwd check — kubectl exec can hang if pod is not ready
     const d = await safePost(`${API}/pod/exec/cwd`, t, 10000);
+    if (sessionToken !== _T.sessionToken) return;
     _T.host      = d.hostname || t.pod_name.split('-').slice(0, 2).join('-') || 'pod';
     _T.cwd       = d.cwd || '/';
     _T.user      = d.user || 'root';
@@ -115,6 +232,7 @@ async function termInit() {
     // Auto run uname to show system info
     await _termRun('uname -sr 2>/dev/null || cat /etc/os-release 2>/dev/null | head -3 || echo "ready"', true);
   } catch(e) {
+    if (sessionToken !== _T.sessionToken) return;
     const msg = e.message || String(e);
     termLine('', 'xl');
     termLine(`✗ 连接失败: ${msg}`, 'xl-err');
@@ -133,6 +251,7 @@ async function termInit() {
 // ── Command execution ──────────────────────────────────────────────────────────
 async function _termRun(cmd, silent = false) {
   const t = getT();
+  const sessionToken = _T.sessionToken;
   _T.running = true;
   document.getElementById('termSpin').style.display = 'inline-block';
   document.getElementById('termInput').disabled = true;
@@ -142,6 +261,7 @@ async function _termRun(cmd, silent = false) {
       ...t, command: cmd, cwd: _T.cwd, timeout: 30
     }, 35000);  // 35s fetch timeout (server timeout is 30s)
 
+    if (sessionToken !== _T.sessionToken) return d;
     // Process stdout line by line for coloring
     if(d.stdout) {
       const lines = d.stdout.split('\n');
@@ -168,9 +288,11 @@ async function _termRun(cmd, silent = false) {
     }
     return d;
   } catch(e) {
+    if (sessionToken !== _T.sessionToken) return {rc: -1, stdout: '', stderr: e.message};
     termLine(e.message, 'xl-err');
     return {rc: -1, stdout: '', stderr: e.message};
   } finally {
+    if (sessionToken !== _T.sessionToken) return;
     _T.running = false;
     document.getElementById('termSpin').style.display = 'none';
     document.getElementById('termInput').disabled = false;
@@ -179,6 +301,7 @@ async function _termRun(cmd, silent = false) {
 }
 
 async function termExec(cmd) {
+  termSyncTarget({ silent: true });
   if(_T.running) return;
 
   const trimmed = cmd.trim();
@@ -217,7 +340,8 @@ async function termExec(cmd) {
 }
 
 async function termCd(target) {
-  const t = getT();
+  const t = termSyncTarget({ silent: true });
+  const sessionToken = _T.sessionToken;
   let newPath;
   if(target === '~' || target === '')
     newPath = `/home/${_T.user}`;
@@ -235,6 +359,7 @@ async function termCd(target) {
     const d = await safePost(`${API}/pod/exec`, {
       ...t, command: `cd '${newPath}' && pwd`, cwd: '/', timeout: 5
     });
+    if (sessionToken !== _T.sessionToken) return;
     if(d.rc === 0 && d.stdout.trim()) {
       _T.cwd = d.stdout.trim();
       termUpdatePrompt();
@@ -242,6 +367,7 @@ async function termCd(target) {
       termLine(`bash: cd: ${target}: No such file or directory`, 'xl-err');
     }
   } catch(e) {
+    if (sessionToken !== _T.sessionToken) return;
     termLine(e.message, 'xl-err');
   }
 }
@@ -326,6 +452,7 @@ function tabConfirmPopup() {
 }
 
 async function termTabComplete() {
+  termSyncTarget({ silent: true });
   const input = document.getElementById('termInput');
   const val   = input.value;
   const t     = getT();
@@ -405,6 +532,7 @@ async function termTabComplete() {
 // ── Keyboard handling ──────────────────────────────────────────────────────────
 function termKeyDown(e) {
   const input = document.getElementById('termInput');
+  hardenTerminalInputAutofill();
 
   if(e.key === 'Enter') {
     e.preventDefault();
@@ -490,3 +618,6 @@ function termQuick(cmd) {
   document.getElementById('termInput').focus();
   termExec(cmd);
 }
+
+window.termSyncTarget = termSyncTarget;
+window.syncTerminalFromFocusedConnection = syncTerminalFromFocusedConnection;

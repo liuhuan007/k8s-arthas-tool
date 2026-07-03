@@ -83,12 +83,101 @@ function getConnectionState() {
   return _connState;
 }
 
+function getFocusedPodConnectionForUpgrade() {
+  let conn = null;
+  if (typeof ConnectionStore !== 'undefined' && typeof ConnectionStore.getFocusConnection === 'function') {
+    conn = ConnectionStore.getFocusConnection();
+  }
+
+  const connId = _podConnId || _currentConnId || window._currentConnId || conn?.id;
+  if (!conn && connId && typeof getConnectionRecordById === 'function') {
+    conn = getConnectionRecordById(connId);
+  }
+  if (!conn && connId && Array.isArray(_connections)) {
+    const idText = String(connId);
+    conn = _connections.find(item => {
+      if (!item) return false;
+      return [item.id, item.pod_conn_id, item.connection_id].some(value => {
+        if (!value) return false;
+        const valueText = String(value);
+        return valueText === idText || valueText.split('@u')[0] === idText || idText.split('@u')[0] === valueText;
+      });
+    }) || null;
+  }
+  return conn || null;
+}
+
+function normalizeRuntimeForUpgrade(conn) {
+  if (!conn) return _runtimeInfo || null;
+  if (conn.runtime && typeof conn.runtime === 'object') {
+    const runtimeType = conn.runtime.runtime_type || conn.runtime.type || conn.runtime_type || 'unknown';
+    return {
+      ...conn.runtime,
+      runtime_type: runtimeType,
+      type: conn.runtime.type || conn.runtime.runtime_type || runtimeType,
+      version: conn.runtime.version || conn.runtime.runtime_version || conn.runtime_version || '',
+      runtime_version: conn.runtime.runtime_version || conn.runtime.version || conn.runtime_version || '',
+      pid: conn.runtime.pid || conn.runtime.java_pid || conn.pid || conn.java_pid || null,
+    };
+  }
+  const runtimeType = conn.runtime_type || (typeof conn.runtime === 'string' ? conn.runtime : '');
+  if (!runtimeType && !_runtimeInfo) return null;
+  return {
+    runtime_type: runtimeType || _runtimeInfo?.runtime_type || _runtimeInfo?.type || 'unknown',
+    type: runtimeType || _runtimeInfo?.type || _runtimeInfo?.runtime_type || 'unknown',
+    version: conn.runtime_version || _runtimeInfo?.version || _runtimeInfo?.runtime_version || '',
+    runtime_version: conn.runtime_version || _runtimeInfo?.runtime_version || _runtimeInfo?.version || '',
+    pid: conn.pid || conn.java_pid || _runtimeInfo?.pid || _runtimeInfo?.java_pid || null,
+  };
+}
+
+function isFocusedPodUsableForUpgrade(conn) {
+  if (!conn) return false;
+  const state = String(conn.state || conn.status || '').toLowerCase();
+  const level = String(conn.level || conn.connection_level || '').toLowerCase();
+  const runtime = normalizeRuntimeForUpgrade(conn);
+  const hasConnectionId = !!(conn.pod_conn_id || conn.connection_id || conn.id);
+  const connectedLike = !state || ['connected', 'pod_connected', 'connecting', 'ready', 'ok', 'healthy'].includes(state);
+  const podLike = level === 'pod' || level === 'connected' || !!runtime;
+  return hasConnectionId && connectedLike && podLike && !!runtime;
+}
+
+function hydrateFocusedPodStateForUpgrade() {
+  if (_connState === ConnectionState.POD_CONNECTED && _runtimeInfo && _podConnId) return true;
+  const conn = getFocusedPodConnectionForUpgrade();
+  if (!isFocusedPodUsableForUpgrade(conn)) return false;
+
+  if (typeof hydratePodConnectionForUpgrade === 'function') {
+    hydratePodConnectionForUpgrade(conn);
+  } else {
+    const runtime = normalizeRuntimeForUpgrade(conn);
+    const podConnId = conn.pod_conn_id || conn.connection_id || conn.id;
+    _connState = ConnectionState.POD_CONNECTED;
+    _runtimeInfo = runtime;
+    _podConnId = podConnId;
+    _podPhase = conn.pod_phase || _podPhase || 'Running';
+    window._connState = ConnectionState.POD_CONNECTED;
+    window._runtimeInfo = runtime;
+    window._currentConnId = conn.id || podConnId;
+    if (typeof ConnectionStore !== 'undefined' && typeof ConnectionStore.setState === 'function') {
+      ConnectionStore.setState({
+        currentConnId: conn.id || podConnId,
+        connState: ConnectionState.POD_CONNECTED,
+        runtimeInfo: runtime,
+        podConnId,
+      });
+    }
+  }
+  return Boolean(_connState === ConnectionState.POD_CONNECTED && _runtimeInfo && _podConnId);
+}
+
 /**
  * 检查是否可以升级到 Arthas
  */
 function canUpgradeToArthas() {
-  // ✅ 移除 Java 检查,因为本工具就是针对 Java 应用的
-  return _connState === ConnectionState.POD_CONNECTED && _runtimeInfo;
+  // 这里校验的是“是否已有可升级的 Pod 连接态”，真正的 Java 校验交给后端升级接口。
+  if (_connState === ConnectionState.POD_CONNECTED && _runtimeInfo && _podConnId) return true;
+  return hydrateFocusedPodStateForUpgrade();
 }
 
 // ── UI 更新函数 ──────────────────────────────────────────────────────────────
@@ -408,14 +497,18 @@ function updateFeatureTabs() {
 /**
  * 第一步：建立 Pod 连接
  */
-async function podConnect() {
+async function podConnect(options = {}) {
+  const silentError = !!options.silentError;
   const t = getT();
+  window._lastPodConnectError = '';
   if (!t.cluster_name || !t.pod_name) {
-    toast('请先配置集群和 Pod', 'warn');
-    return;
+    if (!silentError) toast('请先配置集群和 Pod', 'warn');
+    window._lastPodConnectError = '请先配置集群和 Pod';
+    return false;
   }
   if (typeof validateSelectedNamespace === 'function' && !validateSelectedNamespace()) {
-    return;
+    window._lastPodConnectError = 'namespace 校验失败';
+    return false;
   }
 
   // 更新状态
@@ -572,36 +665,54 @@ async function podConnect() {
       );
     }
 
+    // Pod 连接成功后收起目标选择区，避免连接操作表单继续占据工作区。
+    const podTarget = document.getElementById('podTarget');
+    const ptArrow = document.getElementById('ptCollapseArrow');
+    if (podTarget && !podTarget.classList.contains('collapsed')) {
+      podTarget.classList.add('collapsed');
+      if (ptArrow) ptArrow.classList.add('up');
+    }
+
+    return true;
+
   } catch (e) {
     console.error('Pod 连接失败:', e);
+    window._lastPodConnectError = e.message || 'Pod 连接失败';
     _connState = ConnectionState.DISCONNECTED;
     updateConnectionButton();
     updateConnectionStatus(`✗ Pod 连接失败: ${e.message}`, 'error');
     
     // 使用精准错误提示
-    if (typeof showPodError === 'function') {
-      showPodError(e.message);
-    } else {
-      toast(`连接失败: ${e.message}`, 'error');
+    if (!silentError) {
+      if (typeof showPodError === 'function') {
+        showPodError(e.message);
+      } else {
+        toast(`连接失败: ${e.message}`, 'error');
+      }
     }
+    return false;
   }
 }
 
 /**
  * 第二步：升级到 Arthas 连接
  */
-async function upgradeToArthas() {
+async function upgradeToArthas(options = {}) {
+  const silentError = !!options.silentError;
+  window._lastArthasUpgradeError = '';
   if (!canUpgradeToArthas()) {
-    toast('当前不是 Java 应用，无法启动 Arthas', 'warn');
-    return;
+    window._lastArthasUpgradeError = '当前不是 Java 应用，无法启动 Arthas';
+    if (!silentError) toast('当前不是 Java 应用，无法启动 Arthas', 'warn');
+    return false;
   }
 
   // 前置检查：验证后端连接缓存是否有效
   if (!_podConnId) {
-    toast('连接 ID 无效，请重新建立 Pod 连接', 'error');
+    window._lastArthasUpgradeError = '连接 ID 无效，请重新建立 Pod 连接';
+    if (!silentError) toast('连接 ID 无效，请重新建立 Pod 连接', 'error');
     _connState = ConnectionState.DISCONNECTED;
     updateConnectionButton();
-    return;
+    return false;
   }
 
   try {
@@ -611,12 +722,13 @@ async function upgradeToArthas() {
       const exists = checkD.connections.some(c => c.id === _podConnId || c.connection_id === _podConnId);
       if (!exists) {
         // 后端连接缓存失效，需要重建
-        toast('Pod 连接已失效，请重新连接', 'warn');
+        window._lastArthasUpgradeError = 'Pod 连接已失效，请重新连接';
+        if (!silentError) toast('Pod 连接已失效，请重新连接', 'warn');
         _connState = ConnectionState.DISCONNECTED;
         _podConnId = null;
         if (typeof renderConnList === 'function') renderConnList();
         if (typeof updateConnectionButton === 'function') updateConnectionButton();
-        return;
+        return false;
       }
     }
   } catch (_) {
@@ -728,18 +840,23 @@ async function upgradeToArthas() {
     // 刷新连接信息提示条
     if (typeof csbRefresh === 'function') csbRefresh();
 
+    return true;
   } catch (e) {
     console.error('Arthas 启动失败:', e);
+    window._lastArthasUpgradeError = e.message || 'Arthas 启动失败';
     _connState = ConnectionState.POD_CONNECTED; // 回退到 Pod 连接状态
     updateConnectionButton();
     updateConnectionStatus(`✗ Arthas 启动失败: ${e.message}`, 'error');
     
     // 使用精准错误提示
-    if (typeof showArthasError === 'function') {
-      showArthasError(e.message);
-    } else {
-      toast(`启动失败: ${e.message}`, 'error');
+    if (!silentError) {
+      if (typeof showArthasError === 'function') {
+        showArthasError(e.message);
+      } else {
+        toast(`启动失败: ${e.message}`, 'error');
+      }
     }
+    return false;
   }
 }
 

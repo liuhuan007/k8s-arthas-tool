@@ -1,4 +1,4 @@
-"""统一 LLM 客户端 — 支持 OpenAI / 通义千问 / Ollama"""
+"""统一 LLM 客户端 — 支持 OpenAI / 通义千问 / Ollama / NewAPI"""
 from __future__ import annotations
 import json
 import os
@@ -27,6 +27,8 @@ class LLMClient:
         defaults = {
             "openai": "https://api.openai.com/v1",
             "qwen": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+            "newapi": "http://127.0.0.1:3000/v1",
+            "openai-compatible": "http://127.0.0.1:3000/v1",
             "ollama": "http://localhost:11434/v1",
         }
         return defaults.get(self.provider, defaults["openai"])

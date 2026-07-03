@@ -28,11 +28,11 @@ locust -f tests/load/locustfile.py --config tests/load/locust.conf --headless
 make loadtest
 ```
 
-The server must be running on `http://127.0.0.1:5001` before starting the
+The server must be running on `http://127.0.0.1:5005` before starting the
 test.  Start it with:
 
 ```bash
-python server.py          # default: 127.0.0.1:5001
+python server.py          # default: 127.0.0.1:5005
 ```
 
 ## User Mix

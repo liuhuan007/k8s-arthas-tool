@@ -27,7 +27,7 @@ class Config:
     DEFAULT_PAGE = 'login.html'
     
     # 服务器
-    DEFAULT_PORT = int(os.environ.get('PORT', 5001))
+    DEFAULT_PORT = int(os.environ.get('PORT', 5005))
     DEFAULT_HOST = os.environ.get('HOST', '127.0.0.1')
     
     # 输出目录

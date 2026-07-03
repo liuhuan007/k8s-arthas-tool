@@ -49,7 +49,8 @@ def _success_response(data, message: str = "success"):
 
 # ── 连接详情 ────────────────────────────────────────────────────────────────
 
-@connection_detail_bp.route("/<connection_id>/detail", methods=["GET"])
+@connection_detail_bp.route("/<path:connection_id>", methods=["GET"])
+@connection_detail_bp.route("/<path:connection_id>/detail", methods=["GET"])
 @login_required
 def get_connection_detail(connection_id: str):
     """获取连接的详细信息。
@@ -119,7 +120,7 @@ def get_connection_detail(connection_id: str):
 
 # ── 健康检查状态 ────────────────────────────────────────────────────────────
 
-@connection_detail_bp.route("/<connection_id>/health", methods=["GET"])
+@connection_detail_bp.route("/<path:connection_id>/health", methods=["GET"])
 @login_required
 def get_connection_health(connection_id: str):
     """获取指定连接的健康检查状态。
@@ -161,7 +162,7 @@ def get_connection_health(connection_id: str):
     return _success_response(data)
 
 
-@connection_detail_bp.route("/<connection_id>/health", methods=["POST"])
+@connection_detail_bp.route("/<path:connection_id>/health", methods=["POST"])
 @login_required
 def trigger_health_check(connection_id: str):
     """手动触发指定连接的健康检查。
@@ -304,7 +305,7 @@ def trigger_health_check(connection_id: str):
 
 # ── TTL 配置 ────────────────────────────────────────────────────────────────
 
-@connection_detail_bp.route("/<connection_id>/ttl", methods=["PUT"])
+@connection_detail_bp.route("/<path:connection_id>/ttl", methods=["PUT"])
 @login_required
 def update_connection_ttl(connection_id: str):
     """更新指定连接的 TTL 配置。
@@ -334,7 +335,7 @@ def update_connection_ttl(connection_id: str):
         return _error_response(f"设置失败: {str(e)}", 500)
 
 
-@connection_detail_bp.route("/<connection_id>/ttl", methods=["GET"])
+@connection_detail_bp.route("/<path:connection_id>/ttl", methods=["GET"])
 @login_required
 def get_connection_ttl(connection_id: str):
     """获取指定连接的当前 TTL 配置及可用预设选项。"""
@@ -360,7 +361,7 @@ def get_connection_ttl(connection_id: str):
 
 # ── 运行中的任务 ────────────────────────────────────────────────────────────
 
-@connection_detail_bp.route("/<connection_id>/running-tasks", methods=["GET"])
+@connection_detail_bp.route("/<path:connection_id>/running-tasks", methods=["GET"])
 @login_required
 def get_running_tasks(connection_id: str):
     """获取指定连接的运行中诊断任务列表。"""
@@ -395,7 +396,7 @@ def get_running_tasks(connection_id: str):
 
 # ── 连接切换 ────────────────────────────────────────────────────────────────
 
-@connection_detail_bp.route("/<connection_id>/switch", methods=["POST"])
+@connection_detail_bp.route("/<path:connection_id>/switch", methods=["POST"])
 @login_required
 def switch_connection(connection_id: str):
     """从当前连接切换到目标连接。
@@ -479,7 +480,7 @@ def switch_connection(connection_id: str):
 
 # ── 删除连接 ────────────────────────────────────────────────────────────────
 
-@connection_detail_bp.route("/<connection_id>", methods=["DELETE"])
+@connection_detail_bp.route("/<path:connection_id>", methods=["DELETE"])
 @login_required
 def delete_connection(connection_id: str):
     """删除指定连接。
@@ -524,6 +525,12 @@ def delete_connection(connection_id: str):
         except Exception as e:
             log.debug("[ConnectionDetail] 关闭 Arthas 连接失败 (可忽略): %s", e)
 
+        try:
+            from backend.app_context import unregister_connection
+            unregister_connection(connection_id)
+        except Exception as e:
+            log.debug("[ConnectionDetail] cleanup runtime connection failed (ignored): %s", e)
+
         db.delete("connections", "id = ?", (connection_id,))
 
         log.info(
@@ -566,7 +573,7 @@ def delete_connection(connection_id: str):
 
 # ── 重新连接 ────────────────────────────────────────────────────────────────
 
-@connection_detail_bp.route("/<connection_id>/reconnect", methods=["POST"])
+@connection_detail_bp.route("/<path:connection_id>/reconnect", methods=["POST"])
 @login_required
 def reconnect_connection(connection_id: str):
     """重新建立与目标连接的 Arthas 代理。

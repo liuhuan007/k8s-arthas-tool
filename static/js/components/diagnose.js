@@ -110,7 +110,7 @@
     // 系统诊断场景（Pod 级即可）
     const sysScene = 'system';
     // JVM 快速工具
-    const jvmTools = ['dashboard', 'threads', 'trace'];
+    const jvmTools = ['jvm', 'threads', 'trace'];
     // Pod 级快捷工具
     const podTools = ['sys_cpu', 'sys_mem', 'sys_disk', 'sys_net', 'sys_proc'];
 
@@ -192,7 +192,7 @@
   };
 
   // ═══════════════════════════════════════════════════════════
-  // 快速工具（dashboard / threads / trace）
+  // 快速工具（jvm / threads / trace）
   // ═══════════════════════════════════════════════════════════
 
   window.diagQuickTool = function(tool) {
@@ -202,7 +202,7 @@
     }
 
     // 功能点5: 降级检查 — 统一走 ConnectionGuard
-    const jvmTools = ['dashboard', 'threads', 'trace'];
+    const jvmTools = ['jvm', 'threads', 'trace'];
     const podTools = ['sys_cpu', 'sys_mem', 'sys_disk', 'sys_net', 'sys_proc'];
 
     if (window.ConnectionGuard) {
@@ -256,7 +256,28 @@
     _updateStartBtn();
   };
 
-  const _toolNames = { dashboard: 'JVM 快照', threads: '线程分析', trace: '方法追踪', sys_cpu: 'CPU 概览', sys_mem: '内存概览', sys_disk: '磁盘概览', sys_net: '网络概览', sys_proc: '进程列表' };
+  window.diagRunTool = function(event, tool) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    if (_diagQuickTool !== tool) {
+      window.diagQuickTool(tool);
+    }
+    if (_diagQuickTool !== tool) return;
+    setTimeout(() => window.diagStart(), 0);
+  };
+
+  window.diagRunScene = function(event, scene) {
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    window.diagSelectScene(scene);
+    setTimeout(() => window.diagStart(), 0);
+  };
+
+  const _toolNames = { jvm: 'JVM 概览', threads: '线程分析', trace: '方法追踪', sys_cpu: 'CPU 概览', sys_mem: '内存概览', sys_disk: '磁盘概览', sys_net: '网络概览', sys_proc: '进程列表' };
   const _sceneNames = { general: '通用诊断', method_slow: '方法慢', thread_block: '线程阻塞', oom: '内存/OOM', system: '系统诊断' };
 
   function _updateStartBtn() {
@@ -547,9 +568,9 @@
         return false;
       }
 
-      if (tool === 'dashboard') {
+      if (tool === 'jvm') {
         const raw = data.data ? JSON.stringify(data.data) : '';
-        diagRenderQuickResult('JVM 快照', tool, { metrics_raw: raw });
+        diagRenderQuickResult('JVM 概览', tool, { jvm_raw: raw });
       } else if (tool === 'threads') {
         diagRenderQuickResult('线程分析', tool, { threads_raw: JSON.stringify(data.data), deadlock: data.deadlock });
       } else if (tool === 'trace') {
@@ -1064,6 +1085,9 @@
 
     if (data.error) {
       html += `<div style="color:var(--a5);font-size:12px">错误: ${escapeHtml(data.error)}</div>`;
+    } else if (tool === 'jvm') {
+      const raw = data.jvm_raw || JSON.stringify(data.data || data);
+      html += '<div style="background:var(--bg);border:1px solid var(--ln);border-radius:5px;padding:10px;font-size:11px;font-family:var(--mono);white-space:pre-wrap;word-break:break-all;max-height:420px;overflow-y:auto;color:var(--tx2)">' + escapeHtml(_formatArthasBody(raw)) + '</div>';
     } else if (tool === 'dashboard') {
       const raw = data.metrics_raw || JSON.stringify(data.metrics || data.data || data);
       html += diagParseDashboard(raw);
@@ -1125,10 +1149,21 @@
   }
 
   function diagSetBtnsDisabled(disabled) {
-    ['diagBtnDashboard', 'diagBtnThreads', 'diagBtnTrace', 'diagStartBtn'].forEach(id => {
+    ['diagBtnSys_cpu', 'diagBtnSys_mem', 'diagBtnSys_disk', 'diagBtnSys_net', 'diagBtnSys_proc', 'diagBtnJvm', 'diagBtnThreads', 'diagBtnTrace', 'diagStartBtn'].forEach(id => {
       const btn = document.getElementById(id);
       if (btn) btn.disabled = disabled;
     });
+  }
+
+  function _formatArthasBody(raw) {
+    try {
+      const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      const body = parsed && parsed.body ? parsed.body : parsed;
+      if (typeof body === 'string') return body;
+      return JSON.stringify(body, null, 2);
+    } catch (e) {
+      return raw;
+    }
   }
 
   function escapeHtml(text) {

@@ -272,7 +272,7 @@ def diagnose_tool():
     POST /api/diagnose/tool
     {
         "connection_id": "xxx",
-        "tool": "dashboard" | "threads" | "trace",
+        "tool": "jvm" | "dashboard" | "threads" | "trace",
         "args": { ... }           // 可选参数
     }
     """
@@ -295,7 +295,10 @@ def diagnose_tool():
 
     try:
         from backend.core.arthas_executor import ArthasCommandExecutor
-        if tool == 'dashboard':
+        if tool == 'jvm':
+            resp = ArthasCommandExecutor.execute(conn, "jvm", timeout_ms=10000)
+            return jsonify({"ok": True, "data": resp})
+        elif tool == 'dashboard':
             resp = ArthasCommandExecutor.execute(conn, "dashboard -n 1", timeout_ms=15000)
             return jsonify({"ok": True, "data": resp})
         elif tool == 'threads':

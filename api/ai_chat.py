@@ -69,7 +69,7 @@ def save_ai_config():
     base_url = d.get('base_url', '').strip()
     model = d.get('model', '').strip()
     system_prompt = d.get('system_prompt', '').strip()
-    provider = d.get('provider', '').strip()  # openai / ollama
+    provider = d.get('provider', '').strip()  # openai / ollama / NewAPI 等 OpenAI 兼容中转站
 
     if not base_url:
         return jsonify({"error": "API Base URL 不能为空"}), 400
@@ -186,6 +186,15 @@ def get_ai_providers():
             "needs_key": True,
             "icon": "🌐",
             "desc": "GPT-4o 效果最佳，o3-mini/o1-mini 推理模型，需海外网络",
+        },
+        {
+            "id": "newapi",
+            "name": "NewAPI / OpenAI 兼容中转站",
+            "base_url": "http://127.0.0.1:3000/v1",
+            "models": ["gpt-4o-mini", "gpt-4o", "deepseek-chat", "qwen-plus"],
+            "needs_key": True,
+            "icon": "🔁",
+            "desc": "支持 NewAPI、One API 等 OpenAI 兼容中转站，Base URL 通常以 /v1 结尾",
         },
         {
             "id": "moonshot",

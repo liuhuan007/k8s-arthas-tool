@@ -1,22 +1,20 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <title>Arthas 控制台 - K8s Arthas Tool</title>
-    <link rel="stylesheet" href="/static/css/app.css">
+  <meta charset="UTF-8">
+  <title>Arthas 控制台兼容入口 - K8s Arthas Tool</title>
+  <link rel="stylesheet" href="css/app.css?v=20260411i">
+  <script src="js/legacy-compat.js" defer></script>
 </head>
-<body>
-    <div id="arthas-console-container">
-        <div class="arthas-console-header">
-            <h2>Arthas 控制台</h2>
-            <button id="back-btn" class="btn btn-secondary">返回</button>
-        </div>
-        <div id="arthas-console-content">
-            <!-- Arthas 控制台内容 -->
-        </div>
-    </div>
-    <script src="/static/js/components/page-shell.js"></script>
-    <script src="/static/js/components/connection-page-context.js"></script>
-    <script src="/static/js/page-workspace.js"></script>
+<body data-legacy-route="arthas-console">
+  <main class="legacy-compat-shell">
+    <section class="legacy-compat-card">
+      <p class="legacy-compat-kicker">Legacy Compatibility</p>
+      <h1 class="legacy-compat-title">正在切换到 Arthas 控制台</h1>
+      <p class="legacy-compat-copy">旧控制台页面只保留兼容入口，系统会自动回到新工作区对应的 Arthas 控制台。</p>
+      <div class="legacy-compat-target" id="legacyCompatTarget">/#console</div>
+      <a class="btn btn-g legacy-compat-action" id="legacyCompatLink" href="/#console">继续</a>
+    </section>
+  </main>
 </body>
 </html>

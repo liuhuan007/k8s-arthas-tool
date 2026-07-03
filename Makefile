@@ -16,7 +16,7 @@ docker:
 	docker build -t arthas-k8s-tool:latest .
 
 docker-run:
-	docker run -d --name arthas-tool -p 5001:5001 \
+	docker run -d --name arthas-tool -p 5005:5005 \
 		-v ~/.kube:/root/.kube:ro \
 		-v $(CURDIR)/profiler_output:/app/profiler_output \
 		arthas-k8s-tool:latest

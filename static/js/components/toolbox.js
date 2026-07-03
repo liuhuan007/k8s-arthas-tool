@@ -1473,7 +1473,7 @@
             <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px;text-transform:uppercase">Step 1: 选择工具</div>
             <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:10px">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <input type="text" placeholder="搜索工具..." style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
+              <input type="search" name="" placeholder="搜索工具..." inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
             </div>
             <div style="display:flex;gap:4px;margin-bottom:10px;padding:3px;background:rgba(0,0,0,.2);border-radius:6px">
               <button class="btn btn-sm" style="flex:1;background:rgba(0,122,255,.15);color:var(--a)" onclick="switchBatchToolTab('binary', this)">📦 二进制</button>
@@ -1507,7 +1507,7 @@
               </div>
               <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:8px">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="text" placeholder="搜索 Pod..." style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
+                <input type="search" name="" placeholder="搜索 Pod..." inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
               </div>
               <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
                 <button class="btn btn-g btn-sm">全部</button>
@@ -1527,7 +1527,7 @@
               </div>
               <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:8px">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="text" placeholder="搜索 Node..." style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
+                <input type="search" name="" placeholder="搜索 Node..." inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
               </div>
               <div id="batchNodeList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto">
                 <div style="text-align:center;color:var(--tx2);font-size:12px;padding:20px">请先选择集群</div>
@@ -1543,7 +1543,7 @@
               </div>
               <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:8px">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="text" placeholder="搜索 Namespace..." style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
+                <input type="search" name="" placeholder="搜索 Namespace..." inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
               </div>
               <div id="batchNsList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto">
                 <div style="text-align:center;color:var(--tx2);font-size:12px;padding:20px">请先选择集群</div>
@@ -1580,6 +1580,11 @@
       </div>
     `;
     document.body.appendChild(modal);
+    if (window.ConnectionPool && typeof ConnectionPool.hardenSearchInput === 'function') {
+      modal.querySelectorAll('input[type=search][data-form-type="other"]').forEach(input => {
+        ConnectionPool.hardenSearchInput(input);
+      });
+    }
     loadBatchToolLists();
     initBatchClusterSelects();
   };

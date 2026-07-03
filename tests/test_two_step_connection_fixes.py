@@ -17,6 +17,7 @@ class TestTwoStepConnectionFixes(unittest.TestCase):
         self.root = Path(__file__).resolve().parents[1]
         self.two_step_js = (self.root / 'static' / 'js' / 'components' / 'two-step-connection.js').read_text(encoding='utf-8')
         self.pod_apis_py = (self.root / 'api' / 'pod_apis.py').read_text(encoding='utf-8')
+        self.css = (self.root / 'static' / 'css' / 'app.css').read_text(encoding='utf-8')
 
     # ── 问题 1: Arthas 已连接时隐藏 Pod 连接按钮 ─────────────────────────
 
@@ -62,6 +63,15 @@ class TestTwoStepConnectionFixes(unittest.TestCase):
         self.assertNotRegex(self.two_step_js, pattern,
                            "❌ 状态消息不应包含 d.message (避免重复)")
 
+    def test_pod_target_collapses_after_successful_connection(self):
+        """测试连接成功后 Pod 目标选择区真正收起"""
+        self.assertIn('podTarget.classList.add(\'collapsed\')', self.two_step_js,
+                     "❌ Pod 连接成功后应给目标选择区添加 collapsed")
+        self.assertIn('.pod-target.pod-target-main.collapsed{max-height:0', self.css,
+                     "❌ collapsed 状态不能被 pod-target-main 样式覆盖")
+        self.assertIn('overflow:hidden', self.css.split('.pod-target.pod-target-main.collapsed', 1)[1].split('}', 1)[0],
+                     "❌ collapsed 状态应隐藏溢出内容")
+
     # ── 问题 3: 断开连接接口幂等性 ─────────────────────────────────────
 
     def test_disconnect_idempotent(self):
@@ -74,15 +84,15 @@ class TestTwoStepConnectionFixes(unittest.TestCase):
         self.assertIn('return jsonify({"ok": True, "message": "连接已断开"})', self.pod_apis_py,
                      "❌ 应返回成功响应")
 
-    def test_disconnect_checks_both_pools(self):
-        """测试断开连接检查两个连接池"""
-        # 应检查 _pod_connections
-        self.assertIn('_pod_connections.get(conn_id)', self.pod_apis_py,
-                     "❌ 应检查 _pod_connections")
-        
-        # 应检查 _connections (旧版兼容)
+    def test_disconnect_checks_unified_connection_lookup(self):
+        """测试断开连接通过统一连接池入口查找连接"""
+        # 应先走统一入口，避免继续依赖旧的 _pod_connections
+        self.assertIn('entry = _shared_get_connection_entry(conn_id)', self.pod_apis_py,
+                     "❌ 应优先使用共享连接查询入口")
+
+        # 共享入口未命中时，应回退到 _connections 池
         self.assertIn('_connections.get(conn_id)', self.pod_apis_py,
-                     "❌ 应检查 _connections (旧版兼容)")
+                     "❌ 应回退检查 _connections 统一连接池")
 
     def test_disconnect_fallback_to_old_api(self):
         """测试前端支持旧版 API 回退"""

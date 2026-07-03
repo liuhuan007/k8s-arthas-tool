@@ -135,7 +135,7 @@ cd k8s-arthas-tool
 
 ```bash
 pip install -r requirements.txt
-python server.py                     # 默认 127.0.0.1:5001
+python server.py                     # 默认 127.0.0.1:5005
 python server.py --port 8080         # 自定义端口
 python server.py --host 0.0.0.0      # 允许外部访问（跳板机场景）
 ```
@@ -192,21 +192,21 @@ scp -r k8s-arthas-tool/ user@jump-server:/opt/arthas-tool/
 
 # 在跳板机启动，监听所有网卡
 ssh user@jump-server "cd /opt/arthas-tool && nohup python server.py \
-  --host 0.0.0.0 --port 5001 > arthas-tool.log 2>&1 &"
+  --host 0.0.0.0 --port 5005 > arthas-tool.log 2>&1 &"
 
 # 修改 index.html 第一行的 API 地址
-# const API = 'http://jump-server-ip:5001/api';
+# const API = 'http://jump-server-ip:5005/api';
 
 # 浏览器访问
-open http://jump-server-ip:5001/
+open http://jump-server-ip:5005/
 ```
 
 **推荐：SSH 隧道（无需暴露端口）**
 
 ```bash
-ssh -L 5001:localhost:5001 user@jump-server \
+ssh -L 5005:localhost:5005 user@jump-server \
   "cd /opt/arthas-tool && python server.py"
-# 本地浏览器直接打开 index.html（API 保持默认 127.0.0.1:5001）
+# 本地浏览器直接打开 index.html（API 保持默认 127.0.0.1:5005）
 ```
 
 ### 场景三：Docker 部署
@@ -218,7 +218,7 @@ docker build -f deploy/Dockerfile -t arthas-k8s-tool:latest .
 # 运行（挂载 kubeconfig 和输出目录）
 docker run -d \
   --name arthas-tool \
-  -p 5001:5001 \
+  -p 5005:5005 \
   -v ~/.kube:/root/.kube:ro \
   -v $(pwd)/data/profiler:/app/data/profiler \
   arthas-k8s-tool:latest
@@ -227,7 +227,7 @@ docker run -d \
 docker logs -f arthas-tool
 
 # 浏览器访问
-open http://localhost:5001/
+open http://localhost:5005/
 ```
 
 ### 场景四：Docker Compose
@@ -247,7 +247,7 @@ docker compose -f deploy/docker-compose.yml logs -f
 
 ```bash
 # 安装为系统服务（需 root）
-sudo ./deploy.sh --systemd --host 0.0.0.0 --port 5001
+sudo ./deploy.sh --systemd --host 0.0.0.0 --port 5005
 
 # 服务管理命令
 sudo systemctl start  arthas-tool
@@ -259,7 +259,7 @@ sudo journalctl -u arthas-tool -f
 ### deploy.sh 完整参数
 
 ```bash
-./deploy.sh                                    # 前台运行，默认 127.0.0.1:5001
+./deploy.sh                                    # 前台运行，默认 127.0.0.1:5005
 ./deploy.sh --host 0.0.0.0                     # 监听所有网卡
 ./deploy.sh --port 8080                        # 自定义端口
 ./deploy.sh --daemon                           # 后台运行（nohup）
@@ -948,9 +948,9 @@ JVM 默认不开 GC 日志，需加启动参数并重启：
 
 ### Failed to fetch
 
-1. 确认服务运行：`curl http://127.0.0.1:5001/api/health`
-2. 检查 `index.html` 第一行：`const API = 'http://127.0.0.1:5001/api'`
-3. 跨机访问：修改 API 地址并开放 5001 端口
+1. 确认服务运行：`curl http://127.0.0.1:5005/api/health`
+2. 检查 `index.html` 第一行：`const API = 'http://127.0.0.1:5005/api'`
+3. 跨机访问：修改 API 地址并开放 5005 端口
 
 ### kubectl 权限不足
 

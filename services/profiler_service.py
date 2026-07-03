@@ -79,12 +79,33 @@ class ProfilerService:
                  task_id, task_type, event)
         return task_id
 
-    def start_task(self, task_id: str) -> Dict[str, Any]:
+    def _sync_workflow_progress(self, task_id: str, entry: Dict[str, Any], duration: int) -> None:
+        """同步后台工作流日志到任务状态"""
+        try:
+            message = entry.get('message', '')
+            progress = 0
+            if duration > 0:
+                import re
+                match = re.search(r'进度\s+(\d+)/(\d+)s', message)
+                if match:
+                    progress = min(95, int(int(match.group(1)) / max(int(match.group(2)), 1) * 100))
+
+            update_data = {
+                'message': message,
+                'updated_at': entry.get('timestamp') or datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+            }
+            if progress:
+                update_data['progress'] = progress
+            self.db.update('profiler_tasks', update_data, 'id = ?', (task_id,))
+        except Exception:
+            log.debug("同步 Profiler 工作流进度失败: task_id=%s", task_id, exc_info=True)
+
+    def start_task(self, task_id: str, conn_obj=None) -> Dict[str, Any]:
         """启动 Profiler 任务
-        
+
         Args:
             task_id: 任务ID
-            
+
         Returns:
             包含 success 和 message 的字典
         """
@@ -118,13 +139,16 @@ class ProfilerService:
             try:
                 # 获取数据库连接
                 from api import get_connection_by_id
-                conn = get_connection_by_id(task['connection_id'])
+                conn = conn_obj or get_connection_by_id(task['connection_id'])
 
                 if not conn:
                     raise Exception(f"连接 {task['connection_id']} 不存在或已断开")
 
                 # 创建 ProfilerWorkflow 实例
-                workflow = ProfilerWorkflow(conn)
+                workflow = ProfilerWorkflow(
+                    conn,
+                    progress_callback=lambda entry: self._sync_workflow_progress(task_id, entry, task['duration'] or 60)
+                )
 
                 # 存入运行中字典，供 stop_task 调用 cancel()
                 self._running_workflows[task_id] = workflow
@@ -148,23 +172,26 @@ class ProfilerService:
                     event=event
                 )
                 
-                # 更新任务状态为 completed
+                result_status = result.get('status', 'completed')
                 output_path = result.get('local_file', '')
-                message = result.get('message', '任务完成')
-                
+                message = result.get('message', '任务完成' if result_status == 'completed' else '任务失败')
+                final_status = 'completed' if result_status == 'completed' else 'failed'
+                current_task = self.db.fetch_one('SELECT progress FROM profiler_tasks WHERE id = ?', (task_id,))
+                final_progress = 100 if final_status == 'completed' else (current_task or {}).get('progress', 0)
+
                 self.db.update('profiler_tasks', {
-                    'status': 'completed',
-                    'progress': 100,
+                    'status': final_status,
+                    'progress': final_progress,
                     'output_path': output_path,
                     'message': message,
                     'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
                 }, 'id = ?', (task_id,))
                 
                 # Phase 7 新增：写入诊断历史
-                self._write_to_diagnosis_history(task_id, task, result, 'completed')
-                
-                log.info("Profiler 任务完成: task_id=%s, output=%s", 
-                         task_id, output_path)
+                self._write_to_diagnosis_history(task_id, task, result, final_status)
+
+                log.info("Profiler 任务结束: task_id=%s, status=%s, output=%s",
+                         task_id, final_status, output_path)
                 
             except Exception as e:
                 log.error("Profiler 任务失败: task_id=%s, error=%s", 
@@ -276,20 +303,7 @@ class ProfilerService:
         if not task:
             return {"success": False, "message": f"任务 {task_id} 不存在"}
         
-        # 计算进度（如果任务正在运行）
         progress = task.get('progress', 0)
-        if task['status'] == 'running' and progress == 0:
-            # 根据时间估算进度
-            created_at = task.get('created_at', '')
-            duration = task.get('duration', 60)
-            
-            try:
-                from datetime import datetime as dt
-                start_time = dt.strptime(created_at[:19], '%Y-%m-%d %H:%M:%S')
-                elapsed = (datetime.now() - start_time).total_seconds()
-                progress = min(90, int((elapsed / duration) * 100))
-            except Exception:
-                progress = 50
         
         return {
             "success": True,
@@ -297,6 +311,10 @@ class ProfilerService:
                 "id": task['id'],
                 "connection_id": task['connection_id'],
                 "type": task['type'],
+                "mode": task.get('mode', task['type']),
+                "event": task.get('event', ''),
+                "duration": task.get('duration', 60),
+                "format": task.get('format', ''),
                 "status": task['status'],
                 "progress": progress,
                 "output_path": task.get('output_path', ''),

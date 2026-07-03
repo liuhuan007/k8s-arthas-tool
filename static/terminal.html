@@ -1,22 +1,20 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <title>终端 - K8s Arthas Tool</title>
-    <link rel="stylesheet" href="/static/css/app.css">
+  <meta charset="UTF-8">
+  <title>终端兼容入口 - K8s Arthas Tool</title>
+  <link rel="stylesheet" href="css/app.css?v=20260411i">
+  <script src="js/legacy-compat.js" defer></script>
 </head>
-<body>
-    <div id="terminal-container">
-        <div class="terminal-header">
-            <h2>终端</h2>
-            <button id="back-btn" class="btn btn-secondary">返回</button>
-        </div>
-        <div id="terminal-content">
-            <!-- 终端内容 -->
-        </div>
-    </div>
-    <script src="/static/js/components/page-shell.js"></script>
-    <script src="/static/js/components/connection-page-context.js"></script>
-    <script src="/static/js/page-workspace.js"></script>
+<body data-legacy-route="terminal">
+  <main class="legacy-compat-shell">
+    <section class="legacy-compat-card">
+      <p class="legacy-compat-kicker">Legacy Compatibility</p>
+      <h1 class="legacy-compat-title">正在切换到终端页</h1>
+      <p class="legacy-compat-copy">旧终端页面已收口到新工作区，系统会自动回到当前连接的终端视图。</p>
+      <div class="legacy-compat-target" id="legacyCompatTarget">/#terminal</div>
+      <a class="btn btn-g legacy-compat-action" id="legacyCompatLink" href="/#terminal">继续</a>
+    </section>
+  </main>
 </body>
 </html>

@@ -149,7 +149,7 @@ class SkillMarketplace:
                 if isinstance(data, list):
                     for s in data:
                         s.setdefault("path", s.get("name", ""))
-                    return data
+                    return [self._normalize_skill_entry(s, s.get("path") or s.get("name", "")) for s in data]
                 if isinstance(data, dict) and "plugins" in data:
                     for plugin in data["plugins"]:
                         source = plugin.get("source", "").lstrip("./")
@@ -173,6 +173,35 @@ class SkillMarketplace:
 
         return skills
 
+    def _normalize_skill_entry(self, meta: Dict, path: str = "", entry_type: str = "skill") -> Dict:
+        item = dict(meta or {})
+        item.setdefault("name", Path(path).stem if path else "")
+        item["path"] = item.get("path") or path
+        item["entry_type"] = item.get("entry_type") or entry_type
+        raw_category = item.get("category") or item.get("type") or item.get("group") or ""
+        item["display_category"] = raw_category or "未分类"
+        item["category"] = self._normalize_category(raw_category)
+        item["version"] = str(item.get("version") or "1.0.0")
+        try:
+            item["level"] = int(item.get("level") or 1)
+        except (TypeError, ValueError):
+            item["level"] = 1
+        if item["level"] not in (1, 2, 3, 4):
+            item["level"] = 1
+        item["risk_level"] = item.get("risk_level") or "low"
+        item["description"] = item.get("description") or item.get("summary") or item.get("title") or ""
+        return item
+
+    def _normalize_category(self, raw: Any) -> str:
+        text = str(raw or "").lower()
+        if any(k in text for k in ("ai", "llm", "智能")):
+            return "ai"
+        if any(k in text for k in ("tool", "工具", "脚本", "command")):
+            return "tool"
+        if any(k in text for k in ("scenario", "场景", "prd", "story", "roadmap", "产品", "方案")):
+            return "scenario"
+        return "quick"
+
     def _scan_plugin_dir(self, plugin_dir: Path, prefix: str = "") -> List[Dict]:
         """Scan Claude Code plugin directory for skills in commands/ and skills/ subdirs."""
         skills = []
@@ -187,12 +216,12 @@ class SkillMarketplace:
                         if not meta.get("name"):
                             meta["name"] = entry.stem
                         meta["path"] = f"{prefix}/{sub_name}/{entry.name}"
-                        skills.append(meta)
+                        skills.append(self._normalize_skill_entry(meta, meta["path"], "command" if sub_name == "commands" else "skill"))
                 elif entry.is_dir():
                     skill = self._scan_subdir(entry)
                     if skill:
                         skill["path"] = f"{prefix}/{sub_name}/{entry.name}"
-                        skills.append(skill)
+                        skills.append(self._normalize_skill_entry(skill, skill["path"], "skill"))
         return skills
 
     def _scan_subdir(self, subdir: Path) -> Optional[Dict]:
@@ -203,7 +232,7 @@ class SkillMarketplace:
                 meta = self._parse_skill_meta(content, fp.suffix)
                 if meta and meta.get("name"):
                     meta["path"] = subdir.name
-                    return meta
+                    return self._normalize_skill_entry(meta, subdir.name, "skill")
 
         import glob
         for pattern in ["*.skill.json", "*.skill.yaml", "*.skill.yml"]:
@@ -214,7 +243,7 @@ class SkillMarketplace:
                 meta = self._parse_skill_meta(content, fp.suffix)
                 if meta and meta.get("name"):
                     meta["path"] = subdir.name
-                    return meta
+                    return self._normalize_skill_entry(meta, subdir.name, "skill")
 
         return None
 
@@ -268,6 +297,11 @@ class SkillMarketplace:
             except (json.JSONDecodeError, TypeError):
                 continue
             for s in skills:
+                s = self._normalize_skill_entry(
+                    s,
+                    s.get("path") or s.get("name", ""),
+                    s.get("entry_type", "skill"),
+                )
                 s["source_id"] = src["id"]
                 s["source_name"] = src["name"]
                 s["installed"] = False
@@ -319,6 +353,11 @@ class SkillMarketplace:
             if not skill_data:
                 raise ValueError(f"No skill definition found in {skill_dir}")
 
+            skill_data = self._normalize_skill_entry(
+                skill_data,
+                entry.get("path", ""),
+                entry.get("entry_type", "skill"),
+            )
             skill_data["source"] = "marketplace"
             skill_data["marketplace_id"] = source_id
 

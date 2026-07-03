@@ -24,19 +24,28 @@ class ProfilerWorkflow:
     mode='heapdump'   — Heap Dump
     """
 
-    def __init__(self, conn):
+    def __init__(self, conn, progress_callback=None):
         self.conn = conn
         self.logs: List[Dict] = []
         self.result = {"status": "running", "local_file": "", "message": ""}
         self._cancelled = False
+        self.progress_callback = progress_callback
 
     def cancel(self):
         self._cancelled = True
 
     def _log(self, msg: str, level: str = "info"):
-        entry = {"time": datetime.now().strftime("%H:%M:%S"), "level": level, "message": msg}
+        now = datetime.now()
+        entry = {
+            "time": now.strftime("%H:%M:%S"),
+            "timestamp": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "level": level,
+            "message": msg,
+        }
         self.logs.append(entry)
         log.info("[%s] %s", level, msg)
+        if self.progress_callback:
+            self.progress_callback(entry)
 
     def snapshot(self) -> dict:
         return {
@@ -44,6 +53,15 @@ class ProfilerWorkflow:
             "logs": list(self.logs),
             "result": dict(self.result),
         }
+
+    def _response_text(self, resp: dict) -> str:
+        return json.dumps(resp or {}, ensure_ascii=False)
+
+    def _profiler_is_running(self, resp: dict) -> bool:
+        raw = self._response_text(resp).lower()
+        if "not started" in raw or "no profiler" in raw or "inactive" in raw:
+            return False
+        return "running" in raw or "profiling" in raw or "started" in raw
 
     def run(self, duration: int, fmt: str, output_dir: str,
             mode: str = 'profiler', event: str = 'cpu',
@@ -135,26 +153,21 @@ class ProfilerWorkflow:
             pass
 
         # ③ profiler start
-        self._log("③ 启动 async-profiler（Session 模式）...")
+        self._log("③ 启动 async-profiler...")
         try:
-            sess = client.init_session()
-            if sess.get("state") not in ("SUCCEEDED", "succeeded"):
-                return self._fail(f"创建 Session 失败: {json.dumps(sess)[:200]}")
-            session_id = sess["sessionId"]
-            consumer_id = sess["consumerId"]
-
             start_cmd = f"profiler start --event {event}"
-            start_resp = client.exec_async(session_id, start_cmd)
-            self._log(f"   async_exec: {json.dumps(start_resp)[:120]}", "dim")
-            if start_resp.get("state") == "FAILED":
+            start_resp = client.exec_once(start_cmd, timeout_ms=15000)
+            start_raw = self._response_text(start_resp)
+            self._log(f"   start 响应: {start_raw[:200]}", "dim")
+            if start_resp.get("state") not in ("SUCCEEDED", "succeeded"):
                 return self._fail(f"profiler start 失败: {json.dumps(start_resp)[:200]}")
 
-            time.sleep(3)
-            pull = client.pull_results(session_id, consumer_id)
-            pull_raw = json.dumps(pull, ensure_ascii=False)
-            self._log(f"   pull: {pull_raw[:120]}", "dim")
-            if "error" in pull_raw.lower() and "started" not in pull_raw.lower():
-                return self._fail(f"profiler start 异常: {pull_raw[:300]}")
+            time.sleep(1)
+            verify_resp = client.exec_once("profiler status", timeout_ms=10000)
+            verify_raw = self._response_text(verify_resp)
+            self._log(f"   status 响应: {verify_raw[:200]}", "dim")
+            if not self._profiler_is_running(verify_resp):
+                return self._fail(f"profiler 未进入运行状态: {verify_raw[:300]}")
         except Exception as e:
             return self._fail(f"profiler start 异常: {e}")
 
@@ -170,11 +183,6 @@ class ProfilerWorkflow:
             time.sleep(1)
             if (i + 1) % 10 == 0:
                 self._log(f"   进度 {i+1}/{duration}s", "dim")
-
-        try:
-            client.close_session(session_id)
-        except Exception:
-            pass
 
         # ⑤ profiler stop
         self._log(f"⑤ 停止采样，导出 {fmt}...")

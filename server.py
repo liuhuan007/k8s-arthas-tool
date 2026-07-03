@@ -205,7 +205,7 @@ def external_proxy(link_id):
 
 CORS(app, supports_credentials=True, resources={
     r"/api/*": {
-        "origins": os.environ.get('CORS_ORIGINS', 'http://127.0.0.1:5001,http://localhost:5001').split(','),
+        "origins": os.environ.get('CORS_ORIGINS', 'http://127.0.0.1:5005,http://localhost:5005').split(','),
         "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     },
     r"/mcp/*": {
@@ -1567,7 +1567,7 @@ def start_profiler():
         if err:
             return jsonify({"state": "FAILED", "message": err}), 404
 
-        conn_id = conn_id or f"{d.get('cluster_name','')}/{d.get('namespace','default')}/{d.get('pod_name','')}"
+        conn_id = getattr(conn, 'connection_id', None) or conn_id or f"{d.get('cluster_name','')}/{d.get('namespace','default')}/{d.get('pod_name','')}"
 
         # 检查同一连接是否已有运行中的任务
         running_task = db.fetch_one(
@@ -1594,11 +1594,11 @@ def start_profiler():
         from services.audit_service import AuditService
         AuditService.log_task_created(user_id, task_id, task_type)
 
-        result = svc.start_task(task_id)
+        result = svc.start_task(task_id, conn_obj=conn)
         if not result.get('success'):
             return jsonify({"state": "FAILED", "message": result.get('message', '启动失败')}), 500
 
-        return jsonify({"ok": True, "task_id": task_id})
+        return jsonify({"ok": True, "task_id": task_id, "connection_id": conn_id})
 
     except Exception as e:
         log.error("start_profiler failed: %s", e, exc_info=True)
@@ -1619,7 +1619,7 @@ def get_profile_status(task_id: str):
     task = result['task']
     logs = []
     if task.get('message'):
-        logs = [{"message": task['message'], "timestamp": task.get('updated_at', '')}]
+        logs = [{"message": task['message'], "level": "info", "timestamp": task.get('updated_at', '')}]
 
     output_file = None
     if task.get('output_path'):
@@ -1631,9 +1631,11 @@ def get_profile_status(task_id: str):
         "event": task.get('event', ''),
         "duration": task.get('duration', 60),
         "progress": task.get('progress', 0),
+        "message": task.get('message', ''),
         "output_file": output_file,
         "logs": logs,
         "created_at": task.get('created_at', ''),
+        "updated_at": task.get('updated_at', ''),
     })
 
 
@@ -2563,6 +2565,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="K8s Arthas Tool Server")
     parser.add_argument("--port", type=int, default=Config.DEFAULT_PORT)
     parser.add_argument("--host", default=Config.DEFAULT_HOST)
+    parser.add_argument("--debug", action="store_true", help="enable Flask debug mode")
+    parser.add_argument("--reload", action="store_true", help="enable Werkzeug auto reloader")
     args = parser.parse_args()
     
     # 初始化数据库
@@ -2589,12 +2593,20 @@ if __name__ == "__main__":
         except Exception as e:
             print(f"[CLEANUP] 清理活跃连接失败: {e}")
         try:
-            from backend.core.connection_pool import connection_pool
-            connection_pool.disconnect_all()
+            from backend.app_context import get_connection_pool
+            pool = get_connection_pool()
+            if pool is not None:
+                pool.disconnect_all()
         except Exception as e:
             print(f"[CLEANUP] 清理 port-forward 进程失败: {e}")
     atexit.register(_cleanup_port_forwards)
     # 校验生产环境安全配置
     Config.validate_production()
     print(f"[START] K8s Arthas Tool v2026.03.23 -> http://{args.host}:{args.port}")
-    app.run(host=args.host, port=args.port, debug=True, request_handler=_TimedRequestHandler)
+    app.run(
+        host=args.host,
+        port=args.port,
+        debug=args.debug,
+        use_reloader=args.reload,
+        request_handler=_TimedRequestHandler,
+    )

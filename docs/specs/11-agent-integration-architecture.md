@@ -1553,7 +1553,7 @@ def start_diagnosis():
     
     return jsonify({
         'session_id': session_id,
-        'websocket_url': f'ws://localhost:5001/api/diagnosis/agent/stream/{session_id}'
+        'websocket_url': f'ws://localhost:5005/api/diagnosis/agent/stream/{session_id}'
     })
 
 

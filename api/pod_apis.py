@@ -79,13 +79,21 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
             return jsonify(auth_err), auth_code
         
         conn_id = _make_pod_conn_id(cluster_name, namespace, pod_name)
-        
+        entry = _get_connection_entry(conn_id)
+        # 统一连接池允许复用已存在的 Pod 连接，但复用前必须重新校验连接是否仍然可用。
+
         # ✅ 修复: 从统一连接池检查是否已有连接
         entry = _get_connection_entry(conn_id)
         if entry:
             conn = entry.get('conn')
-            # 检查连接是否存活且是 Pod 级别
+            conn_alive = False
             if conn and hasattr(conn, '_healthy') and conn._healthy:
+                try:
+                    conn_alive = conn.is_alive() if hasattr(conn, 'is_alive') else True
+                except Exception:
+                    conn_alive = False
+            # 检查连接是否存活且是 Pod 级别
+            if conn_alive:
                 from dataclasses import asdict
 
                 runtime_data = asdict(conn.runtime_info) if hasattr(conn, 'runtime_info') and conn.runtime_info else None
@@ -108,6 +116,8 @@ def register_pod_apis(app, db, _make_runner, _connections_lock, _connections):
                 })
             else:
                 # 连接失效,移除
+                # 失效连接先清理，再走新连接流程返回真实错误或重新建立连接。
+                log.info("[Pod Connect Reuse] stale connection removed before reconnect: %s", conn_id)
                 _unregister_connection(conn_id)
         
         # 创建新连接

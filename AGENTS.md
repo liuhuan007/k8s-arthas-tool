@@ -14,7 +14,7 @@ K8s Arthas Tool is a Java performance diagnosis platform for Kubernetes Pods. It
 # Install dependencies
 pip install -r requirements.txt
 
-# Run locally (default 127.0.0.1:5001)
+# Run locally (default 127.0.0.1:5005)
 python server.py
 
 # Run with custom port/host
@@ -56,7 +56,7 @@ docker build -f deploy/Dockerfile -t arthas-k8s-tool:latest .
 # Run with kubeconfig mounted
 docker run -d \
   --name arthas-tool \
-  -p 5001:5001 \
+  -p 5005:5005 \
   -v ~/.kube:/root/.kube:ro \
   -v $(pwd)/data/profiler:/app/data/profiler \
   arthas-k8s-tool:latest
@@ -198,4 +198,4 @@ See `deploy/rbac.yaml` for minimal permissions:
 前端页面功能触发规则：
 - 涉及前端页面/组件/UI功能时，必须调用 `ui-ux-pro-max` skill
 - 涉及前端设计/样式/交互时，必须调用 `frontend-design` skill
-- 必要时给出可运行的 demo HTML 交互页面，供用户预览确认后再正式实现。demo 需遵循项目规范：原生 JavaScript（不用框架）、暗色主题、CSS 变量、与现有 static/ 结构一致。统一入口：`http://127.0.0.1:5001/demo.html`，demo 文件存放于 `static/demo/`
+- 必要时给出可运行的 demo HTML 交互页面，供用户预览确认后再正式实现。demo 需遵循项目规范：原生 JavaScript（不用框架）、暗色主题、CSS 变量、与现有 static/ 结构一致。统一入口：`http://127.0.0.1:5005/demo.html`，demo 文件存放于 `static/demo/`

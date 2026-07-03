@@ -3,7 +3,7 @@ const API_BASE = (() => {
     if (typeof window !== 'undefined' && window.location.protocol.startsWith('http')) {
         return `${window.location.protocol}//${window.location.host}/api`;
     }
-    return 'http://127.0.0.1:5001/api';
+    return 'http://127.0.0.1:5005/api';
 })();
 
 let currentPage = 0;

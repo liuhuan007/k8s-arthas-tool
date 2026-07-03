@@ -34,6 +34,13 @@
       needs_key: true,
       default_model: 'gpt-4o'
     },
+    newapi: {
+      name: 'NewAPI / OpenAI 兼容中转站',
+      base_url: 'http://127.0.0.1:3000/v1',
+      models: ['gpt-4o-mini', 'gpt-4o', 'deepseek-chat', 'qwen-plus'],
+      needs_key: true,
+      default_model: 'gpt-4o-mini'
+    },
     moonshot: {
       name: '月之暗面 (Kimi)',
       base_url: 'https://api.moonshot.cn/v1',
@@ -119,8 +126,9 @@
       modelSelect.style.display = 'none';
     }
 
-    // Ollama 特殊处理
+    // Ollama / OpenAI 兼容中转站特殊处理
     const isOllama = providerId === 'ollama';
+    const isOpenAICompatibleRelay = providerId === 'newapi';
     document.getElementById('aiDetectOllama').style.display = isOllama ? 'block' : 'none';
     document.getElementById('aiApiKeyGroup').style.display = isOllama ? 'none' : '';
     document.getElementById('aiKeyHint').textContent = isOllama ? 'Ollama 本地模型无需 API Key' : '从模型服务商获取';
@@ -131,6 +139,9 @@
     if (isOllama) {
       urlHint.textContent = 'Ollama 默认地址，如使用其他端口请修改';
       modelHint.textContent = '点击「检测模型」按钮获取已安装的本地模型';
+    } else if (isOpenAICompatibleRelay) {
+      urlHint.textContent = '填写 NewAPI / One API 等 OpenAI 兼容中转站地址，通常以 /v1 结尾';
+      modelHint.textContent = `填写中转站已启用的模型名，常见示例: ${provider.models.join(', ')}`;
     } else {
       urlHint.textContent = `${provider.name} API 地址，通常无需修改`;
       modelHint.textContent = `推荐模型: ${provider.models.join(', ')}`;
@@ -216,6 +227,7 @@
     if (url.includes('deepseek')) return 'deepseek';
     if (url.includes('dashscope') || url.includes('aliyun')) return 'qwen';
     if (url.includes('openai.com')) return 'openai';
+    if (url.includes('newapi') || url.includes('new-api') || url.includes('one-api')) return 'newapi';
     if (url.includes('moonshot')) return 'moonshot';
     if (url.includes('bigmodel') || url.includes('zhipu')) return 'zhipu';
     if (url.includes('ollama') || url.includes('localhost:11434')) return 'ollama';

@@ -15,7 +15,7 @@ class RegularUser(HttpUser):
     Workflow: login -> browse clusters, view connections, check toolbox.
     """
     wait_time = between(1, 3)  # 1-3s think time between requests
-    host = "http://127.0.0.1:5001"
+    host = "http://127.0.0.1:5005"
 
     def on_start(self):
         """Login at session start. Flask-login sets a session cookie
@@ -78,7 +78,7 @@ class AdminUser(HttpUser):
     """
     wait_time = between(2, 5)  # longer think time
     weight = 1                  # 1 admin per 10 regular users
-    host = "http://127.0.0.1:5001"
+    host = "http://127.0.0.1:5005"
 
     def on_start(self):
         with self.client.post(

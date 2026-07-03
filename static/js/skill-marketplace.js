@@ -27,7 +27,11 @@ function switchMarketTab(tab) {
         document.getElementById(t).style.display = t === 'tab-' + tab ? 'block' : 'none';
     });
     document.querySelectorAll('.mkt-tab').forEach(function (el) {
-        el.classList.toggle('active', el.dataset.tab === tab);
+        var active = el.dataset.tab === tab;
+        el.classList.toggle('active', active);
+        el.classList.toggle('ab-p', active);
+        el.classList.toggle('ab-g', !active);
+        el.setAttribute('aria-selected', active ? 'true' : 'false');
     });
     if (tab === 'sources') loadSources();
     if (tab === 'browse') loadBrowse();
@@ -39,6 +43,49 @@ function esc(s) {
     var d = document.createElement('div');
     d.appendChild(document.createTextNode(String(s)));
     return d.innerHTML;
+}
+function jsArg(s) {
+    return String(s == null ? '' : s).replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+function mktText(v, fallback) {
+    return v == null || v === '' ? (fallback || '—') : v;
+}
+function mktCategoryName(s) {
+    var catLabel = { quick: '快速诊断', tool: '工具', scenario: '场景方案', ai: '智能诊断' };
+    return s.display_category || catLabel[s.category] || s.category || '未分类';
+}
+function mktTypeName(s) {
+    return s.entry_type === 'command' ? 'Command' : 'Skill';
+}
+function renderMarketSkillGrid(skills) {
+    return '<div class="mkt-skill-grid">' + skills.map(function (s) {
+        var version = mktText(s.version, '1.0.0');
+        var source = mktText(s.source_name);
+        var path = mktText(s.path);
+        var statusHtml = '';
+        var actionHtml = '';
+        if (s.installed) {
+            if (s.latest) {
+                statusHtml = '<span class="badge bg-testing mkt-status">可更新 v' + esc(s.current || version) + ' → v' + esc(s.latest) + '</span>';
+                actionHtml = '<button class="ab ab-w ab-sm" onclick="updateMarketSkill(' + s.skill_id + ')">更新</button>' +
+                    ' <button class="ab ab-g ab-sm" onclick="mktToast(\'编辑功能请在本地技能面板操作\',\'info\')">编辑</button>';
+            } else {
+                statusHtml = '<span class="badge bg-published mkt-status">已安装 v' + esc(version) + '</span>';
+                actionHtml = '<button class="ab ab-g ab-sm" onclick="mktToast(\'编辑功能请在本地技能面板操作\',\'info\')">编辑</button>';
+            }
+        } else {
+            statusHtml = '<span class="badge bg-draft mkt-status">未安装</span>';
+            actionHtml = '<button class="ab ab-p ab-sm" onclick="installSkill(' + s.source_id + ',\'' + jsArg(s.name) + '\')">安装</button>';
+        }
+        return '<div class="mkt-skill-card">' +
+            '<div class="mkt-card-top"><div class="mkt-card-name">' + esc(s.name || '—') + '</div>' + statusHtml + '</div>' +
+            '<div class="mkt-card-meta"><span class="badge bg-cat">' + esc(mktCategoryName(s)) + '</span><span>v' + esc(version) + '</span><span>' + esc(mktTypeName(s)) + '</span></div>' +
+            '<div class="mkt-card-desc">' + esc((s.description || '暂无描述').substring(0, 140)) + '</div>' +
+            '<div class="mkt-card-kv"><span>来源</span><b>' + esc(source) + '</b></div>' +
+            '<div class="mkt-card-kv"><span>路径</span><b title="' + esc(path) + '">' + esc(path) + '</b></div>' +
+            '<div class="actions mkt-card-actions">' + actionHtml + '</div>' +
+            '</div>';
+    }).join('') + '</div>';
 }
 function showMktErr(id, msg) { var el = document.getElementById(id); if (el) { el.textContent = msg; el.classList.add('show'); } }
 
@@ -203,6 +250,9 @@ async function loadBrowse() {
             container.innerHTML = '<div class="empty-msg">暂无可用技能，请先添加并同步市场源</div>';
             return;
         }
+
+        container.innerHTML = renderMarketSkillGrid(skills);
+        return;
 
         var catLabel = { quick: '快速诊断', tool: '工具', scenario: '场景方案', ai: '智能诊断' };
 

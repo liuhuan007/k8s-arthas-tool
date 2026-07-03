@@ -52,7 +52,7 @@ VALID_TRANSITIONS: Dict[ConnectionState, set] = {
     ConnectionState.RETRY_PING: {ConnectionState.READY, ConnectionState.FAILED},
     # Recovery transitions
     ConnectionState.FAILED: {ConnectionState.POD_SELECTED},
-    ConnectionState.DISCONNECTED: {ConnectionState.POD_SELECTED},
+    ConnectionState.DISCONNECTED: {ConnectionState.POD_SELECTED, ConnectionState.READY},
 }
 
 # Global transitions allowed from any state

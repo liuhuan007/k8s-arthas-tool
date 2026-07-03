@@ -68,6 +68,17 @@
         .bg-testing{background:rgba(251,191,36,.12);color:#fbbf24;border:1px solid rgba(251,191,36,.25)}
         .bg-archived{background:rgba(248,113,113,.12);color:var(--a5);border:1px solid rgba(248,113,113,.25)}
         .bg-cat{background:rgba(167,139,250,.12);color:var(--a2);border:1px solid rgba(167,139,250,.25)}
+        .mkt-skill-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:12px}
+        .mkt-skill-card{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;padding:14px;min-height:156px;display:flex;flex-direction:column;gap:9px}
+        .mkt-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+        .mkt-card-name{font-size:13px;font-weight:700;color:var(--tx);line-height:1.35;word-break:break-word}
+        .mkt-status{font-size:10px;white-space:nowrap;flex-shrink:0}
+        .mkt-card-meta{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:10px;color:var(--tx3)}
+        .mkt-card-meta span:not(.badge){border:1px solid var(--ln);border-radius:999px;padding:2px 7px;background:rgba(255,255,255,.03)}
+        .mkt-card-desc{font-size:11px;color:var(--tx2);line-height:1.55;min-height:34px}
+        .mkt-card-kv{display:grid;grid-template-columns:42px minmax(0,1fr);gap:8px;font-size:10px;align-items:center;color:var(--tx3)}
+        .mkt-card-kv b{font-weight:500;color:var(--tx2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+        .mkt-card-actions{margin-top:auto}
 
         /* ── Modal ── */
         .modal-bg{position:fixed;inset:0;background:rgba(11,15,24,.88);display:none;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(4px)}
@@ -174,7 +185,9 @@
 
             <!-- Filters -->
             <div class="filter-bar">
-                <input class="fi search-input" id="searchInput" placeholder="搜索 Skill 名称/描述..." onkeyup="onSearchKeyup(event)">
+                <form action="#" autocomplete="off" style="display:contents" onsubmit="return false">
+                    <input type="search" class="fi search-input" id="searchInput" name="" placeholder="搜索 Skill 名称/描述..." inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" onkeyup="onSearchKeyup(event)">
+                </form>
                 <select class="fs" id="filterCategory" onchange="loadSkills()">
                     <option value="">所有分类</option>
                     <option value="quick">快速诊断</option>
@@ -245,7 +258,9 @@
             <!-- 浏览技能 -->
             <div id="tab-browse" style="display:none">
                 <div style="display:flex;gap:8px;margin-bottom:12px;align-items:center;flex-wrap:wrap">
-                    <input class="fi" id="browseSearch" placeholder="搜索技能名称/描述..." style="max-width:240px" onkeyup="if(event.key==='Enter')loadBrowse()">
+                    <form action="#" autocomplete="off" style="display:contents" onsubmit="return false">
+                        <input type="search" class="fi" id="browseSearch" name="" placeholder="搜索技能名称/描述..." style="max-width:240px" inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" onkeyup="if(event.key==='Enter')loadBrowse()">
+                    </form>
                     <select class="fs" id="browseCategory" onchange="loadBrowse()" style="width:130px">
                         <option value="">全部分类</option>
                         <option value="quick">快速诊断</option>
@@ -388,6 +403,38 @@
         document.getElementById('tabBtnMarket').className = tab === 'market' ? 'ab ab-p ab-sm' : 'ab ab-g ab-sm';
         if (tab === 'market') switchMarketTab('sources');
     }
+
+    function hardenSkillSearchInputs() {
+        document.querySelectorAll('input[type=search][data-form-type="other"]').forEach(input => {
+            if (input.dataset.noAutofillReady) return;
+            input.dataset.noAutofillReady = '1';
+            input.setAttribute('autocomplete', 'off');
+            input.setAttribute('autocorrect', 'off');
+            input.setAttribute('autocapitalize', 'off');
+            input.setAttribute('spellcheck', 'false');
+            input.setAttribute('data-lpignore', 'true');
+            input.setAttribute('data-1p-ignore', 'true');
+            input.setAttribute('data-bwignore', 'true');
+            input.setAttribute('data-form-type', 'other');
+            input.removeAttribute('name');
+            const clearIfUnexpected = () => {
+                const value = (input.value || '').trim().toLowerCase();
+                if (value === 'admin' || value === 'administrator' || value.includes('@')) {
+                    input.value = '';
+                }
+            };
+            input.readOnly = true;
+            let ready = false;
+            const enable = () => { if (!ready) { ready = true; input.readOnly = false; } };
+            const guard = setInterval(() => { clearIfUnexpected(); if (ready) clearInterval(guard); }, 200);
+            setTimeout(enable, 3000);
+            input.addEventListener('focus', enable, { once: true });
+            input.addEventListener('mousedown', enable, { once: true });
+            input.addEventListener('touchstart', enable, { once: true });
+            clearIfUnexpected();
+        });
+    }
+    document.addEventListener('DOMContentLoaded', hardenSkillSearchInputs);
 
     (async function() {
       try {

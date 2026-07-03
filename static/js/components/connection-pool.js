@@ -6,6 +6,7 @@
 
 const ConnectionPool = (function() {
   'use strict';
+  let addViewOpen = false;
 
   function init() {
     render();
@@ -350,12 +351,12 @@ const ConnectionPool = (function() {
     if (c.state === 'connecting') return '连接中';
     if (c.state === 'disconnected') return '未连';
     if (c.state === 'dead') return '✕ 失效';
-    if (c.health === 'warn') return '⚠ 弱';
+    if (c.health === 'warn') return '⚠ 不稳';
     return c.level === 'arthas' ? 'Arthas' : 'Pod';
   }
 
   function getHealthText(c) {
-    const map = { ok: '✅ 健康', warn: '⚠ 响应缓慢', err: '✕ 失效', off: '未连接' };
+    const map = { ok: '✅ 健康', warn: '⚠ 连接不稳定', err: '✕ 失效', off: '未连接' };
     const timeAgo = c.lastHb ? Math.round((Date.now() - c.lastHb) / 1000) + 's前' : '';
     return `${map[c.health] || '未知'}${timeAgo ? ' · ' + timeAgo : ''}`;
   }
@@ -363,6 +364,7 @@ const ConnectionPool = (function() {
   // ── 视图切换 ──────────────────────────────────────────────────
 
   function showAddView() {
+    addViewOpen = true;
     const empty = document.getElementById('wsEmpty');
     const content = document.getElementById('wsContent');
     const addView = document.getElementById('addConnView');
@@ -379,10 +381,15 @@ const ConnectionPool = (function() {
   }
 
   function hideAddView() {
-    document.getElementById('addConnView').style.display = 'none';
+    addViewOpen = false;
+    const addView = document.getElementById('addConnView');
+    if (addView) addView.style.display = 'none';
     const focusId = ConnectionStore.getFocusId();
     if (focusId) {
       document.getElementById('wsContent').style.display = 'flex';
+      if (typeof ConnectionWorkspace !== 'undefined' && typeof ConnectionWorkspace.render === 'function') {
+        ConnectionWorkspace.render();
+      }
     } else {
       document.getElementById('wsEmpty').style.display = 'flex';
     }
@@ -391,8 +398,13 @@ const ConnectionPool = (function() {
   // ── 操作 ──────────────────────────────────────────────────────
 
   function focus(id) {
+    if (addViewOpen) hideAddView();
     ConnectionStore.setFocus(id);
     if (typeof ConnectionWorkspace !== 'undefined') ConnectionWorkspace.render();
+  }
+
+  function isAddViewOpen() {
+    return addViewOpen;
   }
 
   function toggleDetail(id) {
@@ -446,12 +458,20 @@ const ConnectionPool = (function() {
       const d = await r.json();
       if (!d.ok) throw new Error(d.error || '连接失败');
 
-      const pid = d.runtime?.processes?.[0]?.pid;
-      ConnectionStore.updateConnection(id, {
-        state: 'connected', level: 'pod', health: 'ok', lastHb: Date.now(),
-        runtime: d.runtime, pid: pid, pod_conn_id: d.connection_id,
-      });
-      focus(id);
+      const realId = d.connection_id || id;
+      const pid = d.runtime?.processes?.[0]?.pid || d.runtime?.pid || d.runtime?.java_pid;
+      const connectionData = {
+        id: realId, cluster, cluster_name: cluster, namespace, pod, pod_name: pod, container, container_name: container,
+        state: 'connected', status: 'pod_connected', level: 'pod', health: 'ok', lastHb: Date.now(),
+        runtime: d.runtime, pid: pid, pod_conn_id: realId, connection_id: realId,
+      };
+      if (realId !== id) {
+        ConnectionStore.removeConnection(id);
+        ConnectionStore.addConnection(connectionData);
+      } else {
+        ConnectionStore.updateConnection(id, connectionData);
+      }
+      focus(realId);
       hideAddView();
       toast(`Pod 连接成功 (${d.runtime?.runtime_type || 'unknown'})`, 'success');
     } catch (e) {
@@ -474,30 +494,53 @@ const ConnectionPool = (function() {
     });
   }
 
+  function confirmDeletePersistent(id) {
+    const c = ConnectionStore.getConnection(id);
+    const vm = normalizeConnection(c);
+    const name = vm.shortName || id;
+    showConfirm('删除连接', `删除 ${name}？\n\n该操作会从连接池永久移除，刷新后不会恢复。`, async () => {
+      try {
+        await deletePersistedConnection(id);
+        ConnectionStore.removeConnection(id);
+        toast('已删除', 'success');
+      } catch (e) {
+        toast(`删除失败: ${e.message}`, 'error');
+      }
+    });
+  }
+
+  async function deletePersistedConnection(id) {
+    const r = await fetch(`${API}/connections/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    let d = {};
+    try { d = await r.json(); } catch (_) {}
+    if (!r.ok || (d.code && d.code >= 400) || d.ok === false) {
+      throw new Error(d.message || d.error || `HTTP ${r.status}`);
+    }
+  }
+
   async function reconnect(id) {
     const c = ConnectionStore.getConnection(id);
     if (!c) return;
     const vm = normalizeConnection(c);
-    ConnectionStore.updateConnection(id, { state: 'connecting', health: 'warn' });
     try {
-      const r = await fetch(`${API}/pod/connect`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ cluster_name: vm.cluster, namespace: vm.namespace, pod_name: vm.pod, container: vm.container })
-      });
-      const d = await r.json();
-      if (!d.ok) throw new Error(d.error || '重连失败');
-      const pid = d.runtime?.processes?.[0]?.pid;
-      ConnectionStore.updateConnection(id, {
-        state: 'connected', level: 'pod', health: 'ok', lastHb: Date.now(),
-        runtime: d.runtime, pid: pid, pod_conn_id: d.connection_id,
-      });
-      focus(id);
+      if (typeof window.reconnectConnectionById !== 'function') {
+        throw new Error('共享重连入口不可用');
+      }
+      const result = await window.reconnectConnectionById(id, { source: 'connection-pool' });
+      focus(result?.connectionId || id);
       hideAddView();
-      toast('已重连', 'success');
+      if (result && result.partial) return result;
+      return result;
     } catch (e) {
-      ConnectionStore.updateConnection(id, { state: 'disconnected', health: 'off' });
+      ConnectionStore.updateConnection(id, { state: 'disconnected', level: 'disconnected', health: 'off' });
+      if (typeof showPodError === 'function') {
+        showPodError(e.message, {
+          details: `${vm.cluster}/${vm.namespace}/${vm.pod}`,
+        });
+      }
       toast(`重连失败: ${e.message}`, 'error');
     }
   }
@@ -541,26 +584,25 @@ const ConnectionPool = (function() {
 
   async function upgradeArthas(id) {
     const c = ConnectionStore.getConnection(id);
-    if (!c) return;
-    ConnectionStore.updateConnection(id, { state: 'connecting' });
-    toast('启动 Arthas...', 'info');
+    const vm = normalizeConnection(c);
     try {
-      const r = await fetch(`${API}/pod/upgrade-to-arthas`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify({ connection_id: c.pod_conn_id || c.id })
-      });
-      const d = await r.json();
-      if (!d.ok) throw new Error(d.error || 'Arthas 启动失败');
-      ConnectionStore.updateConnection(id, {
-        level: 'arthas', state: 'connected', health: 'ok',
-        arthas: { port: d.local_port || 8563, version: d.arthas_version || '3.7.1' }
-      });
-      toast(`Arthas 就绪 (${d.arthas_version || ''})`, 'success');
+      if (typeof window.upgradeConnectionById !== 'function') {
+        throw new Error('共享 Arthas 升级入口不可用');
+      }
+      ConnectionStore.updateConnection(id, { state: 'connecting', health: 'warn' });
+      toast('正在启动 Arthas 诊断环境...', 'info');
+      const result = await window.upgradeConnectionById(id, { source: 'connection-pool' });
+      focus(result?.connectionId || id);
+      return result;
     } catch (e) {
-      ConnectionStore.updateConnection(id, { state: 'connected', level: 'pod' });
-      toast(`Arthas 启动失败: ${e.message}`, 'error');
+      console.error('[Pool] upgradeArthas error:', e);
+      ConnectionStore.updateConnection(id, { state: 'connected', level: 'pod', health: 'ok' });
+      if (typeof showArthasError === 'function') {
+        showArthasError(e.message, { details: `${vm.cluster}/${vm.namespace}/${vm.pod}` });
+      } else {
+        toast(`启动 Arthas 失败: ${e.message}`, 'error');
+      }
+      return { ok: false, error: e.message };
     }
   }
 
@@ -594,9 +636,9 @@ const ConnectionPool = (function() {
 
   return {
     init, render, focus, toggleDetail, toggleGroup, filterPool,
-    addNewConnection, confirmDelete, reconnect, disconnect, upgradeArthas,
+    addNewConnection, confirmDelete: confirmDeletePersistent, reconnect, disconnect, upgradeArthas,
     stopArthas, toggleAutoReconnect, loadPods, loadClusters,
-    showAddView, hideAddView, cancelAdd: hideAddView, hardenSearchInput,
+    showAddView, hideAddView, cancelAdd: hideAddView, hardenSearchInput, isAddViewOpen,
   };
 })();
 

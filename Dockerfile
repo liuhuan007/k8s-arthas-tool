@@ -27,13 +27,13 @@ COPY rbac.yaml ./
 RUN mkdir -p profiler_output
 
 ENV ARTHAS_HOST=0.0.0.0
-ENV ARTHAS_PORT=5001
+ENV ARTHAS_PORT=5005
 
-EXPOSE 5001
+EXPOSE 5005
 
 # 健康检查
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-    CMD curl -f http://localhost:5001/api/health || exit 1
+    CMD curl -f http://localhost:5005/api/health || exit 1
 
 # 服务端同时 serve 静态文件
 CMD python server.py --host ${ARTHAS_HOST} --port ${ARTHAS_PORT}

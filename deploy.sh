@@ -3,7 +3,7 @@
 # Arthas K8s 诊断台 — 主部署脚本
 #
 # 用法:
-#   ./deploy.sh                              # 前台运行，默认 127.0.0.1:5001
+#   ./deploy.sh                              # 前台运行，默认 127.0.0.1:5005
 #   ./deploy.sh --host 0.0.0.0              # 监听所有网卡（跳板机场景）
 #   ./deploy.sh --port 8080                 # 自定义端口
 #   ./deploy.sh --daemon                    # 后台运行（nohup）
@@ -22,7 +22,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 APP_NAME="arthas-k8s-tool"
 DEFAULT_HOST="127.0.0.1"
-DEFAULT_PORT="5001"
+DEFAULT_PORT="5005"
 LOG_FILE="${SCRIPT_DIR}/arthas-tool.log"
 PID_FILE="${SCRIPT_DIR}/arthas-tool.pid"
 SERVICE_FILE="/etc/systemd/system/arthas-tool.service"
@@ -70,7 +70,7 @@ while [[ $# -gt 0 ]]; do
       echo "用法: $0 [选项]"
       echo ""
       echo "  --host <IP>                  监听地址（默认 127.0.0.1）"
-      echo "  --port <PORT>                监听端口（默认 5001）"
+      echo "  --port <PORT>                监听端口（默认 5005）"
       echo "  --daemon, -d                 后台运行（nohup）"
       echo "  --systemd                    安装为 systemd 服务（需 root）"
       echo "  --stop                       停止后台实例"

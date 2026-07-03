@@ -50,7 +50,10 @@ def _check_conn_owner(conn_id: str) -> bool:
     if current_user.is_admin:
         return True
     pool_conn = _pool.get(conn_id)
-    return pool_conn and pool_conn.user_id == current_user.id
+    if pool_conn:
+        return pool_conn.user_id == current_user.id
+    row = _db.fetch_one('SELECT user_id FROM connections WHERE id = ?', (conn_id,))
+    return row is not None and row.get('user_id') == current_user.id
 
 
 # ── 连接池操作 ──────────────────────────────────────────────────────────────
@@ -226,12 +229,11 @@ def pool_remove(conn_id):
         return jsonify({"error": "无权操作此连接"}), 403
     
     conn = unregister_connection(conn_id)
-    if conn is None:
+    deleted = _db.delete('connections', 'id = ?', (conn_id,))
+    if conn is None and deleted == 0:
         return jsonify({"error": "连接不存在"}), 404
     
     # 从数据库删除
-    _db.delete('connections', 'id = ?', (conn_id,))
-    
     # 审计日志
     parts = conn_id.split('/')
     if len(parts) >= 3:

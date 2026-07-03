@@ -62,6 +62,7 @@ function getCurrentConnection() {
  * 优先使用显式 level 字段，否则根据元数据推断
  */
 function inferConnLevel(conn) {
+  if (!conn) return 'pod';
   if (conn.level) return conn.level;
   // 有 Arthas 元数据 → arthas
   if (conn.local_port || conn.arthas_version || conn.java_pid) return 'arthas';
@@ -193,19 +194,31 @@ function removeConnection(connId) {
 /**
  * 从连接列表中触发升级到 Arthas
  */
-function upgradeConnectionFromList(connId) {
+async function upgradeConnectionFromList(connId) {
   const conn = (window._connections || []).find(c => c.id === connId);
-  if (!conn) return;
-  
-  // 先切换到这个连接
-  switchConnection(connId);
-  
-  // 然后触发 Arthas 升级
-  setTimeout(() => {
-    if (typeof upgradeToArthas === 'function') {
-      upgradeToArthas();
+  if (!conn) {
+    toast('连接不存在', 'warn');
+    return false;
+  }
+
+  try {
+    if (typeof window.upgradeConnectionById === 'function') {
+      await window.upgradeConnectionById(connId, { source: 'legacy-connection-list' });
+      return true;
     }
-  }, 300);
+
+    await switchConnection(connId);
+    if (typeof upgradeToArthas === 'function') {
+      return upgradeToArthas();
+    }
+    throw new Error('Arthas 升级入口不可用');
+  } catch (e) {
+    console.error('[connections] upgradeConnectionFromList error:', e);
+    if (typeof window.upgradeConnectionById !== 'function') {
+      toast(`启动 Arthas 失败: ${e.message}`, 'error');
+    }
+    return false;
+  }
 }
 
 async function deleteConnection(connId) {
@@ -222,6 +235,22 @@ async function deleteConnection(connId) {
   if (window._currentConnId === connId) {
     await stopPoll();
     window._currentConnId = null;
+  }
+
+  try {
+    const apiBase = window.API || '/api';
+    const resp = await fetch(`${apiBase}/connections/${encodeURIComponent(connId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    let data = {};
+    try { data = await resp.json(); } catch (_) {}
+    if (!resp.ok || (data.code && data.code >= 400) || data.ok === false) {
+      throw new Error(data.message || data.error || `HTTP ${resp.status}`);
+    }
+  } catch (e) {
+    toast(`删除失败: ${e.message}`, 'error');
+    return;
   }
 
   removeConnection(connId);

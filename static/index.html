@@ -282,31 +282,36 @@ document.addEventListener('DOMContentLoaded', function() {
       <div class="ws-body" id="wsBody" role="tabpanel"></div>
     </div>
     <!-- 新建连接面板（工作区右侧显示） -->
-    <div id="addConnView" style="display:none;flex:1;flex-direction:column;overflow-y:auto;padding:20px">
-      <h2 style="font-family:var(--sans);font-size:18px;margin-bottom:16px;color:var(--tx)">🔌 新建连接</h2>
-      <div style="display:flex;gap:16px;flex-wrap:wrap">
-        <div style="flex:1;min-width:280px">
-          <div style="margin-bottom:12px">
-            <label style="display:block;font-size:11px;color:var(--tx3);margin-bottom:4px">集群</label>
-            <select id="poolSelCluster" style="width:100%;padding:8px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-size:13px"><option value="">选择集群...</option></select>
-          </div>
-          <div style="margin-bottom:12px">
-            <label style="display:block;font-size:11px;color:var(--tx3);margin-bottom:4px">命名空间</label>
-            <select id="poolSelNs" style="width:100%;padding:8px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-size:13px"><option value="">选择命名空间...</option></select>
-          </div>
-          <div style="margin-bottom:16px">
-            <label style="display:block;font-size:11px;color:var(--tx3);margin-bottom:4px">Pod</label>
-            <select id="poolSelPod" size="12" style="width:100%;padding:8px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-size:13px"><option value="">选择 Pod...</option></select>
-          </div>
-          <div style="display:flex;gap:8px">
-            <button class="pool-add-confirm" id="poolAddConfirm" onclick="ConnectionPool.addNewConnection()" style="flex:1;padding:10px;font-size:13px">🔌 连接</button>
-            <button onclick="ConnectionPool.cancelAdd()" style="padding:10px 16px;background:var(--bg2);color:var(--tx2);border:1px solid var(--ln);border-radius:4px;font-size:13px;cursor:pointer">取消</button>
-          </div>
+    <div id="addConnView" class="add-conn-view">
+      <div class="add-conn-head">
+        <div>
+          <div class="add-conn-kicker">Connection Builder</div>
+          <h2 class="add-conn-title">🔌 新建连接</h2>
         </div>
-        <div style="flex:1;min-width:280px;background:var(--bg1);border:1px solid var(--ln);border-radius:8px;padding:16px">
-          <h3 style="font-size:13px;color:var(--tx2);margin-bottom:8px">连接预览</h3>
-          <div id="addConnPreview" style="font-size:12px;color:var(--tx3)">选择集群和命名空间后，Pod 列表将在此显示</div>
-        </div>
+      </div>
+      <div class="add-conn-grid">
+        <section class="add-conn-card add-conn-form">
+          <div class="add-conn-field">
+            <label class="add-conn-label">集群</label>
+            <select id="poolSelCluster" class="add-conn-select"><option value="">选择集群...</option></select>
+          </div>
+          <div class="add-conn-field">
+            <label class="add-conn-label">命名空间</label>
+            <select id="poolSelNs" class="add-conn-select"><option value="">选择命名空间...</option></select>
+          </div>
+          <div class="add-conn-field add-conn-field-pod">
+            <label class="add-conn-label">Pod</label>
+            <select id="poolSelPod" class="add-conn-select add-conn-pod-list" size="12"><option value="">选择 Pod...</option></select>
+          </div>
+          <div class="add-conn-actions">
+            <button class="pool-add-confirm add-conn-primary" id="poolAddConfirm" onclick="ConnectionPool.addNewConnection()">🔌 连接</button>
+            <button class="add-conn-secondary" onclick="ConnectionPool.cancelAdd()">取消</button>
+          </div>
+        </section>
+        <aside class="add-conn-card add-conn-preview-card">
+          <h3 class="add-conn-preview-title">连接预览</h3>
+          <div id="addConnPreview" class="add-conn-preview-body">选择集群和命名空间后，Pod 列表将在此显示</div>
+        </aside>
       </div>
     </div>
   </div>
@@ -971,7 +976,7 @@ document.addEventListener('DOMContentLoaded', function() {
             <div class="cp-title">🎯 命令面板</div>
             <div class="cp-cst" id="cpSt"></div>
           </div>
-          <div class="cp-search"><input id="cmdSearch" placeholder="搜索命令..." oninput="filterCmds(this.value)" autocomplete="new-password"></div>
+          <div class="cp-search"><form action="#" autocomplete="off" style="display:contents" onsubmit="return false"><input id="cmdSearch" type="search" name="" placeholder="搜索命令..." oninput="filterCmds(this.value)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" inputmode="search" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" readonly onfocus="this.removeAttribute('readonly')"></form></div>
           <div class="cp-cats" id="cmdPal"></div>
         </div>
         <div class="ac-right">
@@ -992,7 +997,7 @@ document.addEventListener('DOMContentLoaded', function() {
           </div>
           <div class="con-inw">
             <div class="cin-row">
-              <div class="cin-ta"><textarea id="cmdTa" rows="1" placeholder="输入 Arthas 命令...  Enter=执行  Shift+Enter=换行  ↑↓=历史" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea></div>
+              <div class="cin-ta"><textarea id="cmdTa" rows="1" name="" placeholder="输入 Arthas 命令...  Enter=执行  Shift+Enter=换行  ↑↓=历史" onkeydown="handleKey(event)" oninput="autoResize(this)" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other"></textarea></div>
               <button class="cin-run" id="runBtn" onclick="runCmd()" disabled>执行 ▶</button>
             </div>
           </div>
@@ -1090,7 +1095,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <!-- 顶部工具栏 -->
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--ln)">
             <div class="sec-lbl" style="margin-bottom:0">采样工具</div>
-            <button class="btn btn-g" onclick="switchTab('history')" style="padding:5px 12px;font-size:11px;display:flex;align-items:center;gap:5px" title="查看历史采样记录和下载文件">
+            <button class="btn btn-g" onclick="openSamplingHistory()" style="padding:5px 12px;font-size:11px;display:flex;align-items:center;gap:5px" title="查看历史采样记录和下载文件">
               <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
               采样历史
             </button>
@@ -1457,8 +1462,11 @@ document.addEventListener('DOMContentLoaded', function() {
             <span class="ps1-user" id="termUser">root</span><span class="ps1-at">@</span><span class="ps1-host" id="termHostP">pod</span><span class="ps1-sep">:</span><span class="ps1-path" id="termCwdP">~</span><span class="ps1-sym"> # </span>
           </span>
           <input class="xterm-input" id="termInput"
+            type="text" name=""
             onkeydown="termKeyDown(event)"
-            autocomplete="new-password" autocorrect="off" autocapitalize="off" spellcheck="false">
+            autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+            inputmode="text" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other"
+            readonly onfocus="this.removeAttribute('readonly')">
           <div class="xterm-spin" id="termSpin" style="display:none"></div>
         </div>
       </div>
@@ -1513,76 +1521,33 @@ document.addEventListener('DOMContentLoaded', function() {
     <div class="panel" id="panel-diag">
       <div class="diag-wrap">
         <div class="diag-cfg">
-          <div class="sec-lbl">诊断场景</div>
-          <div class="diag-scenes">
-            <!-- 系统诊断场景（Pod 级即可用） -->
-            <div class="diag-sc on" id="ds-system" onclick="diagSelectScene('system')">
-              <div class="diag-sc-icon">&#128187;</div>
-              <div class="diag-sc-text">
-                <div class="diag-sc-title">系统诊断</div>
-                <div class="diag-sc-desc">CPU/内存/磁盘/网络/进程，无需 Arthas</div>
-              </div>
-            </div>
-            <!-- 以下为 JVM 场景，需 Arthas 连接 -->
-            <div class="diag-sc" id="ds-general" onclick="diagSelectScene('general')" style="display:none">
-              <div class="diag-sc-icon">&#128269;</div>
-              <div class="diag-sc-text">
-                <div class="diag-sc-title">通用诊断</div>
-                <div class="diag-sc-desc">全面扫描 CPU/内存/线程/JVM 基线</div>
-              </div>
-            </div>
-            <div class="diag-sc" id="ds-method_slow" onclick="diagSelectScene('method_slow')" style="display:none">
-              <div class="diag-sc-icon">&#9201;</div>
-              <div class="diag-sc-text">
-                <div class="diag-sc-title">方法慢</div>
-                <div class="diag-sc-desc">trace 追踪，定位慢方法根因</div>
-              </div>
-            </div>
-            <div class="diag-sc" id="ds-thread_block" onclick="diagSelectScene('thread_block')" style="display:none">
-              <div class="diag-sc-icon">&#128274;</div>
-              <div class="diag-sc-text">
-                <div class="diag-sc-title">线程阻塞</div>
-                <div class="diag-sc-desc">线程快照 + 死锁检测</div>
-              </div>
-            </div>
-            <div class="diag-sc" id="ds-oom" onclick="diagSelectScene('oom')" style="display:none">
-              <div class="diag-sc-icon">&#128190;</div>
-              <div class="diag-sc-text">
-                <div class="diag-sc-title">内存/OOM</div>
-                <div class="diag-sc-desc">堆内存分析，触发 heapdump</div>
-              </div>
-            </div>
-          </div>
-          <!-- 连接层级提示 -->
-          <div id="diagLevelHint" class="diag-level-hint" style="display:none"></div>
-          <div class="divider" style="margin:12px 0"></div>
           <div class="sec-lbl">快速工具</div>
           <div style="display:flex;flex-direction:column;gap:6px">
             <!-- Pod 级快捷工具（Pod 连接即可用） -->
             <button class="diag-tool-btn" onclick="diagQuickTool('sys_cpu')" id="diagBtnSys_cpu">
-              <span>&#128187;</span><span>CPU 概览</span><span class="diag-tool-hint">负载/核数</span>
+              <span>&#128187;</span><span>CPU 概览</span><span class="diag-tool-hint">负载/核数</span><span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunTool(event,'sys_cpu')">执行</span>
             </button>
             <button class="diag-tool-btn" onclick="diagQuickTool('sys_mem')" id="diagBtnSys_mem">
-              <span>&#128230;</span><span>内存概览</span><span class="diag-tool-hint">使用率/可用</span>
+              <span>&#128230;</span><span>内存概览</span><span class="diag-tool-hint">使用率/可用</span><span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunTool(event,'sys_mem')">执行</span>
             </button>
             <button class="diag-tool-btn" onclick="diagQuickTool('sys_disk')" id="diagBtnSys_disk">
-              <span>&#128190;</span><span>磁盘概览</span><span class="diag-tool-hint">分区/IO</span>
+              <span>&#128190;</span><span>磁盘概览</span><span class="diag-tool-hint">分区/IO</span><span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunTool(event,'sys_disk')">执行</span>
             </button>
             <button class="diag-tool-btn" onclick="diagQuickTool('sys_net')" id="diagBtnSys_net">
-              <span>&#127760;</span><span>网络概览</span><span class="diag-tool-hint">流量/连接</span>
+              <span>&#127760;</span><span>网络概览</span><span class="diag-tool-hint">流量/连接</span><span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunTool(event,'sys_net')">执行</span>
             </button>
             <button class="diag-tool-btn" onclick="diagQuickTool('sys_proc')" id="diagBtnSys_proc">
-              <span>&#9881;</span><span>进程列表</span><span class="diag-tool-hint">TOP 进程</span>
+              <span>&#9881;</span><span>进程列表</span><span class="diag-tool-hint">TOP 进程</span><span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunTool(event,'sys_proc')">执行</span>
             </button>
             <!-- JVM 快捷工具（需 Arthas 连接） -->
-            <button class="diag-tool-btn" onclick="diagQuickTool('dashboard')" id="diagBtnDashboard" style="display:none">
-              <span>&#128202;</span><span>JVM 快照</span><span class="diag-tool-hint">内存/CPU/GC</span>
+            <button class="diag-tool-btn" onclick="diagQuickTool('jvm')" id="diagBtnJvm" style="display:none">
+              <span>&#9749;</span><span>JVM 概览</span><span class="diag-tool-hint">运行参数/类加载</span><span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunTool(event,'jvm')">执行</span>
             </button>
             <button class="diag-tool-btn" onclick="diagQuickTool('threads')" id="diagBtnThreads" style="display:none">
-              <span>&#129534;</span><span>线程分析</span><span class="diag-tool-hint">BLOCKED/死锁</span>
+              <span>&#129534;</span><span>线程分析</span><span class="diag-tool-hint">BLOCKED/死锁</span><span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunTool(event,'threads')">执行</span>
             </button>
             <button class="diag-tool-btn" onclick="diagQuickTool('trace')" id="diagBtnTrace" style="display:none">
-              <span>&#128206;</span><span>方法追踪</span><span class="diag-tool-hint">耗时采样</span>
+              <span>&#128206;</span><span>方法追踪</span><span class="diag-tool-hint">耗时采样</span><span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunTool(event,'trace')">执行</span>
             </button>
             <!-- 追踪参数 — "方法慢"场景或"方法追踪"工具时展开 -->
             <div id="diagTraceOpts" style="display:none;margin-top:4px;padding:8px 10px;background:var(--bg);border:1px solid var(--ln);border-radius:5px" onclick="event.stopPropagation()">
@@ -1607,6 +1572,54 @@ document.addEventListener('DOMContentLoaded', function() {
               </label>
             </div>
           </div>
+          <div class="divider" style="margin:12px 0"></div>
+          <div class="sec-lbl">诊断场景</div>
+          <div class="diag-scenes">
+            <!-- 系统诊断场景（Pod 级即可用） -->
+            <div class="diag-sc on" id="ds-system" onclick="diagSelectScene('system')">
+              <div class="diag-sc-icon">&#128187;</div>
+              <div class="diag-sc-text">
+                <div class="diag-sc-title">系统诊断</div>
+                <div class="diag-sc-desc">CPU/内存/磁盘/网络/进程，无需 Arthas</div>
+              </div>
+              <span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunScene(event,'system')">执行</span>
+            </div>
+            <!-- 以下为 JVM 场景，需 Arthas 连接 -->
+            <div class="diag-sc" id="ds-general" onclick="diagSelectScene('general')" style="display:none">
+              <div class="diag-sc-icon">&#128269;</div>
+              <div class="diag-sc-text">
+                <div class="diag-sc-title">通用诊断</div>
+                <div class="diag-sc-desc">全面扫描 CPU/内存/线程/JVM 基线</div>
+              </div>
+              <span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunScene(event,'general')">执行</span>
+            </div>
+            <div class="diag-sc" id="ds-method_slow" onclick="diagSelectScene('method_slow')" style="display:none">
+              <div class="diag-sc-icon">&#9201;</div>
+              <div class="diag-sc-text">
+                <div class="diag-sc-title">方法慢</div>
+                <div class="diag-sc-desc">trace 追踪，定位慢方法根因</div>
+              </div>
+              <span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunScene(event,'method_slow')">执行</span>
+            </div>
+            <div class="diag-sc" id="ds-thread_block" onclick="diagSelectScene('thread_block')" style="display:none">
+              <div class="diag-sc-icon">&#128274;</div>
+              <div class="diag-sc-text">
+                <div class="diag-sc-title">线程阻塞</div>
+                <div class="diag-sc-desc">线程快照 + 死锁检测</div>
+              </div>
+              <span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunScene(event,'thread_block')">执行</span>
+            </div>
+            <div class="diag-sc" id="ds-oom" onclick="diagSelectScene('oom')" style="display:none">
+              <div class="diag-sc-icon">&#128190;</div>
+              <div class="diag-sc-text">
+                <div class="diag-sc-title">内存/OOM</div>
+                <div class="diag-sc-desc">堆内存分析，触发 heapdump</div>
+              </div>
+              <span class="diag-inline-action" role="button" tabindex="0" onclick="diagRunScene(event,'oom')">执行</span>
+            </div>
+          </div>
+          <!-- 连接层级提示 -->
+          <div id="diagLevelHint" class="diag-level-hint" style="display:none"></div>
           <div class="divider" style="margin:12px 0"></div>
           <button class="btn btn-p btn-w diag-start-btn" id="diagStartBtn" onclick="diagStart()">&#128268; 开始诊断</button>
           <div class="divider" style="margin:8px 0"></div>
@@ -2013,6 +2026,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <option value="deepseek">🧠 DeepSeek — V3.2 性价比高</option>
           <option value="qwen">☁️ 通义千问 — Qwen3 系列</option>
           <option value="openai">🌐 OpenAI — GPT-4o / o3</option>
+          <option value="newapi">🔁 NewAPI / OpenAI 兼容中转站</option>
           <option value="moonshot">🌙 月之暗面 — Kimi K2.5</option>
           <option value="zhipu">🔮 智谱 AI — GLM-5</option>
           <option value="ollama">🏠 Ollama (本地) — 免费本地模型</option>
@@ -2133,6 +2147,9 @@ document.addEventListener('DOMContentLoaded', function() {
   ConnectionStore.restore();
   ConnectionPool.init();
   ConnectionWorkspace.init();
+  if (typeof applyWorkspaceDeepLink === 'function') {
+    applyWorkspaceDeepLink();
+  }
   document.querySelectorAll('input[type=search][data-form-type="other"]').forEach(function(input) {
     if (window.ConnectionPool && typeof ConnectionPool.hardenSearchInput === 'function') {
       ConnectionPool.hardenSearchInput(input);

@@ -84,7 +84,11 @@ const ConnectionWorkspace = (function() {
 
   function syncLegacyTarget(c, vm) {
     if (!vm || !vm.id) return;
-    const connState = vm.level === 'arthas' ? 'arthas_ready' : (vm.state === 'connected' ? 'pod_connected' : 'disconnected');
+    const workspaceConn = c || {};
+    const workspaceVm = vm;
+    const hasPodRuntime = !!(workspaceVm.runtimeRaw || workspaceVm.podConnId || workspaceConn.runtime || workspaceConn.runtime_type);
+    const podUsable = workspaceVm.state === 'connected' || (workspaceVm.state === 'connecting' && (workspaceVm.level === 'pod' || hasPodRuntime));
+    const connState = workspaceVm.level === 'arthas' ? 'arthas_ready' : (podUsable ? 'pod_connected' : 'disconnected');
     window._connState = connState;
     if (typeof ConnectionStore !== 'undefined' && ConnectionStore.getState && ConnectionStore.setState) {
       const st = ConnectionStore.getState();
@@ -147,10 +151,19 @@ const ConnectionWorkspace = (function() {
   }
 
   function render() {
+    if (window.ConnectionPool && typeof ConnectionPool.isAddViewOpen === 'function' && ConnectionPool.isAddViewOpen()) {
+      if (typeof window.clearWorkspaceHistoryHost === 'function') window.clearWorkspaceHistoryHost();
+      const emptyEl = document.getElementById('wsEmpty');
+      const contentEl = document.getElementById('wsContent');
+      if (emptyEl) emptyEl.style.display = 'none';
+      if (contentEl) contentEl.style.display = 'none';
+      return;
+    }
     const focusId = ConnectionStore.getFocusId();
     const emptyEl = document.getElementById('wsEmpty');
     const contentEl = document.getElementById('wsContent');
     if (!focusId) {
+      if (typeof window.clearWorkspaceHistoryHost === 'function') window.clearWorkspaceHistoryHost();
       if (emptyEl) emptyEl.style.display = 'flex';
       if (contentEl) contentEl.style.display = 'none';
       return;
@@ -159,13 +172,22 @@ const ConnectionWorkspace = (function() {
     if (contentEl) contentEl.style.display = 'flex';
 
     const conn = ConnectionStore.getFocusConnection();
-    if (!conn) return;
+    if (!conn) {
+      if (typeof window.clearWorkspaceHistoryHost === 'function') window.clearWorkspaceHistoryHost();
+      return;
+    }
 
     const vm = normalizeConnection(conn);
-    syncLegacyTarget(conn, vm);
-    renderHead(conn, vm);
-    renderTabs(conn, vm);
-    renderBody(conn, vm);
+    const resolvedTab = resolveWorkspaceTab(conn, vm);
+    const rawTab = conn.tab || 'monitor';
+    const next = resolvedTab === rawTab ? conn : { ...conn, tab: resolvedTab };
+    syncLegacyTarget(next, vm);
+    if (resolvedTab !== rawTab && next?.id) {
+      ConnectionStore.updateConnection(next.id, { tab: resolvedTab });
+    }
+    renderHead(next, vm);
+    renderTabs(next, vm, resolvedTab);
+    renderBody(next, vm, resolvedTab);
   }
 
   // ── 头部 ──────────────────────────────────────────────────────
@@ -207,10 +229,10 @@ const ConnectionWorkspace = (function() {
 
   // ── Tab 栏 ────────────────────────────────────────────────────
 
-  function renderTabs(c, vm) {
+  function getWorkspaceTabs(vm) {
     const tabs = [{ id: 'monitor', icon: '📊', label: '监控' }];
 
-    if (vm.level === 'arthas') {
+    if (vm.level === 'arthas' && vm.state === 'connected') {
       tabs.push(
         { id: 'sampling', icon: '🔥', label: '采样' },
         { id: 'console', icon: '⚡', label: 'Arthas' },
@@ -227,13 +249,31 @@ const ConnectionWorkspace = (function() {
     }
 
     tabs.push({ id: 'history', icon: '📋', label: '历史' });
+    return tabs;
+  }
+
+  function resolveWorkspaceTab(c, vm, requestedTab) {
+    // 兼容 app-ui 里的单参数调用，避免重连编排阶段 vm 尚未显式传入时直接读空对象。
+    const workspaceConn = c || {};
+    const workspaceVm = vm || normalizeConnection(workspaceConn);
+    const tab = requestedTab || workspaceConn.tab || 'monitor';
+    const arthasOnlyTabs = ['sampling', 'console', 'hotfix', 'diag'];
+    if (arthasOnlyTabs.includes(tab) && !(workspaceVm.level === 'arthas' && workspaceVm.state === 'connected')) return 'monitor';
+    if (['terminal', 'files'].includes(tab) && workspaceVm.state !== 'connected') return 'monitor';
+    const availableTabs = getWorkspaceTabs(workspaceVm).map(item => item.id);
+    return availableTabs.includes(tab) ? tab : 'monitor';
+  }
+
+  function renderTabs(c, vm, resolvedTab) {
+    const tabs = getWorkspaceTabs(vm);
+    const activeTab = resolvedTab || resolveWorkspaceTab(c, vm);
 
     const el = document.getElementById('wsTabs');
     if (el) {
       el.innerHTML = tabs.map(t =>
-        `<div class="ws-tab${t.id === (c.tab || 'monitor') ? ' active' : ''}"
+        `<div class="ws-tab${t.id === activeTab ? ' active' : ''}"
               onclick="ConnectionWorkspace.switchTab('${t.id}')"
-              role="tab" aria-selected="${t.id === (c.tab || 'monitor')}">${t.icon} ${t.label}</div>`
+              role="tab" aria-selected="${t.id === activeTab}">${t.icon} ${t.label}</div>`
       ).join('');
     }
   }
@@ -241,33 +281,97 @@ const ConnectionWorkspace = (function() {
   function switchTab(tabId) {
     const conn = ConnectionStore.getFocusConnection();
     if (conn) {
-      ConnectionStore.updateConnection(conn.id, { tab: tabId });
+      const currentVm = normalizeConnection(conn);
+      const currentTab = resolveWorkspaceTab(conn, currentVm);
+      if (tabId === 'history' && typeof window.rememberWorkspaceHistoryReturn === 'function') {
+        window.rememberWorkspaceHistoryReturn(currentTab);
+      }
       const next = { ...conn, tab: tabId };
       const vm = normalizeConnection(next);
+      const resolvedTab = resolveWorkspaceTab(next, vm, tabId);
+      ConnectionStore.updateConnection(conn.id, { tab: resolvedTab });
+      next.tab = resolvedTab;
       syncLegacyTarget(next, vm);
-      renderTabs(next, vm);
-      renderBody(next, vm);
+      renderTabs(next, vm, resolvedTab);
+      renderBody(next, vm, resolvedTab);
     }
   }
 
   // ── 内容渲染 ──────────────────────────────────────────────────
 
-  function renderBody(c, vm) {
+  function renderBody(c, vm, resolvedTab) {
     const el = document.getElementById('wsBody');
     if (!el) return;
-    const tab = c.tab || 'monitor';
+    const activeTab = resolvedTab || resolveWorkspaceTab(c, vm);
+    if (activeTab !== 'history' && typeof window.clearWorkspaceHistoryHost === 'function') {
+      window.clearWorkspaceHistoryHost();
+    }
 
-    switch (tab) {
+    switch (activeTab) {
       case 'monitor': renderMonitor(el, c, vm); break;
       case 'sampling': renderLegacyFeature(el, 'panel-profiler', 'profiler'); break;
-      case 'console': renderLegacyFeature(el, 'panel-console', 'console'); break;
+      case 'console': renderLegacyFeature(el, 'panel-console', 'console', () => {
+        if (typeof window.hardenCommandSearchAutofill === 'function') {
+          window.hardenCommandSearchAutofill();
+          setTimeout(window.hardenCommandSearchAutofill, 250);
+        }
+      }); break;
       case 'terminal': renderLegacyFeature(el, 'panel-terminal', 'terminal'); break;
       case 'files': renderLegacyFeature(el, 'panel-filebrowser', 'filebrowser'); break;
-      case 'history': renderLegacyFeature(el, 'panel-history', 'history'); break;
+      case 'history': renderWorkspaceHistory(el); break;
       case 'hotfix': renderLegacyFeature(el, 'panel-hotfix', 'hotfix'); break;
       case 'diag': renderLegacyFeature(el, 'panel-diag', 'diag'); break;
       default: renderMonitor(el, c, vm);
     }
+  }
+
+  function renderWorkspaceHistory(el) {
+    if (!el) return;
+    if (typeof window.clearWorkspaceHistoryHost === 'function') window.clearWorkspaceHistoryHost();
+    markLegacyTabActive('history');
+    if (typeof updateWorkspaceHead === 'function') updateWorkspaceHead('history');
+    if (typeof updateConnectionBarVisibility === 'function') updateConnectionBarVisibility('history');
+    if (typeof loadAdminFrameIfNeeded === 'function') loadAdminFrameIfNeeded('history');
+    el.innerHTML = `
+      <div class="ws-history-shell" data-history-host="workspace" style="flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0">
+        <div style="display:flex;align-items:center;padding:0 14px;height:40px;border-bottom:1px solid var(--ln);flex-shrink:0;background:var(--bg1);gap:8px">
+          <button class="ib" onclick="historyGoBack()" title="返回" style="display:flex;align-items:center;gap:4px;font-size:12px">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M19 12H5"/><polyline points="12 19 5 12 12 5"/></svg>
+            <span>返回</span>
+          </button>
+          <span style="font-size:13px;font-weight:600;color:var(--tx)">历史记录</span>
+          <div style="flex:1"></div>
+          <label data-history-role="filter-label" style="display:none;align-items:center;gap:5px;font-size:11px;color:var(--tx2);cursor:pointer;white-space:nowrap;user-select:none">
+            <input type="checkbox" data-history-role="filter-checkbox" onchange="toggleHistoryConnFilter()" style="accent-color:var(--a);cursor:pointer">
+            <span>仅当前连接</span>
+            <span data-history-role="filter-pod" style="color:var(--a);font-family:var(--mono);font-size:10px"></span>
+          </label>
+          <button class="ib" style="font-size:11px;display:flex;align-items:center;gap:3px" onclick="loadHistory()">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            刷新
+          </button>
+        </div>
+        <div style="display:flex;gap:0;border-bottom:1px solid var(--ln);flex-shrink:0;background:var(--bg2)">
+          <div class="pm-st on" data-history-role="tab-profiler" onclick="switchHistTab('profiler')" style="font-size:11px">
+            采样任务 <span data-history-role="count-profiler" style="background:var(--bg3);border-radius:10px;padding:1px 6px;font-size:10px">0</span>
+          </div>
+          <div class="pm-st" data-history-role="tab-files" onclick="switchHistTab('files')" style="font-size:11px">
+            下载文件 <span data-history-role="count-files" style="background:var(--bg3);border-radius:10px;padding:1px 6px;font-size:10px">0</span>
+          </div>
+        </div>
+        <div style="flex:1;overflow:hidden;display:flex;flex-direction:column;min-height:0">
+          <div data-history-role="panel-profiler" style="flex:1;min-height:0;overflow:visible"></div>
+          <div data-history-role="panel-files" style="height:100%;overflow-y:auto;padding:14px;display:none">
+            <div style="color:var(--tx3);text-align:center;padding:40px">暂无下载记录</div>
+          </div>
+        </div>
+      </div>`;
+    const host = el.querySelector('[data-history-host="workspace"]');
+    if (host && typeof window.setWorkspaceHistoryHost === 'function') {
+      window.setWorkspaceHistoryHost(host);
+    }
+    if (typeof switchHistTab === 'function') switchHistTab('profiler');
+    if (typeof loadHistory === 'function') loadHistory();
   }
 
   function renderLegacyFeature(el, panelId, tabName, afterMount) {
@@ -309,7 +413,7 @@ const ConnectionWorkspace = (function() {
     monitorSnapshotTimer = setTimeout(() => {
       const focusId = ConnectionStore.getFocusId();
       const focusConn = ConnectionStore.getFocusConnection();
-      if (focusId !== vm.id || (focusConn && (focusConn.tab || 'monitor') !== 'monitor')) return;
+      if (focusId !== vm.id || (focusConn && resolveWorkspaceTab(focusConn, normalizeConnection(focusConn)) !== 'monitor')) return;
       loadSnap(true);
     }, 80);
   }
@@ -548,7 +652,7 @@ openjdk version "${c.runtime?.version || '?'}" 2022-01-18 LTS</div></div></div>`
     return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
   }
 
-  return { init, render, switchTab, switchPm, startSample, restoreLegacyPanel };
+  return { init, render, switchTab, switchPm, startSample, restoreLegacyPanel, resolveTab: resolveWorkspaceTab };
 })();
 
 window.ConnectionWorkspace = ConnectionWorkspace;

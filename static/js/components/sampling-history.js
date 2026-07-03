@@ -1011,9 +1011,14 @@ const SamplingHistory = (() => {
       _allTasks = tasks;
       render();
 
-      // Update global count badge
-      const badge = document.getElementById('cntPfTasks');
+      window._pfTasksCount = _allTasks.length;
+      const historyHost = (_root && typeof _root.closest === 'function')
+        ? _root.closest('[data-history-host]') || _root.closest('#panel-history')
+        : null;
+      const badge = (historyHost && historyHost.querySelector('[data-history-role="count-profiler"]'))
+        || document.getElementById('cntPfTasks');
       if (badge) badge.textContent = _allTasks.length;
+      if (typeof window.updateHistoryCounts === 'function') window.updateHistoryCounts();
     } catch (e) {
       console.error('[SamplingHistory] Failed to load tasks:', e);
       if (_root) {

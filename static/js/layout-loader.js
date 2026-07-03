@@ -7,16 +7,16 @@
 
 // ── 导航路由表 ──────────────────────────────────────────────────────────────
 var NAV_ROUTES = {
-  'connections':      '/connections',
+  'connections':      '/',
   'diagnosis-cap':    '/diagnosis-center',
   'task-center':      '/tasks',
   'toolchain-center': '/tasks#toolbox',
-  'hotfix':           '/workspace#hotfix',
-  'profiler':         '/workspace#profiler',
-  'terminal':         '/workspace#terminal',
-  'monitor':          '/workspace#monitor',
-  'filebrowser':      '/workspace#filebrowser',
-  'model-config':     '/workspace#model-config',
+  'hotfix':           '/#hotfix',
+  'profiler':         '/#sampling',
+  'terminal':         '/#terminal',
+  'monitor':          '/#monitor',
+  'filebrowser':      '/#files',
+  'model-config':     '/#model-config',
   'mcp-center':       '/mcp-config.html',
   'skill-management': '/skill-management.html',
   'user-management':  '/user-management.html',

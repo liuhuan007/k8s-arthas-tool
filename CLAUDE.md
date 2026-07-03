@@ -14,7 +14,7 @@ K8s Arthas Tool is a Java performance diagnosis platform for Kubernetes Pods. It
 # Install dependencies
 pip install -r requirements.txt
 
-# Run locally (default 127.0.0.1:5001)
+# Run locally (default 127.0.0.1:5005)
 python server.py
 
 # Run with custom port/host
@@ -56,7 +56,7 @@ docker build -f deploy/Dockerfile -t arthas-k8s-tool:latest .
 # Run with kubeconfig mounted
 docker run -d \
   --name arthas-tool \
-  -p 5001:5001 \
+  -p 5005:5005 \
   -v ~/.kube:/root/.kube:ro \
   -v $(pwd)/data/profiler:/app/data/profiler \
   arthas-k8s-tool:latest

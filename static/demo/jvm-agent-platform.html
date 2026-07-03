@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Arthas JVM 诊断 Agent 平台 Demo</title>
+<style>
+:root {
+  --bg:#060914;
+  --panel:#0c1224;
+  --panel2:#111a32;
+  --panel3:#17213d;
+  --line:#263453;
+  --line2:#3b82f6;
+  --text:#e7eefc;
+  --muted:#8ea0c2;
+  --muted2:#62718f;
+  --blue:#38bdf8;
+  --cyan:#22d3ee;
+  --green:#34d399;
+  --amber:#fbbf24;
+  --red:#fb7185;
+  --violet:#a78bfa;
+  --mono:"Cascadia Code","JetBrains Mono","SFMono-Regular",Consolas,monospace;
+  --sans:"Segoe UI",-apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif;
+  --radius:18px;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  margin:0;
+  min-height:100vh;
+  background:
+    radial-gradient(circle at 14% 8%, rgba(56,189,248,.18), transparent 32%),
+    radial-gradient(circle at 80% 18%, rgba(167,139,250,.16), transparent 34%),
+    linear-gradient(145deg,#050713,#080d1d 42%,#050713);
+  color:var(--text);
+  font-family:var(--sans);
+}
+body:before{
+  content:"";
+  position:fixed;
+  inset:0;
+  pointer-events:none;
+  opacity:.28;
+  background-image:
+    linear-gradient(rgba(255,255,255,.045) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.045) 1px,transparent 1px);
+  background-size:42px 42px;
+  mask-image:radial-gradient(circle at 50% 20%,#000 0,transparent 72%);
+}
+.shell{position:relative;z-index:1;min-height:100vh;display:grid;grid-template-columns:280px minmax(0,1fr)}
+.nav{
+  position:sticky;
+  top:0;
+  height:100vh;
+  padding:24px 18px;
+  border-right:1px solid rgba(148,163,184,.16);
+  background:rgba(7,11,24,.72);
+  backdrop-filter:blur(20px);
+}
+.brand{display:flex;align-items:center;gap:12px;margin-bottom:28px}
+.mark{width:42px;height:42px;border-radius:14px;background:linear-gradient(135deg,var(--blue),var(--violet));position:relative;box-shadow:0 16px 42px rgba(56,189,248,.25)}
+.mark:after{content:"";position:absolute;inset:11px;border:2px solid rgba(255,255,255,.8);border-radius:9px}
+.brand h1{font-size:15px;line-height:1.3;margin:0}
+.brand span{display:block;color:var(--muted);font:11px var(--mono);margin-top:3px}
+.nav a{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  min-height:44px;
+  padding:10px 12px;
+  color:var(--muted);
+  text-decoration:none;
+  border:1px solid transparent;
+  border-radius:12px;
+  font-size:13px;
+  transition:.18s ease;
+}
+.nav a:hover{color:var(--text);border-color:rgba(56,189,248,.25);background:rgba(56,189,248,.07)}
+.nav i{width:10px;height:10px;border-radius:50%;background:var(--muted2);box-shadow:0 0 0 4px rgba(98,113,143,.12)}
+.nav a:nth-child(2) i{background:var(--blue)}
+.nav a:nth-child(3) i{background:var(--green)}
+.nav a:nth-child(4) i{background:var(--amber)}
+.nav a:nth-child(5) i{background:var(--violet)}
+.nav a:nth-child(6) i{background:var(--cyan)}
+.nav-card{margin-top:22px;padding:14px;border:1px solid rgba(56,189,248,.18);border-radius:16px;background:linear-gradient(145deg,rgba(56,189,248,.1),rgba(167,139,250,.06))}
+.nav-card b{display:block;font-size:12px;margin-bottom:8px}
+.nav-card p{margin:0;color:var(--muted);font-size:11px;line-height:1.65}
+.main{padding:30px;overflow:hidden}
+.hero{
+  min-height:560px;
+  display:grid;
+  grid-template-columns:minmax(0,1.02fr) minmax(460px,.98fr);
+  gap:24px;
+  align-items:stretch;
+}
+.hero-copy,.hero-console,.panel,.lane-card,.memory-card,.report-card{
+  border:1px solid rgba(148,163,184,.18);
+  background:linear-gradient(180deg,rgba(17,26,50,.9),rgba(10,15,30,.92));
+  border-radius:var(--radius);
+  box-shadow:0 24px 80px rgba(0,0,0,.32);
+}
+.hero-copy{padding:34px;position:relative;overflow:hidden}
+.hero-copy:after{
+  content:"";
+  position:absolute;
+  right:-100px;
+  top:-100px;
+  width:260px;
+  height:260px;
+  border-radius:50%;
+  background:radial-gradient(circle,rgba(56,189,248,.24),transparent 62%);
+}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;padding:7px 10px;border:1px solid rgba(56,189,248,.25);border-radius:999px;color:#bdefff;background:rgba(56,189,248,.08);font:12px var(--mono);margin-bottom:22px}
+.eyebrow:before{content:"";width:7px;height:7px;border-radius:50%;background:var(--green);box-shadow:0 0 16px var(--green)}
+h2{font-size:46px;line-height:1.05;letter-spacing:-1.4px;margin:0 0 18px}
+h2 em{font-style:normal;color:var(--blue)}
+.lead{font-size:16px;line-height:1.75;color:#b8c7e7;max-width:760px;margin:0 0 28px}
+.hero-actions{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:28px}
+.btn{height:44px;padding:0 16px;border-radius:12px;border:1px solid rgba(148,163,184,.22);background:rgba(255,255,255,.04);color:var(--text);font-weight:650;cursor:pointer;transition:.18s ease;text-decoration:none;display:inline-flex;align-items:center;gap:8px}
+.btn.primary{border-color:rgba(56,189,248,.45);background:linear-gradient(135deg,rgba(56,189,248,.95),rgba(59,130,246,.85));color:#03111e}
+.btn:hover{transform:translateY(-2px);box-shadow:0 14px 36px rgba(56,189,248,.16)}
+.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+.metric{padding:14px;border:1px solid rgba(148,163,184,.14);border-radius:14px;background:rgba(255,255,255,.035)}
+.metric span{display:block;color:var(--muted);font-size:11px;margin-bottom:7px}
+.metric b{font:700 24px var(--mono)}
+.hero-console{padding:18px;display:flex;flex-direction:column;gap:14px;min-width:0}
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.dots{display:flex;gap:7px}
+.dots span{width:10px;height:10px;border-radius:50%;background:var(--red)}
+.dots span:nth-child(2){background:var(--amber)}
+.dots span:nth-child(3){background:var(--green)}
+.pill{font:11px var(--mono);color:#a7f3d0;background:rgba(52,211,153,.1);border:1px solid rgba(52,211,153,.18);border-radius:999px;padding:6px 9px}
+.terminal{flex:1;background:#030712;border:1px solid rgba(148,163,184,.12);border-radius:14px;padding:16px;font:12px/1.8 var(--mono);color:#c7d2fe;overflow:hidden}
+.terminal .cmd{color:#67e8f9}.terminal .ok{color:#86efac}.terminal .warn{color:#fcd34d}.terminal .bad{color:#fda4af}
+.flow{display:grid;grid-template-columns:repeat(5,minmax(150px,1fr));gap:14px;margin:24px 0}
+.flow-step{position:relative;padding:16px;border:1px solid rgba(148,163,184,.15);border-radius:16px;background:rgba(12,18,36,.74)}
+.flow-step:not(:last-child):after{content:"";position:absolute;right:-11px;top:50%;width:8px;height:8px;border-top:1px solid var(--blue);border-right:1px solid var(--blue);transform:rotate(45deg) translateY(-50%)}
+.flow-step span{display:block;color:var(--blue);font:11px var(--mono);margin-bottom:8px}
+.flow-step b{font-size:14px}.flow-step p{margin:7px 0 0;color:var(--muted);font-size:12px;line-height:1.55}
+.section{margin-top:34px}
+.section-head{display:flex;align-items:flex-end;justify-content:space-between;gap:18px;margin-bottom:16px}
+.section-head h3{font-size:24px;margin:0;letter-spacing:-.4px}
+.section-head p{margin:0;color:var(--muted);font-size:13px;max-width:760px;line-height:1.7}
+.grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.panel{padding:18px;min-height:220px}
+.panel-title{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.panel-title b{font-size:15px}.panel-title span{font:11px var(--mono);color:var(--muted)}
+.cap-list{display:grid;gap:10px}
+.cap{display:grid;grid-template-columns:34px 1fr auto;align-items:center;gap:10px;padding:10px;border-radius:13px;border:1px solid rgba(148,163,184,.13);background:rgba(255,255,255,.035)}
+.cap .mini{width:34px;height:34px;border-radius:11px;background:rgba(56,189,248,.12);border:1px solid rgba(56,189,248,.22)}
+.cap strong{font-size:13px}.cap em{display:block;font-style:normal;color:var(--muted);font-size:11px;margin-top:3px}.cap code{font-size:10px;color:var(--green)}
+.workspace{display:grid;grid-template-columns:320px minmax(0,1fr) 350px;gap:16px}
+.lane-card{padding:18px}
+.service-card{padding:14px;border:1px solid rgba(148,163,184,.13);border-radius:14px;background:rgba(255,255,255,.035);margin-bottom:10px}
+.service-card.active{border-color:rgba(56,189,248,.45);box-shadow:0 0 0 1px rgba(56,189,248,.12) inset}
+.service-card b{display:block;font-size:14px;margin-bottom:6px}.service-card span{display:block;color:var(--muted);font:11px/1.6 var(--mono)}
+.chat{display:flex;flex-direction:column;gap:12px}
+.bubble{max-width:86%;padding:13px 14px;border-radius:15px;font-size:13px;line-height:1.65}
+.bubble.user{align-self:flex-end;background:rgba(56,189,248,.14);border:1px solid rgba(56,189,248,.26)}
+.bubble.agent{align-self:flex-start;background:rgba(255,255,255,.045);border:1px solid rgba(148,163,184,.14)}
+.recommend{margin-top:14px;border:1px solid rgba(52,211,153,.22);border-radius:16px;background:rgba(52,211,153,.07);padding:14px}
+.recommend b{display:block;margin-bottom:9px}.recommend ol{margin:0 0 0 18px;color:#c9f7df;font-size:12px;line-height:1.8}
+.memory-card{padding:16px;margin-bottom:12px}
+.memory-card .score{float:right;color:var(--green);font:12px var(--mono)}
+.memory-card b{font-size:13px}.memory-card p{margin:8px 0 0;color:var(--muted);font-size:12px;line-height:1.65}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.tab{border:1px solid rgba(148,163,184,.18);border-radius:999px;padding:8px 11px;background:rgba(255,255,255,.035);color:var(--muted);font-size:12px;cursor:pointer}
+.tab.active{color:#03111e;background:var(--blue);border-color:var(--blue)}
+.report-layout{display:grid;grid-template-columns:1.1fr .9fr;gap:16px}
+.report-card{padding:18px}
+.evidence{display:grid;gap:10px;margin-top:14px}
+.ev{padding:12px;border-radius:13px;background:rgba(255,255,255,.035);border:1px solid rgba(148,163,184,.13)}
+.ev span{display:block;color:var(--muted);font:10px var(--mono);margin-bottom:5px}.ev b{font-size:12px}
+.config-tree{font:12px/1.85 var(--mono);color:#c4d2f5;background:#030712;border:1px solid rgba(148,163,184,.12);border-radius:14px;padding:16px}
+.config-tree .folder{color:var(--blue)}.config-tree .file{color:#dbeafe}.config-tree .good{color:var(--green)}
+.kbd{display:inline-flex;align-items:center;height:22px;padding:0 7px;border-radius:6px;background:rgba(255,255,255,.07);border:1px solid rgba(148,163,184,.16);font:11px var(--mono);color:var(--muted)}
+@media(max-width:1180px){
+  .shell{grid-template-columns:1fr}.nav{position:relative;height:auto}.main{padding:20px}.hero,.workspace,.report-layout{grid-template-columns:1fr}.flow,.grid-3{grid-template-columns:1fr 1fr}
+}
+@media(max-width:720px){
+  h2{font-size:34px}.metrics,.flow,.grid-3{grid-template-columns:1fr}.main{padding:14px}.hero-copy{padding:22px}.nav{padding:18px}
+}
+</style>
+</head>
+<body>
+<div class="shell">
+  <aside class="nav" aria-label="Demo navigation">
+    <div class="brand">
+      <div class="mark" aria-hidden="true"></div>
+      <h1>JVM Diagnosis Agent<span>Arthas-native product demo</span></h1>
+    </div>
+    <a href="#overview"><i></i>平台定位</a>
+    <a href="#agent"><i></i>Agent 能力</a>
+    <a href="#mcp"><i></i>MCP 工具边界</a>
+    <a href="#memory"><i></i>服务记忆</a>
+    <a href="#config"><i></i>配置自进化</a>
+    <div class="nav-card">
+      <b>产品主线</b>
+      <p>不是泛 Agent 平台，而是围绕 Java 服务、Arthas、诊断 Skill 与 MCP 白名单形成闭环。</p>
+    </div>
+  </aside>
+
+  <main class="main">
+    <section class="hero" id="overview">
+      <div class="hero-copy">
+        <div class="eyebrow">SERVICE-AWARE JVM DIAGNOSIS</div>
+        <h2>让 Arthas 诊断平台拥有<br><em>服务级记忆</em>和专家 Agent</h2>
+        <p class="lead">面向 Java 服务的 Kubernetes 在线 JVM 诊断平台：用户描述问题，Agent 识别服务与症状，加载服务记忆，推荐诊断 Skill，通过受控 MCP/Arthas 工具执行，最终生成可审计报告并沉淀新知识。</p>
+        <div class="hero-actions">
+          <a class="btn primary" href="#agent">查看 Agent 工作台</a>
+          <a class="btn" href="#config">查看配置包设计</a>
+        </div>
+        <div class="metrics">
+          <div class="metric"><span>服务画像</span><b>36</b></div>
+          <div class="metric"><span>JVM Skills</span><b>24</b></div>
+          <div class="metric"><span>Confirmed Memory</span><b>128</b></div>
+        </div>
+      </div>
+      <div class="hero-console">
+        <div class="topbar">
+          <div class="dots"><span></span><span></span><span></span></div>
+          <div class="pill">order-service · Arthas Ready</div>
+        </div>
+        <div class="terminal">
+          <div class="cmd">user&gt; order-service CPU 又高了，帮我看下</div>
+          <div class="ok">agent&gt; 已识别 service_name=order-service</div>
+          <div>agent&gt; 加载 confirmed memory: 7 条，历史 CPU 案例: 3 条</div>
+          <div class="warn">agent&gt; 推荐 Skill: cpu-high-thread-stack-trace</div>
+          <div class="cmd">tool&gt; jvm.get_dashboard()</div>
+          <div class="cmd">tool&gt; jvm.get_top_threads(top_n=5)</div>
+          <div class="bad">evidence&gt; worker-17 RUNNABLE 86% · OrderCalculateService.calculate()</div>
+          <div class="ok">report&gt; 已生成报告与 memory_candidate</div>
+        </div>
+      </div>
+    </section>
+
+    <div class="flow" aria-label="diagnosis flow">
+      <div class="flow-step"><span>01</span><b>问题描述</b><p>自然语言输入，绑定当前 Java 服务。</p></div>
+      <div class="flow-step"><span>02</span><b>服务记忆</b><p>加载画像、历史根因、有效 Skill。</p></div>
+      <div class="flow-step"><span>03</span><b>Skill 推荐</b><p>按症状选择低风险优先路径。</p></div>
+      <div class="flow-step"><span>04</span><b>MCP 边界</b><p>通过白名单工具执行 Arthas 操作。</p></div>
+      <div class="flow-step"><span>05</span><b>报告进化</b><p>生成报告，沉淀候选记忆。</p></div>
+    </div>
+
+    <section class="section" id="agent">
+      <div class="section-head">
+        <div>
+          <h3>Agent 能力视图</h3>
+          <p>Agent 不是泛聊天助手，而是 JVM 诊断专家：读服务画像、选 Skill、调工具、写报告、提取候选记忆。</p>
+        </div>
+        <span class="kbd">Agent Profile: jvm-diagnosis</span>
+      </div>
+      <div class="workspace">
+        <div class="lane-card">
+          <div class="panel-title"><b>Java Services</b><span>service_name</span></div>
+          <div class="service-card active"><b>order-service</b><span>prod-k8s / order<br>G1 · JDK17 · Spring Boot</span></div>
+          <div class="service-card"><b>payment-gateway</b><span>prod-k8s / payment<br>ZGC · JDK21 · WebFlux</span></div>
+          <div class="service-card"><b>inventory-worker</b><span>prod-k8s / stock<br>ParallelGC · batch worker</span></div>
+        </div>
+        <div class="lane-card">
+          <div class="panel-title"><b>Agent Conversation</b><span>evidence first</span></div>
+          <div class="chat">
+            <div class="bubble user">这个服务 CPU 又高了，上次好像也是规则计算导致的。</div>
+            <div class="bubble agent">我会先加载 order-service 的历史记忆。该服务过去 3 次 CPU 高都与规则计算热点相关，建议先执行低风险 CPU Skill。</div>
+            <div class="recommend">
+              <b>推荐诊断路径</b>
+              <ol>
+                <li>dashboard：确认 JVM / GC / 线程整体状态</li>
+                <li>thread -n 5：定位 CPU 高线程</li>
+                <li>stack / trace：仅在命中业务栈后短时追踪</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+        <div class="lane-card" id="memory">
+          <div class="panel-title"><b>Confirmed Memory</b><span>service-owned</span></div>
+          <div class="memory-card"><span class="score">85</span><b>CPU 高：规则计算热点</b><p>历史热点集中在 OrderCalculateService.calculate()，优先执行 thread + trace。</p></div>
+          <div class="memory-card"><span class="score">78</span><b>慢接口：价格试算链路</b><p>/api/orders/calculate 在促销期间容易出现 DB + 规则组合耗时。</p></div>
+          <div class="memory-card"><span class="score">92</span><b>线程池：order-worker</b><p>核心线程池名称为 order-worker，CPU 诊断优先过滤该线程名前缀。</p></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="mcp">
+      <div class="section-head">
+        <div>
+          <h3>MCP 与 Skill 能力边界</h3>
+          <p>MCP 是工具协议层，不是任意工具市场。所有工具必须注册、授权、校验参数、记录审计。</p>
+        </div>
+        <span class="kbd">Tool Gateway enforced</span>
+      </div>
+      <div class="grid-3">
+        <div class="panel">
+          <div class="panel-title"><b>JVM Skills</b><span>diagnosis library</span></div>
+          <div class="cap-list">
+            <div class="cap"><div class="mini"></div><div><strong>CPU 高线程定位</strong><em>dashboard → thread → trace</em></div><code>low</code></div>
+            <div class="cap"><div class="mini"></div><div><strong>慢接口调用链</strong><em>trace / watch / tt</em></div><code>medium</code></div>
+            <div class="cap"><div class="mini"></div><div><strong>GC 异常排查</strong><em>jvm → vmoption → gc log</em></div><code>low</code></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title"><b>MCP Tools</b><span>white list</span></div>
+          <div class="cap-list">
+            <div class="cap"><div class="mini"></div><div><strong>jvm.get_dashboard</strong><em>JVM overview</em></div><code>safe</code></div>
+            <div class="cap"><div class="mini"></div><div><strong>jvm.get_top_threads</strong><em>CPU thread ranking</em></div><code>safe</code></div>
+            <div class="cap"><div class="mini"></div><div><strong>jvm.trace_method</strong><em>短时 trace with timeout</em></div><code>guarded</code></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-title"><b>Risk Control</b><span>runtime policy</span></div>
+          <div class="cap-list">
+            <div class="cap"><div class="mini"></div><div><strong>低风险自动执行</strong><em>dashboard / jvm / thread</em></div><code>auto</code></div>
+            <div class="cap"><div class="mini"></div><div><strong>中风险限时采样</strong><em>trace / watch / tt</em></div><code>timeout</code></div>
+            <div class="cap"><div class="mini"></div><div><strong>高风险强确认</strong><em>heapdump / redefine</em></div><code>confirm</code></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section">
+      <div class="section-head">
+        <div>
+          <h3>诊断报告与记忆进化</h3>
+          <p>报告是证据链，记忆是沉淀结果。Agent 只能生成候选记忆，confirmed 记忆需要用户确认或多次验证。</p>
+        </div>
+      </div>
+      <div class="report-layout">
+        <div class="report-card">
+          <div class="panel-title"><b>Diagnosis Report</b><span>task_logs.result_json</span></div>
+          <h3 style="margin:0 0 10px;font-size:20px">order-service CPU 高根因初判</h3>
+          <p style="color:var(--muted);line-height:1.7;margin:0">CPU 热点集中在规则计算链路，`worker-17` 栈顶多次出现 `OrderCalculateService.calculate()`。结合历史记忆，该服务在促销规则数量增加时容易复发。</p>
+          <div class="evidence">
+            <div class="ev"><span>arthas.thread</span><b>worker-17 RUNNABLE · 86% CPU</b></div>
+            <div class="ev"><span>arthas.stack</span><b>com.example.order.OrderCalculateService.calculate</b></div>
+            <div class="ev"><span>service.memory</span><b>历史 2 次相同热点，confirmed confidence=85</b></div>
+          </div>
+        </div>
+        <div class="report-card">
+          <div class="panel-title"><b>Memory Candidates</b><span>review required</span></div>
+          <div class="memory-card"><span class="score">+30</span><b>候选根因</b><p>促销规则循环可能导致 CPU 高，建议关联 CPU Skill 与规则计算入口。</p></div>
+          <div class="memory-card"><span class="score">+15</span><b>Skill 偏好</b><p>order-service 的 CPU 高问题优先执行 cpu-high-thread-stack-trace。</p></div>
+          <button class="btn primary" type="button">确认沉淀为服务记忆</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="config">
+      <div class="section-head">
+        <div>
+          <h3>配置文件驱动的自进化</h3>
+          <p>借鉴 Claw/OpenOcta 的配置文件拆分方式，但把它限定在 JVM 诊断上下文：配置可导入导出，数据库作为运行时权威。</p>
+        </div>
+        <span class="kbd">database active &gt; config import</span>
+      </div>
+      <div class="report-layout">
+        <div class="report-card">
+          <div class="panel-title"><b>Agent Config Pack</b><span>reviewable files</span></div>
+          <div class="config-tree">
+            <div class="folder">config/agents/</div>
+            <div>├─ <span class="folder">platform/</span></div>
+            <div>│  ├─ <span class="file">BOOT.md</span></div>
+            <div>│  ├─ <span class="file">TOOLS.md</span></div>
+            <div>│  └─ <span class="file">MEMORY_POLICY.md</span></div>
+            <div>├─ <span class="folder">jvm-diagnosis/</span></div>
+            <div>│  ├─ <span class="file">IDENTITY.md</span></div>
+            <div>│  ├─ <span class="file">SOUL.md</span></div>
+            <div>│  ├─ <span class="file">SKILLS.md</span></div>
+            <div>│  └─ <span class="file">MCP.md</span></div>
+            <div>└─ <span class="folder">services/order-service/</span></div>
+            <div>   ├─ <span class="file good">PROFILE.yaml</span></div>
+            <div>   ├─ <span class="file good">MEMORY.md</span></div>
+            <div>   └─ <span class="file">FEEDBACK.md</span></div>
+          </div>
+        </div>
+        <div class="report-card">
+          <div class="panel-title"><b>Self-evolution Guardrails</b><span>controlled learning</span></div>
+          <div class="flow-step" style="margin-bottom:10px"><span>A</span><b>候选记忆</b><p>Agent 从报告中提取，但不直接影响后续诊断。</p></div>
+          <div class="flow-step" style="margin-bottom:10px"><span>B</span><b>人工确认</b><p>用户确认后提升为 confirmed，可导出到 MEMORY.md。</p></div>
+          <div class="flow-step"><span>C</span><b>版本回滚</b><p>错误记忆进入 rejected，作为反例保留，不污染稳定配置。</p></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+</body>
+</html>

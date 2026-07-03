@@ -680,7 +680,7 @@ git commit -m "feat: add heartbeat and auto-reconnect for connections"
 ```bash
 python server.py
 ```
-访问 http://127.0.0.1:5001/ ，验证：
+访问 http://127.0.0.1:5005/ ，验证：
 1. 三栏布局正确显示
 2. 连接池为空时显示引导
 3. 点击"+ 新连接"打开添加表单

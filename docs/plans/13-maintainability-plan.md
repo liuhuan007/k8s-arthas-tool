@@ -461,7 +461,7 @@ python -c "from models.db import migrate_database; migrate_database()"
 sudo systemctl restart arthas-tool
 
 # 5. 验证部署
-curl -f http://localhost:5001/api/health
+curl -f http://localhost:5005/api/health
 
 echo "部署完成！"
 ```

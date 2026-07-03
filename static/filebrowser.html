@@ -1,22 +1,20 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <title>文件浏览器 - K8s Arthas Tool</title>
-    <link rel="stylesheet" href="/static/css/app.css">
+  <meta charset="UTF-8">
+  <title>文件浏览兼容入口 - K8s Arthas Tool</title>
+  <link rel="stylesheet" href="css/app.css?v=20260411i">
+  <script src="js/legacy-compat.js" defer></script>
 </head>
-<body>
-    <div id="filebrowser-container">
-        <div class="filebrowser-header">
-            <h2>文件浏览器</h2>
-            <button id="back-btn" class="btn btn-secondary">返回</button>
-        </div>
-        <div id="filebrowser-content">
-            <!-- 文件浏览器内容 -->
-        </div>
-    </div>
-    <script src="/static/js/components/page-shell.js"></script>
-    <script src="/static/js/components/connection-page-context.js"></script>
-    <script src="/static/js/page-workspace.js"></script>
+<body data-legacy-route="filebrowser">
+  <main class="legacy-compat-shell">
+    <section class="legacy-compat-card">
+      <p class="legacy-compat-kicker">Legacy Compatibility</p>
+      <h1 class="legacy-compat-title">正在切换到文件页</h1>
+      <p class="legacy-compat-copy">旧文件浏览页面会自动跳转到新工作区文件页，并保留当前连接上下文。</p>
+      <div class="legacy-compat-target" id="legacyCompatTarget">/#files</div>
+      <a class="btn btn-g legacy-compat-action" id="legacyCompatLink" href="/#files">继续</a>
+    </section>
+  </main>
 </body>
 </html>

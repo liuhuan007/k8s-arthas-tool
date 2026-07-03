@@ -82,7 +82,7 @@ class AgentSDKConfig:
             return False
         
         # 检查provider是否支持Agent SDK
-        if config.get("provider") in ["codebuddy", "openai"]:
+        if config.get("provider") in ["codebuddy", "openai", "newapi", "openai-compatible"]:
             return True
         
         return False

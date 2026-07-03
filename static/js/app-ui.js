@@ -56,22 +56,110 @@ function initUserDisplay() {
 // ── 统一导航路由 ─────────────────────────────────────────────────────────────
 // 从独立页面和 index.html 统一调用；index.html 内使用 switchTab，其他页面跳转 URL
 var NAV_ROUTES = {
-  'connections':      '/connections',
+  'connections':      '/',
   'diagnosis-cap':    '/diagnosis-center',
   'task-center':      '/tasks',
   'toolchain-center': '/tasks#toolbox',
-  'hotfix':           '/workspace#hotfix',
-  'profiler':         '/workspace#profiler',
-  'terminal':         '/workspace#terminal',
-  'monitor':          '/workspace#monitor',
-  'filebrowser':      '/workspace#filebrowser',
-  'model-config':     '/workspace#model-config',
+  'hotfix':           '/#hotfix',
+  'profiler':         '/#sampling',
+  'terminal':         '/#terminal',
+  'monitor':          '/#monitor',
+  'filebrowser':      '/#files',
+  'model-config':     '/#model-config',
   'mcp-center':       '/mcp-config.html',
   'skill-management': '/skill-management.html',
   'user-management':  '/user-management.html',
   'audit-logs':       '/audit-logs.html',
   'alerts':           '/alerts',
 };
+
+const WORKSPACE_DEEP_LINK_ALIAS = {
+  workspace: '',
+  connections: 'connections',
+  profiler: 'sampling',
+  sampling: 'sampling',
+  console: 'console',
+  'arthas-console': 'console',
+  terminal: 'terminal',
+  monitor: 'monitor',
+  filebrowser: 'files',
+  files: 'files',
+  hotfix: 'hotfix',
+  history: 'history',
+  diagnose: 'diag',
+  diag: 'diag',
+  'model-config': 'model-config',
+  'task-center': 'task-center',
+  'toolchain-center': 'toolchain-center',
+  'diagnosis-cap': 'diagnosis-cap',
+  alerts: 'alerts',
+};
+
+const WORKSPACE_MANAGED_TABS = ['monitor', 'sampling', 'console', 'terminal', 'files', 'history', 'hotfix', 'diag'];
+
+function normalizeWorkspaceDeepLinkTab(rawTab) {
+  const key = String(rawTab || '').trim().replace(/^#/, '').toLowerCase();
+  return WORKSPACE_DEEP_LINK_ALIAS[key] || key;
+}
+
+function readWorkspaceDeepLinkIntent() {
+  const params = new URLSearchParams(window.location.search || '');
+  const connId = params.get('conn') || params.get('connection_id') || params.get('connectionId') || '';
+  const rawTab = params.get('tab') || (window.location.hash || '').replace(/^#/, '');
+  return {
+    connId,
+    rawTab,
+    tab: normalizeWorkspaceDeepLinkTab(rawTab),
+  };
+}
+
+function applyWorkspaceDeepLink() {
+  const intent = readWorkspaceDeepLinkIntent();
+  if (!intent.connId && !intent.tab) return false;
+
+  const focusId = intent.connId && getConnectionRecordById(intent.connId) ? intent.connId : '';
+  if (intent.tab === 'connections') {
+    showWorkspace();
+    if (focusId && window.ConnectionPool && typeof ConnectionPool.focus === 'function') {
+      ConnectionPool.focus(focusId);
+    }
+    return true;
+  }
+
+  if (WORKSPACE_MANAGED_TABS.includes(intent.tab) || focusId) {
+    showWorkspace();
+    if (focusId) {
+      if (window.ConnectionPool && typeof ConnectionPool.focus === 'function') {
+        ConnectionPool.focus(focusId);
+      } else if (window.ConnectionStore && typeof ConnectionStore.setFocus === 'function') {
+        ConnectionStore.setFocus(focusId);
+      }
+    }
+    const focusConn = window.ConnectionStore && typeof ConnectionStore.getFocusConnection === 'function'
+      ? ConnectionStore.getFocusConnection()
+      : (focusId ? getConnectionRecordById(focusId) : null);
+    if (intent.tab && WORKSPACE_MANAGED_TABS.includes(intent.tab) && focusConn && window.ConnectionWorkspace && typeof ConnectionWorkspace.switchTab === 'function') {
+      if (window.ConnectionStore && typeof ConnectionStore.updateConnection === 'function') {
+        ConnectionStore.updateConnection(focusConn.id, { tab: intent.tab });
+      }
+      ConnectionWorkspace.switchTab(intent.tab);
+    } else if (window.ConnectionWorkspace && typeof ConnectionWorkspace.render === 'function') {
+      ConnectionWorkspace.render();
+    }
+    return true;
+  }
+
+  if (intent.tab && typeof switchTab === 'function' && document.getElementById('panel-' + intent.tab)) {
+    setMainShellMode('legacy');
+    switchTab(intent.tab);
+    return true;
+  }
+
+  return false;
+}
+
+window.applyWorkspaceDeepLink = applyWorkspaceDeepLink;
+window.addEventListener('hashchange', applyWorkspaceDeepLink);
 
 function setMainShellMode(mode) {
   var isWorkspace = mode === 'workspace';
@@ -251,6 +339,8 @@ function updateConnectionBarVisibility(tab) {
   window.__hideConnStatusBar = meta.showConnBar === false;
   const bar = document.getElementById('connStatusBar');
   if (bar) bar.style.display = window.__hideConnStatusBar ? 'none' : '';
+  const head = document.querySelector('#legacyPanels > .workspace-head');
+  if (head) head.style.display = window.__hideConnStatusBar ? 'none' : '';
 }
 
 function openTaskCenter() {
@@ -1090,6 +1180,47 @@ function fmtNowTs() {
     + String(n.getSeconds()).padStart(2,'0');
 }
 
+function formatProfilerLogTime(timestamp) {
+  const d = timestamp ? new Date(String(timestamp).replace(' ', 'T')) : new Date();
+  if (Number.isNaN(d.getTime())) return String(timestamp).slice(11, 19) || new Date().toLocaleTimeString('zh-CN', {hour12:false});
+  return d.toLocaleTimeString('zh-CN', {hour12:false});
+}
+
+function profilerTargetPayload(t) {
+  const focusConn = window.ConnectionStore && typeof ConnectionStore.getFocusConnection === 'function'
+    ? ConnectionStore.getFocusConnection()
+    : null;
+  const connectionId = _currentConnId || window._currentConnId || focusConn?.id || t.connection_id || t.conn_id || '';
+  const connTarget = focusConn ? normalizeConnTarget(focusConn) : null;
+  const payload = {
+    ...t,
+    cluster_name: connTarget?.cluster_name || t.cluster_name || '',
+    namespace: connTarget?.namespace || t.namespace || 'default',
+    pod_name: connTarget?.pod_name || t.pod_name || '',
+    container: connTarget?.container || t.container || '',
+    arthas_jar: connTarget?.arthas_jar || t.arthas_jar || '',
+  };
+  return connectionId ? {...payload, connection_id: connectionId, conn_id: connectionId} : payload;
+}
+
+function sameProfilerConnection(a, b) {
+  if (!a || !b) return false;
+  return a === b || String(a).split('@u')[0] === String(b).split('@u')[0];
+}
+
+function resetProfilerPollTimer() {
+  if (_pfPollTimer) {
+    clearInterval(_pfPollTimer);
+    _pfPollTimer = null;
+  }
+}
+
+function startProfilerPollTimer(intervalMs) {
+  resetProfilerPollTimer();
+  pfPoll();
+  _pfPollTimer = setInterval(pfPoll, intervalMs);
+}
+
 // Safe fetch helper: 使用 api.js 中的 safePost
 
 // ── State ──────────────────────────────────────────────────────────────────────
@@ -1207,8 +1338,9 @@ function _syncState(options = {}) {
     window._runtimeInfo = _runtimeInfo || window._runtimeInfo;
   }
 }
-let _sid = null, _cid = null, _pollTimer = null, _polling = false;
+let _sid = null, _cid = null, _sidConnId = null, _pollTimer = null, _polling = false;
 let _cmdHist = [], _histIdx = -1, _selCmd = null;
+let _cmdHistByConn = {}, _cmdDraftByConn = {};
 let _pfTaskId = null, _pfPollTimer = null, _pfStart = null, _pfDur = 60, _pfLL = 0;
 let _pfPollingForConn = null; // 记录当前轮询是为哪个连接服务
 let _pfLastMsg = '';          // 上次后端 message，用于去重
@@ -1249,6 +1381,41 @@ function _clearPersistedPfTask(connId) {
     delete store[connId];
     localStorage.setItem(key, JSON.stringify(store));
   } catch(e) {}
+}
+
+function activeCommandConnId() {
+  return _currentConnId || window._currentConnId || '';
+}
+
+function isActiveCommandConnection(connId) {
+  return !!connId && connId === activeCommandConnId();
+}
+
+function saveCommandConsoleState(connId = activeCommandConnId()) {
+  if (!connId) return;
+  _cmdHistByConn[connId] = Array.isArray(_cmdHist) ? _cmdHist.slice(-100) : [];
+  const ta = document.getElementById('cmdTa');
+  if (ta) _cmdDraftByConn[connId] = ta.value || '';
+}
+
+function restoreCommandConsoleState(connId = activeCommandConnId()) {
+  _cmdHist = (connId && _cmdHistByConn[connId] ? _cmdHistByConn[connId] : []).slice();
+  _histIdx = -1;
+  const ta = document.getElementById('cmdTa');
+  if (ta) {
+    ta.value = connId ? (_cmdDraftByConn[connId] || '') : '';
+    autoResize(ta);
+  }
+}
+
+function resetCommandSessionState() {
+  _polling = false;
+  if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+  _sid = null;
+  _cid = null;
+  _sidConnId = null;
+  const stopBtn = document.getElementById('btnStop');
+  if (stopBtn) stopBtn.style.display = 'none';
 }
 
 // ── Server Health Check ──────────────────────────────────────────────────
@@ -1335,6 +1502,7 @@ function updateWorkspaceHead(tab) {
 // ── Connection Management ─────────────────────────────────────────────────────
 // 连接层级辅助
 function _inferLevel(c) {
+  if (!c) return 'pod';
   if (c.level) return c.level;
   if (c.local_port || c.arthas_version || c.java_pid) return 'arthas';
   if (c.runtime_type || c.runtime) return 'pod';
@@ -1364,6 +1532,7 @@ function _normalizeConnectionRecord(c) {
   return conn;
 }
 function _getRt(c) {
+  if (!c) return null;
   if (c.runtime && typeof c.runtime === 'object') {
     // 后端 RuntimeInfo.__dict__ 字段为 runtime_type/version，前端统一为 type/version
     const rt = c.runtime;
@@ -1410,6 +1579,328 @@ function _formatLastActive(timestamp) {
 }
 
 /**
+ * 通过连接 ID 获取当前连接记录
+ */
+function getConnectionRecordById(connId) {
+  if (!connId) return null;
+  _mergeExternalConnectionState();
+  const sameId = (value) => {
+    if (!value) return false;
+    const left = String(value);
+    const right = String(connId);
+    return left === right || left.split('@u')[0] === right || right.split('@u')[0] === left;
+  };
+  return _connections.find(c => sameId(c.id) || sameId(c.pod_conn_id) || sameId(c.connection_id))
+    || (window.ConnectionStore && typeof ConnectionStore.getConnection === 'function' ? ConnectionStore.getConnection(connId) : null)
+    || (window.ConnectionStore && typeof ConnectionStore.getConnections === 'function'
+      ? ConnectionStore.getConnections().find(c => sameId(c.id) || sameId(c.pod_conn_id) || sameId(c.connection_id))
+      : null)
+    || null;
+}
+
+function hydratePodConnectionForUpgrade(conn) {
+  if (!conn) return null;
+  const currentConnId = conn.id || conn.connection_id || conn.pod_conn_id;
+  const podConnId = conn.pod_conn_id || conn.connection_id || conn.id;
+  const runtime = (conn.runtime && typeof conn.runtime === 'object')
+    ? conn.runtime
+    : {
+      runtime_type: conn.runtime_type || (typeof conn.runtime === 'string' ? conn.runtime : 'unknown'),
+      type: conn.runtime_type || (typeof conn.runtime === 'string' ? conn.runtime : 'unknown'),
+      version: conn.runtime_version || '',
+      runtime_version: conn.runtime_version || '',
+      pid: conn.pid || conn.java_pid || null,
+    };
+  _currentConnId = currentConnId;
+  window._currentConnId = currentConnId;
+  _podConnId = podConnId;
+  _runtimeInfo = runtime;
+  _podPhase = conn.pod_phase || _podPhase || 'Running';
+  _connState = ConnectionState.POD_CONNECTED;
+  window._connState = ConnectionState.POD_CONNECTED;
+  window._runtimeInfo = runtime;
+  _connected = false;
+  _ap = syncPodTargetFromConnection(conn) || normalizeConnTarget(conn) || getCurrentPodTarget();
+  if (window.ConnectionStore && typeof ConnectionStore.setState === 'function') {
+    ConnectionStore.setState({
+      currentConnId,
+      connState: ConnectionState.POD_CONNECTED,
+      runtimeInfo: runtime,
+      podConnId,
+      connHealth: {
+        ...(typeof _connHealth !== 'undefined' ? _connHealth : {}),
+        [currentConnId]: { alive: true, pod_exists: true, pod_phase: _podPhase },
+      },
+    });
+  }
+  if (typeof updateConnectionButton === 'function') updateConnectionButton();
+  if (typeof updateRuntimeDisplay === 'function') updateRuntimeDisplay();
+  if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
+  return { currentConnId, podConnId, runtime };
+}
+
+function updateReconnectConnectionState(connId, updates) {
+  if (!connId || !updates) return;
+  const localConn = _connections.find(c => c.id === connId);
+  if (localConn) Object.assign(localConn, updates);
+  if (window.ConnectionStore && typeof ConnectionStore.getConnection === 'function' && ConnectionStore.getConnection(connId)) {
+    ConnectionStore.updateConnection(connId, updates);
+  }
+}
+
+function setConnectionWorkspaceTab(connId, tab) {
+  if (!connId || !tab) return;
+  const localConn = _connections.find(c => c.id === connId);
+  if (localConn) localConn.tab = tab;
+  if (window.ConnectionStore && typeof ConnectionStore.getConnection === 'function' && ConnectionStore.getConnection(connId)) {
+    ConnectionStore.updateConnection(connId, { tab });
+  }
+}
+
+function resolveConnectionWorkspaceTab(conn, levelOverride) {
+  const candidate = { ...(conn || {}) };
+  if (levelOverride) candidate.level = levelOverride;
+  if (window.ConnectionWorkspace && typeof ConnectionWorkspace.resolveTab === 'function') {
+    return ConnectionWorkspace.resolveTab(candidate);
+  }
+  const tab = candidate.tab || 'monitor';
+  const level = levelOverride || candidate.level || _inferLevel(candidate);
+  if (['sampling', 'console', 'hotfix', 'diag'].includes(tab) && level !== 'arthas') return 'monitor';
+  return tab;
+}
+
+function clearReconnectProfilerState(connId) {
+  const hasActivePoll = sameProfilerConnection(_pfPollingForConn, connId);
+  const hasPersistedTask = !!_pfTasksByConn[connId];
+  const hasCurrentTask = !!_pfTaskId && sameProfilerConnection(_currentConnId || window._currentConnId, connId);
+  if (!hasActivePoll && !hasPersistedTask && !hasCurrentTask) return;
+  resetProfilerPollTimer();
+  _pfTaskId = null;
+  _pfPollingForConn = null;
+  delete _pfTasksByConn[connId];
+  if (typeof _clearPersistedPfTask === 'function') _clearPersistedPfTask(connId);
+  if (sameProfilerConnection(_currentConnId || window._currentConnId, connId)) {
+    pfClearLog();
+    if (typeof renderProfilerStatus === 'function') renderProfilerStatus();
+  }
+}
+
+async function bestEffortDisconnectRuntime(conn) {
+  const connectionId = conn?.pod_conn_id || conn?.id;
+  if (!connectionId) return;
+  const isArthasLevel = _inferLevel(conn) === 'arthas' || !!(conn.local_port || conn.arthas_version || conn.http_url);
+  if (isArthasLevel) {
+    try {
+      await fetch(`${API}/arthas/disconnect`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ connection_id: connectionId })
+      });
+    } catch (_) {}
+  }
+  try {
+    await fetch(`${API}/pod/disconnect`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ connection_id: connectionId })
+    });
+  } catch (_) {}
+}
+
+async function reconnectConnectionById(connId, options = {}) {
+  const conn = getConnectionRecordById(connId);
+  if (!conn) throw new Error('连接不存在');
+
+  const previousLevel = options.previousLevel || _inferLevel(conn);
+  const previousTab = resolveConnectionWorkspaceTab({ ...conn, level: previousLevel }, previousLevel);
+
+  if (window.ConnectionStore && typeof ConnectionStore.setFocus === 'function') {
+    ConnectionStore.setFocus(conn.id);
+  }
+  _currentConnId = conn.id;
+  window._currentConnId = conn.id;
+  _ap = syncPodTargetFromConnection(conn) || normalizeConnTarget(conn) || getCurrentPodTarget();
+  window._manualTargetDirty = false;
+
+  clearReconnectProfilerState(conn.id);
+  updateReconnectConnectionState(conn.id, {
+    state: 'connecting',
+    level: 'disconnected',
+    health: 'warn',
+    arthas: null,
+  });
+  setConnectionWorkspaceTab(conn.id, 'monitor');
+
+  _connected = false;
+  _connState = 'disconnected';
+  window._connState = 'disconnected';
+  _podConnId = null;
+  if (window.ConnectionStore && typeof ConnectionStore.setState === 'function') {
+    ConnectionStore.setState({
+      currentConnId: conn.id,
+      connState: 'disconnected',
+      runtimeInfo: null,
+      podConnId: null,
+    });
+  }
+  if (typeof updateConnectionButton === 'function') updateConnectionButton();
+  if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
+  if (typeof ConnectionWorkspace !== 'undefined' && typeof ConnectionWorkspace.render === 'function') {
+    ConnectionWorkspace.render();
+  }
+
+  setConnStatus('dim', `正在重连 ${conn.pod_name || conn.pod || conn.id} ...`);
+  await bestEffortDisconnectRuntime(conn);
+
+  try {
+    const podReconnectOk = await podConnect({ silentError: true });
+    if (!podReconnectOk) {
+      throw new Error(window._lastPodConnectError || 'Pod 不存在或无法访问');
+    }
+
+    const activeConn = getConnectionRecordById(_podConnId || _currentConnId || conn.id) || conn;
+    const podTab = resolveConnectionWorkspaceTab({ ...activeConn, tab: previousTab, level: 'pod' }, 'pod');
+    updateReconnectConnectionState(activeConn.id, {
+      state: 'connected',
+      level: 'pod',
+      health: 'ok',
+      lastHb: Date.now(),
+    });
+    setConnectionWorkspaceTab(activeConn.id, podTab);
+
+    if (previousLevel !== 'arthas') {
+      if (typeof saveConnections === 'function') saveConnections();
+      if (typeof renderConnList === 'function') renderConnList();
+      if (typeof ConnectionWorkspace !== 'undefined' && typeof ConnectionWorkspace.render === 'function') {
+        ConnectionWorkspace.render();
+      }
+      toast('Pod 连接已恢复', 'success');
+      return { ok: true, level: 'pod', connectionId: activeConn.id };
+    }
+
+    const arthasReconnectOk = await upgradeToArthas({ silentError: true, reconnect: true });
+    if (!arthasReconnectOk) {
+      setConnectionWorkspaceTab(activeConn.id, 'monitor');
+      updateReconnectConnectionState(activeConn.id, {
+        state: 'connected',
+        level: 'pod',
+        health: 'ok',
+        lastHb: Date.now(),
+      });
+      if (typeof saveConnections === 'function') saveConnections();
+      if (typeof renderConnList === 'function') renderConnList();
+      if (typeof ConnectionWorkspace !== 'undefined' && typeof ConnectionWorkspace.render === 'function') {
+        ConnectionWorkspace.render();
+      }
+      toast(`Arthas 恢复失败，已切回监控页：${window._lastArthasUpgradeError || '请重新启动 Arthas 后再试'}`, 'warn');
+      return {
+        ok: false,
+        partial: true,
+        level: 'pod',
+        connectionId: activeConn.id,
+        message: window._lastArthasUpgradeError || 'Arthas 恢复失败',
+      };
+    }
+
+    setConnectionWorkspaceTab(activeConn.id, previousTab);
+    if (typeof saveConnections === 'function') saveConnections();
+    if (typeof renderConnList === 'function') renderConnList();
+    if (typeof ConnectionWorkspace !== 'undefined' && typeof ConnectionWorkspace.render === 'function') {
+      ConnectionWorkspace.render();
+    }
+    toast('Arthas 连接已恢复', 'success');
+    return { ok: true, level: 'arthas', connectionId: activeConn.id };
+  } catch (e) {
+    updateReconnectConnectionState(conn.id, {
+      state: 'disconnected',
+      level: 'disconnected',
+      health: 'off',
+      arthas: null,
+    });
+    setConnectionWorkspaceTab(conn.id, 'monitor');
+    _connected = false;
+    _connState = 'disconnected';
+    window._connState = 'disconnected';
+    _podConnId = null;
+    if (window.ConnectionStore && typeof ConnectionStore.setState === 'function') {
+      ConnectionStore.setState({
+        currentConnId: conn.id,
+        connState: 'disconnected',
+        runtimeInfo: null,
+        podConnId: null,
+      });
+    }
+    if (typeof updateConnectionButton === 'function') updateConnectionButton();
+    if (typeof updateFeatureTabs === 'function') updateFeatureTabs();
+    if (typeof saveConnections === 'function') saveConnections();
+    if (typeof renderConnList === 'function') renderConnList();
+    if (typeof ConnectionWorkspace !== 'undefined' && typeof ConnectionWorkspace.render === 'function') {
+      ConnectionWorkspace.render();
+    }
+    throw e;
+  }
+}
+
+async function upgradeConnectionById(connId, options = {}) {
+  const silentError = !!options.silentError;
+  const conn = getConnectionRecordById(connId);
+  if (!conn) {
+    const error = new Error('连接不存在');
+    if (!silentError) toast(`启动 Arthas 失败: ${error.message}`, 'error');
+    throw error;
+  }
+
+  try {
+    _ap = syncPodTargetFromConnection(conn) || normalizeConnTarget(conn) || getCurrentPodTarget();
+    window._manualTargetDirty = false;
+
+    if (_inferLevel(conn) === 'arthas' && (conn.local_port || conn.arthas_version || conn.http_url)) {
+      if (typeof ConnectionWorkspace !== 'undefined' && typeof ConnectionWorkspace.render === 'function') {
+        ConnectionWorkspace.render();
+      }
+      return { ok: true, level: 'arthas', connectionId: conn.id, reused: true };
+    }
+
+    const beforeSwitchConnId = _currentConnId;
+    if (beforeSwitchConnId !== conn.id) {
+      await switchConnection(conn.id);
+    }
+
+    const activeConn = getConnectionRecordById(conn.id) || conn;
+    if (window.ConnectionStore && typeof ConnectionStore.setFocus === 'function') {
+      ConnectionStore.setFocus(activeConn.id || conn.id);
+    }
+    if (_inferLevel(activeConn) === 'arthas' && (activeConn.local_port || activeConn.arthas_version || activeConn.http_url)) {
+      if (typeof ConnectionWorkspace !== 'undefined' && typeof ConnectionWorkspace.render === 'function') {
+        ConnectionWorkspace.render();
+      }
+      return { ok: true, level: 'arthas', connectionId: activeConn.id || conn.id, reused: true };
+    }
+
+    if (typeof upgradeToArthas !== 'function') {
+      throw new Error('Arthas 升级入口不可用');
+    }
+
+    hydratePodConnectionForUpgrade(activeConn);
+    const arthasOk = await upgradeToArthas({ silentError: true });
+    if (!arthasOk) {
+      throw new Error(window._lastArthasUpgradeError || 'Arthas 启动失败');
+    }
+
+    const upgradedConn = getConnectionRecordById(activeConn.id || conn.id) || activeConn || conn;
+    if (typeof ConnectionWorkspace !== 'undefined' && typeof ConnectionWorkspace.render === 'function') {
+      ConnectionWorkspace.render();
+    }
+    return { ok: true, level: 'arthas', connectionId: upgradedConn.id || conn.id };
+  } catch (e) {
+    if (!silentError) toast(`启动 Arthas 失败: ${e.message}`, 'error');
+    throw e;
+  }
+}
+
+/**
  * ✅ 新增: 一键重连当前连接
  */
 async function reconnectCurrentConnection() {
@@ -1418,32 +1909,18 @@ async function reconnectCurrentConnection() {
     toast('没有可重连的连接', 'warning');
     return;
   }
-  
-  const conn = _connections.find(c => c.id === connId);
+
+  const conn = getConnectionRecordById(connId);
   if (!conn) {
     toast('连接不存在', 'error');
     return;
   }
-  
+
   toast(`正在重连 ${conn.pod_name || conn.pod}...`, 'info');
-  
+
   try {
-    // 1. 先断开现有连接
-    await disconnectPod(false);
-    
-    // 2. 等待 1 秒
-    await new Promise(r => setTimeout(r, 1000));
-    
-    // 3. 重新建立 Pod 连接
-    await podConnect();
-    
-    // 4. 如果之前是 Arthas 连接,自动升级
-    if (conn.level === 'arthas' || conn.status === 'ready') {
-      toast('正在恢复 Arthas 连接...', 'info');
-      await new Promise(r => setTimeout(r, 1500));
-      await upgradeToArthas();
-    }
-    
+    const result = await reconnectConnectionById(connId, { source: 'current-connection' });
+    if (result && result.partial) return;
   } catch (e) {
     console.error('[Reconnect] Error:', e);
     toast(`重连失败: ${e.message}`, 'error');
@@ -1638,6 +2115,7 @@ async function loadConnectionCommands(connId) {
   try {
     const r = await fetch(`${API}/arthas/commands?connection_id=${connId}&limit=50`);
     const d = await r.json();
+    if (!isActiveCommandConnection(connId)) return;
     if (d.ok && d.commands) {
       // 清空当前输出区
       const co = coEl();
@@ -1878,10 +2356,9 @@ async function switchConnection(connId) {
       if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
 
       // 清理当前会话状态
-      _polling = false;
-      if (_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
-      _sid = null;
-      _cid = null;
+      // 切换 Pod 前保存命令行草稿和本地历史，避免多个 Arthas 连接共用同一组输入状态。
+      saveCommandConsoleState(oldConnId);
+      resetCommandSessionState();
 
       // 停止当前采样轮询
       if (_pfPollTimer) {
@@ -1946,6 +2423,7 @@ async function switchConnection(connId) {
       if (typeof csbRefresh === 'function') csbRefresh();
 
       document.getElementById('runBtn').disabled = false;
+      restoreCommandConsoleState(connId);
 
       // 更新 Pod 目标选择器
       const ptNs = document.getElementById('ptNs');
@@ -1995,12 +2473,13 @@ async function switchConnection(connId) {
               event: targetTask.event || statusData.event || '-',
               duration: _pfDur,
               status: 'running',
-              progressPercent: Math.min(Math.floor((Date.now() - _pfStart) / 1000 / _pfDur * 100), 95),
+              progress: statusData.progress ? `后端进度 ${Math.round(statusData.progress)}%` : '等待后端进度',
+              progressPercent: Math.min(Math.round(statusData.progress || 0), 95),
               outputFile: statusData.output_file
             };
             updatePfTaskInfo();
 
-            _pfPollTimer = setInterval(pfPoll, 2000);
+            startProfilerPollTimer(2000);
 
             // 加载该连接的采样日志
             await loadConnectionProfilerLogs(connId);
@@ -2110,7 +2589,7 @@ async function switchConnection(connId) {
   }
 }
 
-function deleteConnection(connId) {
+async function deleteConnection(connId) {
   if (!confirm('确定删除此连接吗？')) return;
   // 通知后端断开连接，释放资源
   fetch(`${API}/arthas/disconnect`, {
@@ -2140,6 +2619,46 @@ function deleteConnection(connId) {
 }
 
 // 批量检查所有连接的健康状态（区分 level）
+async function deleteConnectionPersistent(connId) {
+  if (!confirm('确定删除此连接吗？')) return;
+  try {
+    const r = await fetch(`${API}/connections/${encodeURIComponent(connId)}`, {
+      method: 'DELETE',
+      credentials: 'include',
+    });
+    let d = {};
+    try { d = await r.json(); } catch (_) {}
+    if (!r.ok || (d.code && d.code >= 400) || d.ok === false) {
+      throw new Error(d.message || d.error || `HTTP ${r.status}`);
+    }
+  } catch (e) {
+    toast(`删除失败: ${e.message}`, 'error');
+    return;
+  }
+  _connections = _connections.filter(c => c.id !== connId);
+  delete _connHealth[connId];
+  if (_currentConnId === connId) {
+    _currentConnId = null;
+    _connected = false;
+    _ap = null;
+    setConnStatus('', '');
+    setPtStat('', '');
+    setCpSt('', '');
+    document.getElementById('conTitle').innerHTML = '等待连接...';
+    const verBadge = document.getElementById('arthasVerBadge');
+    if (verBadge) verBadge.style.display = 'none';
+    document.getElementById('runBtn').disabled = true;
+  }
+  _syncState();
+  renderConnList();
+  saveConnections();
+  if (window.ConnectionStore && typeof ConnectionStore.removeConnection === 'function') {
+    ConnectionStore.removeConnection(connId);
+  }
+  if (typeof aiRefreshConnSelect === 'function') aiRefreshConnSelect();
+  toast('已删除', 'success');
+}
+
 async function checkConnectionsHealth() {
   if (_connections.length === 0) return;
   _connHealth = _connHealth || {};
@@ -2663,6 +3182,7 @@ async function _restoreActiveConnection(conn, savedLevel) {
 function switchTab(n) {
   const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'hotfix', 4:'terminal', 5:'monitor', 6:'filebrowser', 7:'ai', 8:'model-config', 9:'mcp-center', 10:'task-center', 11:'toolchain-center', 12:'history', 13:'diag', 14:'skill-management', 15:'user-management', 16:'audit-logs', 17:'alerts'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
+  const previousShellMode = window.__mainShellMode || 'workspace';
   setMainShellMode('legacy');
 
   var workspaceTabs = document.getElementById('workspaceTabs');
@@ -2673,10 +3193,18 @@ function switchTab(n) {
 
   // Record previous tab for history panel "back" button
   if (tab === 'history') {
-    var currentTab = document.querySelector('.panel.on');
-    if (currentTab) {
-      var currentId = currentTab.id.replace('panel-', '');
-      if (currentId !== 'history') _historyReturnTo = currentId;
+    if (previousShellMode !== 'legacy') {
+      _historyReturnMode = 'workspace';
+      _historyReturnTo = 'workspace';
+    } else {
+      var currentTab = document.querySelector('.panel.on');
+      if (currentTab) {
+        var currentId = currentTab.id.replace('panel-', '');
+        if (currentId !== 'history') {
+          _historyReturnTo = currentId === 'connections' ? 'workspace' : currentId;
+          _historyReturnMode = currentId === 'connections' ? 'workspace' : 'legacy';
+        }
+      }
     }
   }
 
@@ -2803,7 +3331,13 @@ function switchTab(n) {
       }
     }, 100);
   }
-  if(tab==='terminal') { setTimeout(()=>{ document.getElementById('termInput')?.focus(); },100); }
+  if(tab==='terminal') {
+    setTimeout(()=>{
+      if (typeof syncTerminalFromFocusedConnection === 'function') syncTerminalFromFocusedConnection({ silent: true, autoConnect: false });
+      document.getElementById('termInput')?.focus();
+    },100);
+  }
+  if(tab==='console') { setTimeout(hardenCommandSearchAutofill, 100); setTimeout(hardenCommandSearchAutofill, 350); }
   if(tab==='ai') { setTimeout(()=>{ aiRefreshConnSelect(); document.getElementById('aiInput')?.focus(); },100); }
   if(tab==='model-config') { setTimeout(()=>{ document.querySelector('#panel-model-config button')?.focus(); },100); }
   if(tab==='mcp-center') { setTimeout(()=>{ document.querySelector('#panel-mcp-center iframe')?.contentWindow?.focus?.(); },100); }
@@ -2816,15 +3350,69 @@ function switchTab(n) {
   }
 }
 
+const HISTORY_VIEW_SELECTORS = {
+  'filter-label': '[data-history-role="filter-label"], #histFilterLabel',
+  'filter-checkbox': '[data-history-role="filter-checkbox"], #histFilterConn',
+  'filter-pod': '[data-history-role="filter-pod"], #histFilterPod',
+  'tab-profiler': '[data-history-role="tab-profiler"], #hist-profiler',
+  'tab-files': '[data-history-role="tab-files"], #hist-files',
+  'panel-profiler': '[data-history-role="panel-profiler"], #hist-panel-profiler',
+  'panel-files': '[data-history-role="panel-files"], #hist-panel-files',
+  'count-profiler': '[data-history-role="count-profiler"], #cntPfTasks',
+  'count-files': '[data-history-role="count-files"], #cntDlFiles',
+};
+
+window.__workspaceHistoryHost = window.__workspaceHistoryHost || null;
+
+function setWorkspaceHistoryHost(root) {
+  window.__workspaceHistoryHost = root || null;
+}
+
+function clearWorkspaceHistoryHost(root) {
+  if (root && window.__workspaceHistoryHost && window.__workspaceHistoryHost !== root) return;
+  window.__workspaceHistoryHost = null;
+}
+
+function getHistoryViewRoot() {
+  const workspaceRoot = window.__workspaceHistoryHost;
+  if (workspaceRoot && document.body.contains(workspaceRoot)) return workspaceRoot;
+  if (workspaceRoot) window.__workspaceHistoryHost = null;
+  return document.getElementById('panel-history');
+}
+
+function isHistoryViewVisible(root) {
+  if (!root) return false;
+  if (root.dataset && root.dataset.historyHost === 'workspace') return true;
+  return root.classList.contains('on');
+}
+
+function getHistoryViewElement(role) {
+  const root = getHistoryViewRoot();
+  const selector = HISTORY_VIEW_SELECTORS[role];
+  if (!root || !selector) return null;
+  return root.querySelector(selector);
+}
+
+function updateHistoryCounts() {
+  const pfCnt = parseInt(getHistoryViewElement('count-profiler')?.textContent) || 0;
+  const fileCnt = parseInt(getHistoryViewElement('count-files')?.textContent) || 0;
+  const totalEl = document.getElementById('cntHistory');
+  if (totalEl) totalEl.textContent = pfCnt + fileCnt;
+}
+
+window.setWorkspaceHistoryHost = setWorkspaceHistoryHost;
+window.clearWorkspaceHistoryHost = clearWorkspaceHistoryHost;
+window.updateHistoryCounts = updateHistoryCounts;
+
 function switchHistTab(name) {
   ['profiler','files'].forEach(n => {
-    const tab = document.getElementById('hist-'+n);
+    const tab = getHistoryViewElement('tab-' + n);
     if (tab) {
       tab.classList.toggle('active', n===name);
       tab.classList.toggle('on', n===name); // legacy compat
     }
-    const p = document.getElementById('hist-panel-'+n);
-    if(p) {
+    const p = getHistoryViewElement('panel-' + n);
+    if (p) {
       p.classList.toggle('active', n===name);
       p.style.display = n===name ? 'block' : 'none';
     }
@@ -3241,7 +3829,8 @@ async function arthasDC() {
     if (typeof ConnectionWorkspace !== 'undefined') ConnectionWorkspace.render();
   }
   
-  _connected = false; _ap = null; _sid = null; _cid = null;
+  saveCommandConsoleState(_currentConnId);
+  _connected = false; _ap = null; resetCommandSessionState();
   window._selectedJavaPid = null;  // 清除选中的 PID
   const ptBtn = document.getElementById('ptConnBtn');
   ptBtn.disabled = false; ptBtn.textContent = '⚡ 连接'; ptBtn.className = 'pt-btn';
@@ -3780,6 +4369,46 @@ function filterCmds(v) {
   clearTimeout(_filterTimer);
   _filterTimer = setTimeout(() => renderCmdPal(v), 150);
 }
+
+function hardenCommandFieldAutofill(el, onClear, strictSearch) {
+  const clearIfUnexpected = (el, onClear, strictSearch) => {
+    const v = (el.value || '').trim();
+    const low = v.toLowerCase();
+    const looksLikeLogin = low === 'admin' || low === 'administrator' || (strictSearch && v.includes('@'));
+    if (looksLikeLogin) {
+      el.value = '';
+      if (typeof onClear === 'function') onClear(el);
+    }
+  };
+  if (!el) return;
+  el.setAttribute('autocomplete', 'off');
+  el.setAttribute('autocorrect', 'off');
+  el.setAttribute('autocapitalize', 'off');
+  el.setAttribute('spellcheck', 'false');
+  el.setAttribute('data-lpignore', 'true');
+  el.setAttribute('data-1p-ignore', 'true');
+  el.setAttribute('data-bwignore', 'true');
+  el.setAttribute('data-form-type', 'other');
+  el.removeAttribute('name');
+  clearIfUnexpected(el, onClear, strictSearch);
+  [120, 350, 800].forEach(delay => setTimeout(() => clearIfUnexpected(el, onClear, strictSearch), delay));
+  if (el.dataset.noAutofillReady) return;
+  el.dataset.noAutofillReady = '1';
+  el.readOnly = true;
+  let ready = false;
+  const enable = () => { if (!ready) { ready = true; el.readOnly = false; } };
+  const guard = setInterval(() => {
+    clearIfUnexpected(el, onClear, strictSearch);
+    if (ready) clearInterval(guard);
+  }, 200);
+  setTimeout(enable, 3000);
+  el.addEventListener('focus', enable, { once: true });
+  el.addEventListener('mousedown', enable, { once: true });
+}
+function hardenCommandSearchAutofill() {
+  hardenCommandFieldAutofill(document.getElementById('cmdSearch'), () => filterCmds(''), true);
+  hardenCommandFieldAutofill(document.getElementById('cmdTa'), (el) => autoResize(el), false);
+}
 function findCmd(id) { for(const c of CMDS) { const f=c.cmds.find(x=>x.id===id); if(f) return f; } return null; }
 
 function selCmd(id) {
@@ -3811,9 +4440,12 @@ function selCmd(id) {
       _selCmd.params.map((p,i) => `<div class="bldr-f"><label>${esc(p.k)}${p.req?' *':''}</label>
         ${p.toggle
           ? `<select id="bf${i}"><option value="">${p.k} 关</option><option value="${esc(p.def)}" selected>${p.k} 开</option></select>`
-          : `<input id="bf${i}" type="text" value="${esc(p.def||'')}" placeholder="${esc(p.ph||'')}">`
+          : `<input id="bf${i}" type="text" value="${esc(p.def||'')}" placeholder="${esc(p.ph||'')}" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other">`
         }</div>`).join('') +
       `<button class="bldr-send" onclick="buildAndRun()">▶ 执行</button>`;
+    _selCmd.params.forEach((p,i) => {
+      if (!p.toggle) hardenCommandFieldAutofill(document.getElementById(`bf${i}`), null, false);
+    });
   } else {
     bldr.style.display = infoHtml ? 'block' : 'none';
     if(infoHtml) {
@@ -3869,6 +4501,7 @@ async function runCmd() {
   if(!syncArthasConsoleFromFocus()) { toast('请先连接 Arthas','warn'); return; }
   const ta = document.getElementById('cmdTa'); const command = ta.value.trim(); if(!command) return;
   ta.value=''; autoResize(ta); _cmdHist.push(command); _histIdx=-1;
+  saveCommandConsoleState(_currentConnId);
   oSep(); clog(esc(command), 'cmd');
   // 根据命令类型选择执行方式：stream 命令实时输出，once 命令一次性返回
   const streamCmds = ['dashboard','watch','trace','monitor','stack','tt'];
@@ -3881,41 +4514,60 @@ async function runCmd() {
 }
 
 async function runOnce(command) {
+  const runConnId = activeCommandConnId();
+  const runTarget = { ..._ap };
   document.getElementById('runBtn').disabled = true;
   try {
     const r = await fetch(`${API}/arthas/exec`, {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({..._ap, command, connection_id: _currentConnId, timeout_ms: 60000})});
+      body: JSON.stringify({...runTarget, command, connection_id: runConnId, timeout_ms: 60000})});
     const d = await r.json();
+    if (!isActiveCommandConnection(runConnId)) return;
     if(!d.state && d.error) { clog('✗ ' + esc(d.error), 'err'); }
     else { renderRes(d); }
-  } catch(e) { clog('✗ ' + esc(e.message), 'err'); }
-  document.getElementById('runBtn').disabled = false;
+  } catch(e) {
+    if (isActiveCommandConnection(runConnId)) clog('✗ ' + esc(e.message), 'err');
+  } finally {
+    if (isActiveCommandConnection(runConnId)) document.getElementById('runBtn').disabled = false;
+  }
 }
 
 async function runStream(command) {
+  const runConnId = activeCommandConnId();
+  const runTarget = { ..._ap };
   document.getElementById('runBtn').disabled = true;
   document.getElementById('btnStop').style.display = 'inline-flex';
-  if(!_sid) {
+  if(!_sid || _sidConnId !== runConnId) {
     try {
-      const r = await fetch(`${API}/arthas/session/create`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(_ap)});
+      const r = await fetch(`${API}/arthas/session/create`, {method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(runTarget)});
       const d = await r.json();
+      if (!isActiveCommandConnection(runConnId)) return;
       if(d.state !== 'SUCCEEDED') { clog('✗ Session 创建失败: ' + esc(JSON.stringify(d)), 'err'); stopPoll(); return; }
-      _sid = d.sessionId; _cid = d.consumerId;
+      _sid = d.sessionId; _cid = d.consumerId; _sidConnId = runConnId;
       clog(`Session: ${d.sessionId}`, 'dim');
-    } catch(e) { clog('✗ ' + esc(e.message), 'err'); stopPoll(); return; }
+    } catch(e) {
+      if (isActiveCommandConnection(runConnId)) clog('✗ ' + esc(e.message), 'err');
+      stopPoll();
+      return;
+    }
   }
   try {
     const r = await fetch(`${API}/arthas/session/exec`, {method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({..._ap, command, session_id: _sid})});
+      body: JSON.stringify({...runTarget, command, session_id: _sid})});
     const d = await r.json();
+    if (!isActiveCommandConnection(runConnId)) return;
     if(d.state === 'FAILED') { clog('✗ ' + esc(d.message), 'err'); stopPoll(); return; }
-  } catch(e) { clog('✗ ' + esc(e.message), 'err'); stopPoll(); return; }
+  } catch(e) {
+    if (isActiveCommandConnection(runConnId)) clog('✗ ' + esc(e.message), 'err');
+    stopPoll();
+    return;
+  }
   _polling = true; let empty = 0;
   const poll = async () => {
-    if(!_polling) return;
+    if(!_polling || !isActiveCommandConnection(runConnId)) return;
     try {
       const r = await fetch(`${API}/arthas/session/pull`, {method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({..._ap, session_id: _sid, consumer_id: _cid})});
+        body: JSON.stringify({...runTarget, session_id: _sid, consumer_id: _cid})});
+      if (!isActiveCommandConnection(runConnId)) return;
       const d = await r.json(); let has = false;
       for(const res of d.body?.results||[]) {
         if(['input_status','welcome','message'].includes(res.type)) continue;
@@ -3930,6 +4582,7 @@ async function runStream(command) {
 
 function stopPoll() {
   _polling = false; if(_pollTimer) { clearTimeout(_pollTimer); _pollTimer = null; }
+  _sidConnId = null;
   document.getElementById('runBtn').disabled = false;
   document.getElementById('btnStop').style.display = 'none';
 }
@@ -3950,6 +4603,14 @@ async function interruptCmd() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 /** 通用工具 */
+function toggleResultCollapse(id) {
+  const wrap = document.getElementById(id);
+  if (!wrap) return;
+  const open = wrap.classList.toggle('open');
+  const head = wrap.querySelector('.r-coll-h');
+  if (head) head.setAttribute('aria-expanded', open ? 'true' : 'false');
+}
+
 const R = {
   // key-value 行
   kv: (k, v, vCls='') =>
@@ -3994,10 +4655,11 @@ const R = {
   // 折叠块
   collapsible: (header, body, open=false) => {
     const id = 'rc_' + Math.random().toString(36).slice(2);
-    return `<div class="r-coll ${open?'open':''}">
-      <div class="r-coll-h" onclick="document.getElementById('${id}').classList.toggle('open')">
+    const bodyId = `${id}_body`;
+    return `<div class="r-coll ${open?'open':''}" id="${id}">
+      <div class="r-coll-h" role="button" tabindex="0" aria-expanded="${open?'true':'false'}" aria-controls="${bodyId}" onclick="toggleResultCollapse('${id}')" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();toggleResultCollapse('${id}')}">
         <span class="r-coll-arr">▶</span>${header}</div>
-      <div class="r-coll-b" id="${id}">${body}</div>
+      <div class="r-coll-b" id="${bodyId}">${body}</div>
     </div>`;
   },
 };
@@ -4531,7 +5193,7 @@ async function pfStart() {
     }
     return;
   }
-  const t = getT();
+  const t = profilerTargetPayload(getCurrentPodTarget());
   if(!t.cluster_name || !t.pod_name) { toast('请先配置集群和 Pod','warn'); return; }
 
   if(_pfMode === 'dump')  { await pfRunDump(t);  return; }
@@ -4555,7 +5217,7 @@ async function pfStart() {
   try {
     const r = await fetch(`${API}/profile/start`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({...t, duration: _pfDur, format: fmt, event}),
+      body: JSON.stringify({...profilerTargetPayload(t), duration: _pfDur, format: fmt, event}),
     });
     const d = await r.json(); 
     if(!r.ok) {
@@ -4570,14 +5232,14 @@ async function pfStart() {
     }
     if(d.error) throw new Error(d.error);
     _pfTaskId = d.task_id;
+    const profilerConnId = d.connection_id || _currentConnId;
     _pfTaskInfo.taskId = d.task_id;
     _pfTaskInfo.status = 'running';
     updatePfTaskInfo();
-    // ✅ 修复: 持久化任务到 localStorage，切换页签后不丢失
-    _persistPfTask(_currentConnId, d.task_id, { type: 'async-profiler', event, duration: _pfDur });
+    _persistPfTask(profilerConnId, d.task_id, { type: 'async-profiler', event, duration: _pfDur });
     pfLog(`任务已创建: ${d.task_id}`, 'ok');
-    _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
-    _pfPollTimer = setInterval(pfPoll, 2000);
+    _pfPollingForConn = profilerConnId;
+    startProfilerPollTimer(2000);
   } catch(e) { pfLog('失败: '+e.message, 'err'); hidePfTaskInfo(); }
 }
 
@@ -4606,7 +5268,7 @@ async function pfRunJfr(t) {
   try {
     const r = await fetch(`${API}/profile/start`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({...t, mode: 'jfr', jfr_name: name,
+      body: JSON.stringify({...profilerTargetPayload(t), mode: 'jfr', jfr_name: name,
                             jfr_settings: settings, jfr_file: jfrFile,
                             duration: dur, format: 'jfr', event: settings}),
     });
@@ -4622,12 +5284,13 @@ async function pfRunJfr(t) {
     }
     if(d.error) throw new Error(d.error);
     _pfTaskId = d.task_id;
+    const profilerConnId = d.connection_id || _currentConnId;
     _pfTaskInfo.taskId = d.task_id;
     _pfTaskInfo.status = 'running';
     updatePfTaskInfo();
     pfLog(`JFR 任务已创建: ${d.task_id}`, 'ok');
-    _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
-    _pfPollTimer = setInterval(pfPoll, 2000);
+    _pfPollingForConn = profilerConnId;
+    startProfilerPollTimer(2000);
   } catch(e) { pfLog('失败: '+e.message, 'err'); hidePfTaskInfo(); }
 }
 
@@ -4648,7 +5311,7 @@ async function pfRunDump(t) {
     try {
       const r = await fetch(`${API}/profile/start`, {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({...t, mode: 'threaddump', duration: 0, format: 'html'}),
+        body: JSON.stringify({...profilerTargetPayload(t), mode: 'threaddump', duration: 0, format: 'html'}),
       });
       const d = await r.json(); 
       if(!r.ok) {
@@ -4662,6 +5325,7 @@ async function pfRunDump(t) {
       }
       if(d.error) throw new Error(d.error);
       _pfTaskId = d.task_id;
+      const profilerConnId = d.connection_id || _currentConnId;
       _pfTaskInfo.taskId = d.task_id;
       _pfTaskInfo.status = 'running';
       _pfStart = Date.now();
@@ -4669,8 +5333,8 @@ async function pfRunDump(t) {
       updatePfTaskInfo();
       pfLog(`线程 Dump 任务: ${d.task_id}`, 'ok');
       pfLog('正在采集，通常 5~10 秒完成...', 'dim');
-      _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
-      _pfPollTimer = setInterval(pfPoll, 1500);
+      _pfPollingForConn = profilerConnId;
+      startProfilerPollTimer(1500);
     } catch(e) { pfLog('失败: '+e.message, 'err'); hidePfTaskInfo(); }
   } else {
     // heap dump
@@ -4683,7 +5347,7 @@ async function pfRunDump(t) {
     try {
       const r = await fetch(`${API}/profile/start`, {
         method:'POST', headers:{'Content-Type':'application/json'},
-        body: JSON.stringify({...t, mode: 'heapdump', heap_file: file,
+        body: JSON.stringify({...profilerTargetPayload(t), mode: 'heapdump', heap_file: file,
                               heap_live: liveOnly, duration: 0, format: 'hprof'}),
       });
       const d = await r.json(); 
@@ -4698,6 +5362,7 @@ async function pfRunDump(t) {
       }
       if(d.error) throw new Error(d.error);
       _pfTaskId = d.task_id;
+      const profilerConnId = d.connection_id || _currentConnId;
       _pfTaskInfo.taskId = d.task_id;
       _pfTaskInfo.status = 'running';
       _pfStart = Date.now();
@@ -4705,8 +5370,8 @@ async function pfRunDump(t) {
       updatePfTaskInfo();
       pfLog(`Heap Dump 任务: ${d.task_id}`, 'ok');
       pfLog('采集中，请等待...', 'dim');
-      _pfPollingForConn = _currentConnId;  // 设置轮询连接标记
-      _pfPollTimer = setInterval(pfPoll, 2000);
+      _pfPollingForConn = profilerConnId;
+      startProfilerPollTimer(2000);
     } catch(e) { pfLog('失败: '+e.message, 'err'); hidePfTaskInfo(); }
   }
 }
@@ -5035,7 +5700,7 @@ async function pfPoll() {
     const r = await fetch(`${API}/profile/${_pfTaskId}`); const d = await r.json();
 
     // 只为当前连接输出日志和更新 UI
-    if (_pfPollingForConn === _currentConnId) {
+    if (sameProfilerConnection(_pfPollingForConn, _currentConnId || window._currentConnId)) {
       // ── 后端 message 变化时输出新日志 ──
       const curMsg = d.message || '';
       if (curMsg && curMsg !== _pfLastMsg) {
@@ -5043,51 +5708,40 @@ async function pfPoll() {
         if (/失败|error|异常/i.test(curMsg)) lv = 'err';
         else if (/完成|success|done/i.test(curMsg)) lv = 'ok';
         else if (/warn|警告/i.test(curMsg)) lv = 'warn';
-        await pfLog(curMsg, lv);
+        await pfLog(curMsg, lv, d.updated_at);
         _pfLastMsg = curMsg;
       }
 
       // ── 后端 logs 数组（兼容旧格式） ──
       for (const l of (d.logs||[]).slice(_pfLL)) {
-        await pfLog(l.message, l.level);
+        if (l.message === curMsg) continue;
+        await pfLog(l.message, l.level, l.timestamp);
       }
       _pfLL = d.logs?.length||0;
 
       const el = (Date.now()-_pfStart)/1000;
       const totalDur = _pfDur || 30;
-      const overtime = el > totalDur;
-      const pct = Math.min(95, (el/(totalDur+30))*100);
+      const serverProgress = Number.isFinite(Number(d.progress)) ? Math.max(0, Math.min(100, Number(d.progress))) : 0;
+      const overtime = d.status === 'running' && totalDur > 0 && el > totalDur;
+      const pct = d.status === 'completed' ? 100 : d.status === 'running' ? Math.min(95, serverProgress) : serverProgress;
       const pfFill = document.getElementById('pfProgFill');
       const pfPct = document.getElementById('pfProgPct');
       const pfLbl = document.getElementById('pfProgLbl');
       if(pfFill) pfFill.style.width = pct+'%';
       if(pfPct) pfPct.textContent = Math.round(pct)+'%';
 
-      // 进度文本
       if (d.status === 'running') {
         if (overtime) {
-          if(pfLbl) { pfLbl.textContent = `${_pfMode === 'dump' ? '导出' : '采样'}完成，下载中...`; pfLbl.style.color = 'var(--a3)'; }
+          if(pfLbl) { pfLbl.textContent = `后端仍在执行 (${Math.round(el)}s)`; pfLbl.style.color = 'var(--a3)'; }
+        } else if (serverProgress > 0) {
+          if(pfLbl) { pfLbl.textContent = `后端进度 ${Math.round(serverProgress)}%`; pfLbl.style.color = 'var(--tx2)'; }
         } else {
-          if(pfLbl) { pfLbl.textContent = `${_pfMode === 'dump' ? '导出中' : '采样'} ${Math.round(el)}s/${_pfDur}s`; pfLbl.style.color = 'var(--tx2)'; }
+          if(pfLbl) { pfLbl.textContent = `等待后端进度 (${Math.round(el)}s)`; pfLbl.style.color = 'var(--tx2)'; }
         }
       } else {
         if(pfLbl) pfLbl.textContent = d.status;
       }
 
-      // ── 周期性进度日志（每 5 秒输出一次） ──
-      const now = Date.now();
-      if (d.status === 'running' && !_isQuickTask() && now - _pfLastProgressLog >= 5000) {
-        const elapsed = Math.round(el);
-        if (overtime) {
-          await pfLog(`⏳ 后端处理中 ${elapsed}s（已超过预计 ${totalDur}s）`, 'dim');
-        } else {
-          const remain = Math.max(0, totalDur - elapsed);
-          await pfLog(`⏳ 采样进行中 ${elapsed}s / ${totalDur}s  剩余 ~${remain}s`, 'dim');
-        }
-        _pfLastProgressLog = now;
-      }
-
-      // ── 客户端超时保护：超过 duration * 3 或 180 秒后自动停止轮询 ──
       const clientTimeout = Math.max(totalDur * 3, 180);
       if (d.status === 'running' && el > clientTimeout) {
         clearInterval(_pfPollTimer); _pfPollTimer = null; _pfLL = 0;
@@ -5105,10 +5759,13 @@ async function pfPoll() {
       if (d.type) _pfTaskInfo.type = d.type;
       if (d.event) _pfTaskInfo.event = d.event;
       if (overtime && d.status === 'running') {
-        _pfTaskInfo.progress = `采样完成，下载中 (${Math.round(el)}s)`;
-        _pfTaskInfo.progressPercent = 95;
+        _pfTaskInfo.progress = `后端仍在执行 (${Math.round(el)}s)`;
+        _pfTaskInfo.progressPercent = Math.round(pct);
+      } else if (d.status === 'running' && serverProgress > 0) {
+        _pfTaskInfo.progress = `后端进度 ${Math.round(serverProgress)}%`;
+        _pfTaskInfo.progressPercent = Math.round(pct);
       } else {
-        _pfTaskInfo.progress = `${Math.round(el)}s / ${_pfDur}s`;
+        _pfTaskInfo.progress = d.status === 'running' ? `等待后端进度 (${Math.round(el)}s)` : (d.status || '-');
         _pfTaskInfo.progressPercent = Math.round(pct);
       }
       updatePfTaskInfo();
@@ -5125,7 +5782,7 @@ async function pfPoll() {
           _pfTaskInfo.outputFile = d.output_file;
           updatePfTaskInfo();
           const dur = Math.round((Date.now() - _pfStart) / 1000);
-          await pfLog(`✓ 采样完成（耗时 ${dur}s）`, 'ok');
+          await pfLog(`✓ 采样完成（前端观察耗时 ${dur}s）`, 'ok', d.updated_at);
           if (d.output_file) {
             await pfLog(`📄 输出文件: ${d.output_file}`, 'info');
           }
@@ -5158,12 +5815,12 @@ function _isQuickTask() {
   return _pfMode === 'dump' || (_pfDur && _pfDur <= 15);
 }
 
-async function pfLog(msg, lv='info') {
+async function pfLog(msg, lv='info', timestamp=null) {
   const el = document.getElementById('pfl-panel-log');
   if (!el) return;  // 面板不存在时静默跳过
   if(el.children.length===1 && el.children[0].textContent==='等待启动...') el.innerHTML='';
   const cls = {info:'o-line',dim:'o-dim',ok:'o-ok',error:'o-err',warn:'o-warn',success:'o-ok'}[lv]||'o-line';
-  const ts = new Date().toLocaleTimeString('zh-CN', {hour12:false});
+  const ts = timestamp ? formatProfilerLogTime(timestamp) : new Date().toLocaleTimeString('zh-CN', {hour12:false});
   const d = document.createElement('div');
   d.className = cls;
   d.innerHTML = '<span style="color:var(--tx3);margin-right:6px">[' + ts + ']</span>' + msg.replace(/\n/g, '<br>');
@@ -5172,23 +5829,6 @@ async function pfLog(msg, lv='info') {
 
   const _cntEl = document.getElementById('pfLogCnt');
   if(_cntEl) _cntEl.textContent = (el?.children.length||0) + '行';
-
-  // 保存到数据库
-  if (_currentConnId) {
-    try {
-      await fetch(`${API}/profile/logs`, {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          connection_id: _currentConnId,
-          message: msg,
-          level: lv
-        })
-      });
-    } catch(e) {
-      console.error('Failed to save profiler log:', e);
-    }
-  }
 }
 function pfClearLog() {
   const el = document.getElementById('pfl-panel-log');
@@ -5214,16 +5854,55 @@ function pfHistChangePageSize() {}
 function renderPfHistoryPage() {}
 
 // ── Unified History Panel ──────────────────────────────────────────────────
-var _historyReturnTo = 'profiler';  // which tab to return to when pressing "back"
+var _historyReturnTo = 'workspace';  // which tab to return to when pressing "back"
+var _historyReturnMode = 'workspace';
+var _historyReturnWorkspaceTab = 'monitor';
+
+function rememberWorkspaceHistoryReturn(tabId) {
+  if (tabId && tabId !== 'history') {
+    _historyReturnWorkspaceTab = tabId;
+  }
+  _historyReturnMode = 'workspace';
+  _historyReturnTo = 'workspace';
+}
 
 function historyGoBack() {
-  switchTab(_historyReturnTo);
+  var target = _historyReturnTo || 'workspace';
+  if (_historyReturnMode === 'workspace' || target === 'workspace' || target === 'connections') {
+    // 历史记录可从新工作台进入，返回时必须回到新工作台，避免露出过渡期的旧连接中心。
+    if (typeof window.showWorkspace === 'function') {
+      window.showWorkspace();
+    } else {
+      setMainShellMode('workspace');
+    }
+    var workspaceTab = _historyReturnWorkspaceTab || 'monitor';
+    if (workspaceTab !== 'history' && window.ConnectionWorkspace && typeof ConnectionWorkspace.switchTab === 'function') {
+      ConnectionWorkspace.switchTab(workspaceTab);
+    }
+    return;
+  }
+  switchTab(target);
+}
+
+function openSamplingHistory() {
+  if (window.__mainShellMode !== 'legacy' && window.ConnectionWorkspace && typeof ConnectionWorkspace.switchTab === 'function') {
+    var focusConn = window.ConnectionStore && typeof ConnectionStore.getFocusConnection === 'function'
+      ? ConnectionStore.getFocusConnection()
+      : null;
+    rememberWorkspaceHistoryReturn((focusConn && focusConn.tab && focusConn.tab !== 'history') ? focusConn.tab : 'sampling');
+    ConnectionWorkspace.switchTab('history');
+    setTimeout(function() {
+      if (typeof loadHistory === 'function') loadHistory();
+    }, 0);
+    return;
+  }
+  switchTab('history');
 }
 
 function toggleHistoryConnFilter() {
-  var checkbox = document.getElementById('histFilterConn');
+  var checkbox = getHistoryViewElement('filter-checkbox');
   if (!checkbox) return;
-  var container = document.getElementById('hist-panel-profiler');
+  var container = getHistoryViewElement('panel-profiler');
   if (!container || typeof SamplingHistory === 'undefined') return;
 
   if (checkbox.checked && _currentConnId) {
@@ -5235,8 +5914,8 @@ function toggleHistoryConnFilter() {
 }
 
 function updateHistoryFilterLabel() {
-  var label = document.getElementById('histFilterLabel');
-  var podSpan = document.getElementById('histFilterPod');
+  var label = getHistoryViewElement('filter-label');
+  var podSpan = getHistoryViewElement('filter-pod');
   if (!label) return;
 
   if (_currentConnId && window._connections) {
@@ -6280,21 +6959,17 @@ async function loadHistory() {
   // Update filter label visibility
   updateHistoryFilterLabel();
   // Check if filter checkbox is active
-  var checkbox = document.getElementById('histFilterConn');
+  var checkbox = getHistoryViewElement('filter-checkbox');
   var filterConnId = (checkbox && checkbox.checked && _currentConnId) ? _currentConnId : null;
   await loadPfHistory(filterConnId);
   await loadLocalFiles();
-  // Read counts from badges (SamplingHistory component updates cntPfTasks async)
-  const pfCnt = parseInt(document.getElementById('cntPfTasks')?.textContent) || 0;
-  const t = pfCnt + (window._dlFilesCount||0);
-  const el = document.getElementById('cntHistory');
-  if(el) el.textContent = t;
+  updateHistoryCounts();
 }
 
 function refreshHistoryIfFiltered() {
-  var histPanel = document.getElementById('panel-history');
-  if (!histPanel || !histPanel.classList.contains('on')) return;
-  var checkbox = document.getElementById('histFilterConn');
+  var root = getHistoryViewRoot();
+  if (!isHistoryViewVisible(root)) return;
+  var checkbox = getHistoryViewElement('filter-checkbox');
   if (checkbox && checkbox.checked) {
     toggleHistoryConnFilter();
   }
@@ -6303,7 +6978,7 @@ function refreshHistoryIfFiltered() {
 async function loadPfHistory(connectionId) {
   try {
     // Use the new SamplingHistory component for the global profiler tab
-    const container = document.getElementById('hist-panel-profiler');
+    const container = getHistoryViewElement('panel-profiler');
     if (!container) return;
 
     if (typeof SamplingHistory !== 'undefined') {
@@ -6327,7 +7002,9 @@ async function loadPfHistory(connectionId) {
         }
       }
       window._pfTasksCount = filteredTasks.length;
-      document.getElementById('cntPfTasks').textContent = filteredTasks.length;
+      const countEl = getHistoryViewElement('count-profiler');
+      if (countEl) countEl.textContent = filteredTasks.length;
+      updateHistoryCounts();
       // Legacy rendering omitted — component should be available
     }
   } catch (e) {
@@ -6339,8 +7016,9 @@ async function loadLocalFiles() {
   try {
     const r = await fetch(`${API}/files`); const files = await r.json();
     window._dlFilesCount = files.length;
-    document.getElementById('cntDlFiles').textContent = files.length;
-    const el = document.getElementById('hist-panel-files');
+    const countEl = getHistoryViewElement('count-files');
+    if (countEl) countEl.textContent = files.length;
+    const el = getHistoryViewElement('panel-files');
     if(!el) return;
     if(!files.length) {
       el.innerHTML = `<div class="hist-empty">
@@ -6348,6 +7026,7 @@ async function loadLocalFiles() {
         <div class="hist-empty-title">暂无下载记录</div>
         <div class="hist-empty-sub">采样完成后可在此下载结果文件</div>
       </div>`;
+      updateHistoryCounts();
       return;
     }
 
@@ -6396,6 +7075,7 @@ async function loadLocalFiles() {
         </button>
       </div>`;
     }).join('') + `</div>`;
+    updateHistoryCounts();
   } catch {}
 }
 
@@ -6403,6 +7083,7 @@ async function loadLocalFiles() {
 // 等待 DOM 加载完成后初始化
 document.addEventListener('DOMContentLoaded', async function() {
   initUserDisplay();
+  const deepLinkIntent = readWorkspaceDeepLinkIntent();
 
   // ✅ 恢复持久化的 Profiler 任务（切换页签后不丢失）
   if (typeof _loadPersistedPfTasks === 'function') _loadPersistedPfTasks();
@@ -6434,12 +7115,17 @@ document.addEventListener('DOMContentLoaded', async function() {
       const savedConnId = localStorage.getItem(activeKey);
       const savedLevel = localStorage.getItem(levelKey);
       
-      if (savedConnId && _connections.find(c => c.id === savedConnId)) {
-        const conn = _connections.find(c => c.id === savedConnId);
+      const preferredConnId = deepLinkIntent.connId && _connections.find(c => c.id === deepLinkIntent.connId)
+        ? deepLinkIntent.connId
+        : '';
+      const restoreConnId = preferredConnId || savedConnId;
+      if (restoreConnId && _connections.find(c => c.id === restoreConnId)) {
+        const conn = _connections.find(c => c.id === restoreConnId);
         if (conn) {
-          console.log('[初始化] 恢复活跃连接:', savedConnId, '层级:', savedLevel);
+          const restoreLevel = preferredConnId ? _inferLevel(conn) : savedLevel;
+          console.log('[初始化] 恢复活跃连接:', restoreConnId, '层级:', restoreLevel);
           // ✅ 修复: 去掉 800ms 延迟，立即开始恢复，减少 UI 闪烁
-          _restoreActiveConnection(conn, savedLevel).catch(e => {
+          _restoreActiveConnection(conn, restoreLevel).catch(e => {
             console.warn('[初始化] 自动恢复连接失败:', e);
             _currentConnId = null;
             _syncState();
@@ -6465,8 +7151,11 @@ document.addEventListener('DOMContentLoaded', async function() {
   
   // 初始化工作台：显示 Tab 栏并切换到连接 Tab
   showWorkspace();
+  applyWorkspaceDeepLink();
 
   renderCmdPal();
+  hardenCommandSearchAutofill();
+  setTimeout(hardenCommandSearchAutofill, 300);
   checkHealth();
   setInterval(checkHealth, 8000);
   // 连接健康检查：加载后 3 秒首次检查，之后每 60 秒检查一次
@@ -6508,7 +7197,7 @@ window.loadClusters = loadClusters;
 // 连接相关
 window.renderConnList = renderConnList;
 window.switchConnection = switchConnection;
-window.deleteConnection = deleteConnection;
+window.deleteConnection = deleteConnectionPersistent;
 window.checkPod = checkPod;
 window.arthasConnect = arthasConnect;
 
@@ -6520,6 +7209,8 @@ window.navigateTo = navigateTo;
 window.navigateToTaskCenter = navigateToTaskCenter;
 window.navigateToDiagnosis = navigateToDiagnosis;
 window.switchTab = switchTab;
+window.openSamplingHistory = openSamplingHistory;
+window.rememberWorkspaceHistoryReturn = rememberWorkspaceHistoryReturn;
 window.switchPm = switchPm;
 window.switchHistTab = switchHistTab;
 
@@ -6600,6 +7291,7 @@ window.closeChangePasswordModal = closeChangePasswordModal;
 window.submitChangePassword = submitChangePassword;
 window.doLogout = doLogout;
 window.loadHistory = loadHistory;
+window.hardenCommandSearchAutofill = hardenCommandSearchAutofill;
 window.gcDownloadPath = gcDownloadPath;
 window.gcPreviewPath = gcPreviewPath;
 window.toggleCtr = toggleCtr;
@@ -6614,6 +7306,9 @@ window.toast = toast;
 // 来自 components/connections.js
 window.addConnection = addConnection;
 window.removeConnection = removeConnection;
+window.reconnectConnectionById = reconnectConnectionById;
+window.upgradeConnectionById = upgradeConnectionById;
+window.reconnectCurrentConnection = reconnectCurrentConnection;
 
 
 
@@ -6864,8 +7559,27 @@ function cdPodConnect() {
   switchTab('connections');
   toast('请在连接中心选择 Pod 并建立连接', 'i');
 }
-function cdUpgradeToArthas() {
-  // 跳转到连接中心，用户在连接中心完成 Arthas 升级
+async function cdUpgradeToArthas() {
+  const detailTitle = document.getElementById('connectionDetailTitle')?.textContent || '';
+  const connId = _currentConnId || (_connections.find(c =>
+    detailTitle.includes(c.pod_name || c.pod)
+  )?.id);
+
+  if (!connId) {
+    switchTab('connections');
+    toast('请先在连接中心选择 Pod 并建立连接', 'warn');
+    return;
+  }
+
+  if (typeof upgradeConnectionById === 'function') {
+    try {
+      await upgradeConnectionById(connId, { source: 'connection-detail' });
+      return;
+    } catch (_) {
+      return;
+    }
+  }
+
   switchTab('connections');
   toast('请在连接中心升级到 Arthas 连接', 'i');
 }
@@ -6878,7 +7592,7 @@ function cdDisconnect() {
   )?.id);
   if (!connId) { toast('没有可断开的连接', 'e'); return; }
   if (!confirm('确定断开此连接吗？')) return;
-  deleteConnection(connId);
+  deleteConnectionPersistent(connId);
   closeConnectionDetail();
 }
 function cdOpenPanel(panelId) {
