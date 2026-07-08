@@ -432,17 +432,24 @@ async function showNamespaceModal(userId, username) {
 async function loadNamespacesForSelectedCluster() {
     const select = document.getElementById('namespaceClusterSelect');
     const clusterId = select.value;
-    const options = document.getElementById('namespaceOptions');
-    options.innerHTML = '';
-    if (!clusterId) return;
+    const namespaceSelect = document.getElementById('namespaceSelect');
+    namespaceSelect.innerHTML = '<option value="">加载中...</option>';
+    if (!clusterId) {
+        namespaceSelect.innerHTML = '<option value="">请先选择集群</option>';
+        return;
+    }
     try {
         const resp = await fetch(API + `/clusters/${encodeURIComponent(clusterId)}/namespaces`, { credentials: 'same-origin' });
         const data = await resp.json();
+        if (!resp.ok) throw new Error(data.error || '加载 namespace 失败');
         const namespaces = data.namespaces || [];
-        options.innerHTML = namespaces.map(ns => `<option value="${escapeHtml(ns)}"></option>`).join('') + '<option value="*"></option>';
+        namespaceSelect.innerHTML = namespaces.map(ns => `<option value="${escapeHtml(ns)}">${escapeHtml(ns)}</option>`).join('') + '<option value="*">*（全部 namespace）</option>';
+        if (namespaces.length === 0) {
+            namespaceSelect.innerHTML = '<option value="*">*（全部 namespace）</option>';
+        }
     } catch (error) {
         console.warn('Failed to load namespace options:', error);
-        options.innerHTML = '<option value="default"></option><option value="*"></option>';
+        namespaceSelect.innerHTML = '<option value="default">default</option><option value="*">*（全部 namespace）</option>';
     }
 }
 
@@ -473,7 +480,7 @@ async function assignNamespace() {
     const modal = document.getElementById('namespaceModal');
     const userId = parseInt(modal.dataset.userId, 10);
     const clusterId = document.getElementById('namespaceClusterSelect').value;
-    const namespace = document.getElementById('namespaceInput').value.trim();
+    const namespace = document.getElementById('namespaceSelect').value;
     const err = document.getElementById('namespaceError');
     err.classList.remove('show');
 
@@ -492,7 +499,7 @@ async function assignNamespace() {
         });
         const data = await resp.json();
         if (!resp.ok) throw new Error(data.error || '授权失败');
-        document.getElementById('namespaceInput').value = '';
+        await loadNamespacesForSelectedCluster();
         const refreshed = await fetch(API + `/user-namespaces/${userId}`, { credentials: 'same-origin' }).then(r => r.json());
         renderAssignedNamespaces(refreshed.namespaces || []);
     } catch (error) {

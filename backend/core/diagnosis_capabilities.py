@@ -285,6 +285,15 @@ def init_capabilities_table(conn):
             FOREIGN KEY (capability_id) REFERENCES diagnosis_capabilities(id) ON DELETE CASCADE
         )
     ''')
+
+    conn.execute('''
+        CREATE TABLE IF NOT EXISTS user_group_members (
+            user_id INTEGER NOT NULL,
+            group_id INTEGER NOT NULL,
+            PRIMARY KEY (user_id, group_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        )
+    ''')
     
     # 初始化数据
     _seed_capabilities(conn)

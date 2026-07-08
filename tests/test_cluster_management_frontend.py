@@ -33,12 +33,19 @@ def test_cluster_management_page_supports_crud_and_test():
     assert "'/test'" in js
     assert 'renderClusterTable' in js
 
-def test_connection_builder_guides_cluster_creation_to_management_page():
+def test_connection_builder_guides_cluster_creation_to_management_page_for_admin_only():
     assert 'title="前往集群管理创建集群"' in INDEX
-    assert "navigateTo('cluster-management')" in INDEX
+    assert 'class="add-conn-inline-btn admin-only"' in INDEX
+    assert 'class="conn-hd-btn admin-only"' in INDEX
     assert 'onclick="openAddCluster()" title="新建集群"' not in INDEX
     assert 'onclick="openAddCluster()" title="添加集群"' not in INDEX
     assert '暂无集群<br>请到系统管理 → 集群管理创建' in APP_UI
+
+
+def test_regular_user_cluster_empty_state_asks_admin_for_assignment():
+    assert '暂无可用集群<br>请联系管理员分配集群权限' in INDEX
+    assert '暂无可用集群<br>请联系管理员分配集群权限' in APP_UI
+    assert "typeof isAdmin === 'function' && isAdmin()" in APP_UI
 
 
 def test_save_cluster_button_shows_saving_and_testing_feedback():

@@ -193,7 +193,7 @@
                     <h3>新增授权</h3>
                     <div class="namespace-form">
                         <div class="fg" style="margin-bottom:0"><label class="fl">集群</label><select class="fs" id="namespaceClusterSelect" onchange="loadNamespacesForSelectedCluster()"></select></div>
-                        <div class="fg" style="margin-bottom:0"><label class="fl">Namespace</label><input class="fi" id="namespaceInput" list="namespaceOptions" placeholder="default 或 *"><datalist id="namespaceOptions"></datalist></div>
+                        <div class="fg" style="margin-bottom:0"><label class="fl">Namespace</label><select class="fs" id="namespaceSelect"><option value="">请先选择集群</option></select></div>
                         <button class="ab ab-p" onclick="assignNamespace()">授权</button>
                     </div>
                     <div class="namespace-hint">填写 <code>*</code> 表示授权该集群下所有 namespace。普通用户仍需先拥有对应集群权限。</div>

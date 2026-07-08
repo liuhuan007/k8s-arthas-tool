@@ -297,7 +297,7 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="add-conn-field">
             <div class="add-conn-label-row">
               <label class="add-conn-label" for="poolSelCluster">集群</label>
-              <button type="button" class="add-conn-inline-btn" onclick="navigateTo('cluster-management')" title="前往集群管理创建集群">去集群管理创建</button>
+              <button type="button" class="add-conn-inline-btn admin-only" onclick="navigateTo('cluster-management')" title="前往集群管理创建集群">去集群管理创建</button>
             </div>
             <select id="poolSelCluster" class="add-conn-select"><option value="">选择集群...</option></select>
           </div>
@@ -445,12 +445,12 @@ document.addEventListener('DOMContentLoaded', function() {
                   <div class="conn-step-title">选择集群</div>
                   <div class="conn-step-sub">当前诊断入口，支持后续扩展用户级集群权限</div>
                 </div>
-                <button class="conn-hd-btn" onclick="navigateTo('cluster-management')" title="前往集群管理创建集群">
+                <button class="conn-hd-btn admin-only" onclick="navigateTo('cluster-management')" title="前往集群管理创建集群">
                   <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
                   <span>去管理</span>
                 </button>
               </div>
-              <div class="sb-cls sb-cls-main" id="sbCls"><div class="sb-empty">暂无集群<br>请到系统管理 → 集群管理创建</div></div>
+              <div class="sb-cls sb-cls-main" id="sbCls"><div class="sb-empty">暂无可用集群<br>请联系管理员分配集群权限</div></div>
 
               <div class="conn-step conn-step-gap">
                 <div class="conn-step-no">2</div>

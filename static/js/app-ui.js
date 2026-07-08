@@ -3241,8 +3241,8 @@ function switchTab(n) {
     DiagnosisContext.onConnectionChange(window.currentConnection);
   }
 
-  updateWorkspaceHead(tab);
   updateConnectionBarVisibility(tab);
+  updateWorkspaceHead(tab);
   loadAdminFrameIfNeeded(tab);
 
   // ✅ 新增: 诊断能力面板初始化
@@ -6759,7 +6759,13 @@ async function loadClusters() {
 
 function renderSidebar() {
   const el = document.getElementById('sbCls');
-  if(!_clusters.length) { el.innerHTML='<div class="sb-empty">暂无集群<br>请到系统管理 → 集群管理创建</div>'; return; }
+  if(!_clusters.length) {
+    const emptyText = (typeof isAdmin === 'function' && isAdmin())
+      ? '暂无集群<br>请到系统管理 → 集群管理创建'
+      : '暂无可用集群<br>请联系管理员分配集群权限';
+    el.innerHTML = `<div class="sb-empty">${emptyText}</div>`;
+    return;
+  }
   el.innerHTML = _clusters.map((c, idx) => {
     const safeName = esc(c.name);
     // 使用 data 属性存储集群名称，避免 HTML 属性中的字符串转义问题

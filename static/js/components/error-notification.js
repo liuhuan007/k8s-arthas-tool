@@ -233,12 +233,23 @@ function extractRuntime(errorMessage) {
  * 显示结构化错误提示
  */
 function showErrorNotification(errorCode, context = {}) {
+  let errorMessage = '';
+  if (typeof errorCode === 'string' && !ErrorMessages[errorCode]) {
+    errorMessage = errorCode;
+    errorCode = detectErrorCode(errorMessage);
+    context = {
+      ...context,
+      details: context.details || errorMessage,
+      message: context.message || errorMessage
+    };
+  }
+
   const errorInfo = ErrorMessages[errorCode] || ErrorMessages[ErrorCodes.UNKNOWN_ERROR];
   
   // 动态生成消息和建议
-  const message = typeof errorInfo.message === 'function' 
+  const message = context.message || (typeof errorInfo.message === 'function' 
     ? errorInfo.message(context.phase || context.runtime || '')
-    : errorInfo.message;
+    : errorInfo.message);
   
   const suggestion = typeof errorInfo.suggestion === 'function'
     ? errorInfo.suggestion(context.phase || context.runtime || '')
