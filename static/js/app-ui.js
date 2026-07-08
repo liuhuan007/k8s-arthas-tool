@@ -67,6 +67,7 @@ var NAV_ROUTES = {
   'filebrowser':      '/#files',
   'model-config':     '/#model-config',
   'mcp-center':       '/mcp-config.html',
+  'cluster-management': '/cluster-management.html',
   'skill-management': '/skill-management.html',
   'user-management':  '/user-management.html',
   'audit-logs':       '/audit-logs.html',
@@ -329,6 +330,7 @@ const PAGE_SCENE_META = {
   'user-management': { required: 'none', showConnBar: false },
   'audit-logs': { required: 'none', showConnBar: false },
   'skill-management': { required: 'none', showConnBar: false },
+  'cluster-management': { required: 'none', showConnBar: false },
   'alerts': { required: 'none', showConnBar: false },
   'hotfix': { required: 'arthas', showConnBar: true },
   'diagnosis-cap': { required: 'none', showConnBar: true },
@@ -381,8 +383,8 @@ function bindFrameThemeSync(frame) {
 }
 
 function loadAdminFrameIfNeeded(tab) {
-  if (!['user-management', 'audit-logs', 'skill-management', 'alerts', 'mcp-center'].includes(tab)) return;
-  if (['user-management', 'audit-logs', 'skill-management', 'alerts'].includes(tab) && !(typeof isAdmin === 'function' && isAdmin())) return;
+  if (!['user-management', 'audit-logs', 'skill-management', 'cluster-management', 'alerts', 'mcp-center'].includes(tab)) return;
+  if (['user-management', 'audit-logs', 'skill-management', 'cluster-management', 'alerts'].includes(tab) && !(typeof isAdmin === 'function' && isAdmin())) return;
   const frame = document.querySelector(`#panel-${tab} iframe[data-src], #panel-${tab} iframe`);
   bindFrameThemeSync(frame);
   if (frame && frame.dataset.src && !frame.getAttribute('src')) {
@@ -1488,6 +1490,8 @@ const WORKSPACE_META = {
 };
 
 function updateWorkspaceHead(tab) {
+  if (window.__hideConnStatusBar) return;
+
   const kicker = document.getElementById('workspaceKicker');
   const title = document.getElementById('workspaceTitle');
   const sub = document.getElementById('workspaceSub');
@@ -3180,7 +3184,7 @@ async function _restoreActiveConnection(conn, savedLevel) {
 }
 
 function switchTab(n) {
-  const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'hotfix', 4:'terminal', 5:'monitor', 6:'filebrowser', 7:'ai', 8:'model-config', 9:'mcp-center', 10:'task-center', 11:'toolchain-center', 12:'history', 13:'diag', 14:'skill-management', 15:'user-management', 16:'audit-logs', 17:'alerts'};
+  const tabMap = {0:'connections', 1:'profiler', 2:'console', 3:'hotfix', 4:'terminal', 5:'monitor', 6:'filebrowser', 7:'ai', 8:'model-config', 9:'mcp-center', 10:'task-center', 11:'toolchain-center', 12:'history', 13:'diag', 14:'skill-management', 15:'cluster-management', 16:'user-management', 17:'audit-logs', 18:'alerts'};
   const tab = typeof n === 'number' ? tabMap[n] : n;
   const previousShellMode = window.__mainShellMode || 'workspace';
   setMainShellMode('legacy');
@@ -3209,7 +3213,7 @@ function switchTab(n) {
   }
 
   // 先切 Tab（允许切换到任何 Tab）
-  const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','external-system','history','diag','diagnosis-cap','skill-management','user-management','audit-logs','alerts'];
+  const allTabs = ['connections','console','profiler','hotfix','monitor','filebrowser','terminal','ai','model-config','mcp-center','task-center','toolchain-center','external-system','history','diag','diagnosis-cap','skill-management','cluster-management','user-management','audit-logs','alerts'];
   
   allTabs.forEach(x => {
     document.getElementById('tab-'+x)?.classList.toggle('on', x===tab);
@@ -6755,7 +6759,7 @@ async function loadClusters() {
 
 function renderSidebar() {
   const el = document.getElementById('sbCls');
-  if(!_clusters.length) { el.innerHTML='<div class="sb-empty">暂无集群<br>点击 ＋ 添加</div>'; return; }
+  if(!_clusters.length) { el.innerHTML='<div class="sb-empty">暂无集群<br>请到系统管理 → 集群管理创建</div>'; return; }
   el.innerHTML = _clusters.map((c, idx) => {
     const safeName = esc(c.name);
     // 使用 data 属性存储集群名称，避免 HTML 属性中的字符串转义问题
@@ -6797,14 +6801,20 @@ function selCluster(name) {
   else { autoLoadNs(name); }
 }
 
-async function pingCluster(name) {
+async function pingCluster(name, showToast = false) {
   const did = 'sbd_' + btoa(encodeURIComponent(name)).replace(/[^a-zA-Z0-9]/g,'_');
   const dot = document.getElementById(did); if(dot) dot.className='sb-dt pinging';
   try {
     const r = await fetch(`${API}/clusters/${encodeURIComponent(name)}/test`, {method:'POST'});
     const d = await r.json();
     if(dot) dot.className = 'sb-dt ' + (d.ok?'ok':'err');
-  } catch { if(dot) dot.className='sb-dt err'; }
+    if (showToast) toast(`集群连接测试${d.ok ? '成功' : '失败'}${d.ok ? '' : '：' + (d.error || d.message || '请检查 kubeconfig')}`, d.ok ? 'success' : 'error');
+    return d;
+  } catch(e) {
+    if(dot) dot.className='sb-dt err';
+    if (showToast) toast('集群连接测试失败：' + e.message, 'error');
+    return { ok: false, error: e.message };
+  }
 }
 
 async function delCluster(name) {
@@ -6893,7 +6903,8 @@ function validateSelectedNamespace() {
 function populateNsList(nsList) {
   normalizeActiveNamespace(nsList);
 }
-function closeModal() { document.getElementById('clModal').classList.remove('open'); }
+function closeClusterModal() { document.getElementById('clModal').classList.remove('open'); }
+function closeModal() { closeClusterModal(); }
 
 async function fetchCtxs() {
   const kc = document.getElementById('mKc').value.trim();
@@ -6923,8 +6934,11 @@ async function saveCluster() {
   const kc   = document.getElementById('mKc').value.trim();
   const ctx  = document.getElementById('mCtx').value.trim();
   const err  = document.getElementById('mErr');
+  const saveBtn = document.getElementById('mSaveBtn');
+  const oldSaveText = saveBtn ? saveBtn.textContent : '';
   if(!name || !kc) { err.textContent='名称和路径必填'; err.style.display='block'; return; }
   err.style.display='none';
+  if (saveBtn) { saveBtn.disabled = true; saveBtn.textContent = '保存中...'; }
   try {
     // 编辑已有集群用 POST（避免某些代理/防火墙拦截 PUT），新增也用 POST
     // 编辑时 URL 带旧名称，后端通过 URL 参数识别是更新操作
@@ -6938,20 +6952,25 @@ async function saveCluster() {
     });
     const d = await r.json();
     if(!r.ok) { err.textContent = d.error; err.style.display='block'; return; }
-    const wasEditing = !!_editingCluster;
     _editingCluster = null;
     closeModal();
-    toast(wasEditing ? '集群已更新' : '集群已添加', 'success');
+    toast('集群已保存，正在后台测试连接...', 'success');
     await loadClusters();
     // 选中集群但不立即 ping（ping 是异步的，不阻塞保存响应）
     _ac = name;
     try { localStorage.setItem('arthas_ac', name); } catch {}
     renderSidebar();
+    if (window.ConnectionPool && typeof window.ConnectionPool.loadClusters === 'function') {
+      window.ConnectionPool.loadClusters();
+    }
     // 延迟 ping，避免 kubectl 阻塞导致前端报错
-    setTimeout(() => pingCluster(name), 800);
+    setTimeout(() => pingCluster(name, true), 800);
     // Auto-load namespaces for sidebar display
     autoLoadNs(name);
   } catch(e) { err.textContent=e.message; err.style.display='block'; }
+  finally {
+    if (saveBtn) { saveBtn.disabled = false; saveBtn.textContent = oldSaveText || '保存并连接测试'; }
+  }
 }
 
 // ── Tasks & Files ──────────────────────────────────────────────────────────────
@@ -7184,6 +7203,7 @@ if (_pmLg) _pmLg.style.display = 'none';
 // 集群相关
 window.openAddCluster = openAddCluster;
 window.openEditCluster = openEditCluster;
+window.closeClusterModal = closeClusterModal;
 window.closeModal = closeModal;
 window.saveCluster = saveCluster;
 window.delCluster = delCluster;
