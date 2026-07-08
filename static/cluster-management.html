@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>集群管理 - K8s Arthas Tool</title>
+    <script>
+    (function(){try{if(localStorage.getItem('ops_ui_theme')==='devops')document.documentElement.setAttribute('data-ops-theme','devops');}catch(e){}})();
+    </script>
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500;600&family=Syne:wght@600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="css/app.css?v=20260704a">
+    <style>
+        body{background:var(--bg);color:var(--tx);font-family:var(--mono);margin:0;overflow:auto}
+        .admin-page{display:flex;flex-direction:column;min-height:100vh}
+        .topbar{height:44px;background:var(--bg1);border-bottom:1px solid var(--ln);display:flex;align-items:center;flex-shrink:0}
+        .tb-logo{display:flex;align-items:center;gap:10px;padding:0 16px;border-right:1px solid var(--ln);height:100%;flex-shrink:0}
+        .tb-hex{width:24px;height:24px;background:var(--a);clip-path:polygon(50% 0%,100% 25%,100% 75%,50% 100%,0% 75%,0% 25%)}
+        .tb-title{font-family:var(--sans);font-weight:800;font-size:14px;letter-spacing:-.5px}.tb-title em{color:var(--a);font-style:normal}
+        .tb-links{display:flex;align-items:center;height:100%;flex:1;padding:0 10px;gap:4px}.tb-lnk{padding:3px 9px;border-radius:3px;font-size:11px;border:1px solid var(--ln2);color:var(--tx2);cursor:pointer;transition:all .15s;text-decoration:none}.tb-lnk:hover{border-color:var(--a);color:var(--a);background:rgba(56,189,248,.06)}
+        .tb-right{display:flex;align-items:center;height:100%;margin-left:auto}.tb-srv{display:flex;align-items:center;gap:6px;padding:0 14px;border-left:1px solid var(--ln);font-size:11px;color:var(--tx2)}
+        .admin-content{flex:1;padding:24px 30px;max-width:1400px;margin:0 auto;width:100%;box-sizing:border-box}
+        .admin-header{display:flex;justify-content:space-between;align-items:flex-end;margin-bottom:18px;padding-bottom:14px;border-bottom:1px solid var(--ln)}
+        .admin-header h1{font-family:var(--sans);font-size:18px;font-weight:700;color:var(--tx);margin:0}.admin-header h1 span{color:var(--a)}
+        .admin-subtitle{margin:6px 0 0;color:var(--tx3);font-size:12px;line-height:1.6}
+        .btn-row{display:flex;gap:8px;flex-wrap:wrap}.ab{padding:6px 14px;border-radius:4px;cursor:pointer;font-size:12px;font-family:var(--mono);border:none;transition:all .15s;font-weight:500}.ab:disabled{opacity:.55;cursor:not-allowed}.ab-p{background:var(--a);color:#0b0f18;font-weight:600}.ab-p:hover{filter:brightness(1.1)}.ab-g{background:none;color:var(--tx2);border:1px solid var(--ln)}.ab-g:hover{border-color:var(--a);color:var(--a)}.ab-d{background:rgba(248,113,113,.12);color:var(--a5);border:1px solid rgba(248,113,113,.25)}.ab-d:hover{background:rgba(248,113,113,.2)}.ab-sm{padding:4px 10px;font-size:11px}
+        .summary-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:16px}.summary-card{background:linear-gradient(135deg,rgba(56,189,248,.10),rgba(167,139,250,.04));border:1px solid var(--ln);border-radius:10px;padding:14px}.summary-card b{display:block;font-size:20px;color:var(--tx);font-family:var(--sans)}.summary-card span{display:block;margin-top:4px;font-size:11px;color:var(--tx3)}
+        .tbl-wrap{background:var(--bg1);border:1px solid var(--ln);border-radius:8px;overflow:hidden}.tbl{width:100%;border-collapse:collapse}.tbl th{background:var(--bg2);color:var(--tx2);padding:11px 14px;text-align:left;font-size:11px;font-weight:600;letter-spacing:.5px;text-transform:uppercase;border-bottom:1px solid var(--ln)}.tbl td{padding:11px 14px;border-bottom:1px solid var(--ln);color:var(--tx);font-size:12px;vertical-align:middle}.tbl tr:last-child td{border-bottom:none}.tbl tr:hover td{background:rgba(255,255,255,.02)}
+        .cluster-name{font-weight:700;color:var(--a)}.mono-path{color:var(--tx2);font-size:11px;word-break:break-all}.status-pill{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:4px 9px;font-size:11px;border:1px solid var(--ln);color:var(--tx2)}.status-ok{background:rgba(52,211,153,.12);color:var(--a3);border-color:rgba(52,211,153,.25)}.status-err{background:rgba(248,113,113,.12);color:var(--a5);border-color:rgba(248,113,113,.25)}.status-testing{background:rgba(56,189,248,.12);color:var(--a);border-color:rgba(56,189,248,.25)}
+        .modal-bg{position:fixed;inset:0;background:rgba(11,15,24,.88);display:none;align-items:center;justify-content:center;z-index:999;backdrop-filter:blur(4px)}.modal-bg.open{display:flex}.modal{background:var(--bg1);border:1px solid var(--ln2);border-radius:8px;width:520px;max-width:96vw;box-shadow:0 20px 60px rgba(0,0,0,.7);animation:mi .2s ease}@keyframes mi{from{transform:translateY(-10px);opacity:0}to{transform:translateY(0);opacity:1}}.mhd{padding:15px 18px 12px;border-bottom:1px solid var(--ln);display:flex;align-items:center;justify-content:space-between}.m-tt{font-family:var(--sans);font-size:14px;font-weight:700;color:var(--tx)}.m-cl{background:none;border:none;color:var(--tx2);cursor:pointer;font-size:16px}.m-cl:hover{color:var(--tx)}.mbd{padding:18px}.mft{padding:12px 18px;border-top:1px solid var(--ln);display:flex;gap:8px;justify-content:flex-end}.fg{margin-bottom:14px}.fl{font-size:10px;color:var(--tx3);text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;display:block}.fi{width:100%;box-sizing:border-box;padding:8px 10px;background:var(--bg2);border:1px solid var(--ln);border-radius:4px;color:var(--tx);font-family:var(--mono);font-size:12px;outline:none;transition:border-color .15s}.fi:focus{border-color:var(--a)}.hint{font-size:11px;color:var(--tx3);line-height:1.5;margin-top:6px}.err-box{color:var(--a5);background:rgba(248,113,113,.06);border:1px solid rgba(248,113,113,.25);border-radius:6px;padding:10px 14px;font-size:11px;display:none;margin-top:8px}.err-box.show{display:block}.empty-msg{text-align:center;padding:40px;color:var(--tx3);font-size:12px}.toast-host{position:fixed;right:18px;bottom:18px;display:flex;flex-direction:column;gap:8px;z-index:1200}.toast-item{background:var(--bg1);border:1px solid var(--ln2);color:var(--tx);padding:9px 12px;border-radius:6px;box-shadow:0 12px 32px rgba(0,0,0,.35);font-size:12px}.toast-success{border-color:rgba(52,211,153,.35)}.toast-error{border-color:rgba(248,113,113,.35)}
+        body.embed{overflow:hidden}body.embed .admin-page{min-height:100vh}body.embed .topbar{display:none}body.embed .admin-content{max-width:none;padding:18px 20px}
+        @media (max-width:900px){.summary-grid{grid-template-columns:1fr}.admin-header{align-items:stretch;flex-direction:column;gap:12px}.tbl-wrap{overflow:auto}.tbl{min-width:760px}}
+    </style>
+    <link rel="stylesheet" href="css/ops-theme-bridge.css?v=20260619c">
+    <script src="js/theme-switcher.js?v=20260619d"></script>
+</head>
+<body>
+    <script>
+        if (new URLSearchParams(window.location.search).get('embed') === '1') {
+            document.body.classList.add('embed');
+        }
+    </script>
+    <div class="admin-page">
+        <div class="topbar">
+            <div class="tb-logo"><div class="tb-hex"></div><span class="tb-title">Arthas <em>K8s</em></span></div>
+            <div class="tb-links">
+                <a class="tb-lnk" href="/">← 返回主页</a>
+                <a class="tb-lnk" href="user-management.html">用户管理</a>
+                <a class="tb-lnk" href="audit-logs.html">审计日志</a>
+            </div>
+            <div class="tb-right"><div class="tb-srv"><span id="currentUser">—</span></div></div>
+        </div>
+        <main class="admin-content">
+            <div class="admin-header">
+                <div>
+                    <h1>☸ <span>集群管理</span></h1>
+                    <p class="admin-subtitle">集中维护 KubeConfig、Context，并提供连接测试、编辑和删除能力。</p>
+                </div>
+                <div class="btn-row">
+                    <button class="ab ab-g" onclick="loadClusters()">↻ 刷新</button>
+                    <button class="ab ab-p" onclick="openClusterModal()">＋ 添加集群</button>
+                </div>
+            </div>
+            <section class="summary-grid">
+                <div class="summary-card"><b id="clusterTotal">0</b><span>集群配置总数</span></div>
+                <div class="summary-card"><b id="clusterOk">0</b><span>本页测试成功</span></div>
+                <div class="summary-card"><b id="clusterErr">0</b><span>本页测试失败</span></div>
+            </section>
+            <div class="tbl-wrap">
+                <table class="tbl">
+                    <thead>
+                        <tr>
+                            <th>集群名称</th>
+                            <th>KubeConfig</th>
+                            <th>Context</th>
+                            <th>连接状态</th>
+                            <th>操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="clusterTableBody">
+                        <tr><td colspan="5" class="empty-msg">加载中...</td></tr>
+                    </tbody>
+                </table>
+            </div>
+            <div id="clusterPageError" class="err-box"></div>
+        </main>
+    </div>
+
+    <div class="modal-bg" id="clusterModal">
+        <div class="modal">
+            <div class="mhd"><span class="m-tt" id="clusterModalTitle">添加集群</span><button class="m-cl" onclick="closeClusterModal()">✕</button></div>
+            <div class="mbd">
+                <div class="fg"><label class="fl">集群显示名称</label><input class="fi" id="clusterName" placeholder="生产-东区"></div>
+                <div class="fg">
+                    <label class="fl">KubeConfig 文件路径</label>
+                    <div style="display:flex;gap:8px">
+                        <input class="fi" id="clusterKubeconfig" placeholder="/root/.kube/config" style="flex:1">
+                        <button class="ab ab-g" onclick="fetchClusterContexts()" style="padding:6px 10px;font-size:11px;white-space:nowrap">获取 Context</button>
+                    </div>
+                    <div class="hint">填写服务端可访问的绝对路径，点击获取 Context 可验证路径并加载可选列表。</div>
+                </div>
+                <div class="fg"><label class="fl">Context</label><input class="fi" id="clusterContext" placeholder="留空使用默认 context"></div>
+                <div class="fg" id="clusterContextSelectWrap" style="display:none">
+                    <label class="fl">选择 Context</label>
+                    <select class="fi" id="clusterContextSelect" onchange="document.getElementById('clusterContext').value=this.value"><option value="">—</option></select>
+                </div>
+                <div id="clusterModalError" class="err-box"></div>
+            </div>
+            <div class="mft">
+                <button class="ab ab-g" onclick="closeClusterModal()">取消</button>
+                <button class="ab ab-p" id="clusterSaveBtn" onclick="saveClusterConfig()">保存</button>
+            </div>
+        </div>
+    </div>
+    <div class="toast-host" id="toast"></div>
+    <script src="js/cluster-management.js?v=20260708a"></script>
+</body>
+</html>

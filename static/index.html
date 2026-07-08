@@ -37,7 +37,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <script>
 (function(){try{if(localStorage.getItem('ops_ui_theme')==='devops')document.documentElement.setAttribute('data-ops-theme','devops');}catch(e){}})();
 </script>
-<link rel="stylesheet" href="css/app.css?v=20260619h">
+<link rel="stylesheet" href="css/app.css?v=20260704a">
 <link rel="stylesheet" href="css/components/diagnosis.css?v=20260525a">
 <link rel="stylesheet" href="css/components/scheduler.css">
 
@@ -61,7 +61,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <script>console.log('🔍 script-check: API=' + typeof API + ', safePost=' + typeof safePost + ', diagQuickTool=' + typeof window.diagQuickTool + ', diagSelectScene=' + typeof window.diagSelectScene + ', diagStart=' + typeof window.diagStart);</script>
 
 <!-- 应用入口 -->
-<script src="js/app-ui.js?v=20260619zg"></script>
+<script src="js/app-ui.js?v=20260704a"></script>
 <script src="js/app.js"></script>
 
 <!-- ✅ 新增: 统一状态管理 -->
@@ -228,6 +228,9 @@ document.addEventListener('DOMContentLoaded', function() {
         <button class="side-nav-item" data-nav-tab="skill-management" onclick="navigateTo('skill-management')">
           <span>⚡</span><span>Skill 管理</span>
         </button>
+        <button class="side-nav-item" data-nav-tab="cluster-management" onclick="navigateTo('cluster-management')">
+          <span>☸</span><span>集群管理</span>
+        </button>
         <button class="side-nav-item" data-nav-tab="user-management" onclick="navigateTo('user-management')">
           <span>👥</span><span>用户管理</span>
         </button>
@@ -261,7 +264,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <div class="pool" id="connectionPool">
   <div class="pool-hd">
     <div class="pool-tt"><span>🔌 连接池</span><span id="poolCount" style="color:var(--a)"></span></div>
-    <button class="pool-add-btn" id="poolAddBtn">+ 新连接</button>
+    <button class="pool-add-btn" id="poolAddBtn">+ 连接 Pod</button>
   </div>
   <div class="pool-srch"><form action="#" autocomplete="off" style="display:contents" onsubmit="return false"><input type="text" id="poolSearch" placeholder="搜索 Pod / 集群 / 命名空间..." aria-label="搜索连接" name="" inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-form-type="other"></form></div>
   <div class="pool-ls" id="poolList"></div>
@@ -286,13 +289,16 @@ document.addEventListener('DOMContentLoaded', function() {
       <div class="add-conn-head">
         <div>
           <div class="add-conn-kicker">Connection Builder</div>
-          <h2 class="add-conn-title">🔌 新建连接</h2>
+          <h2 class="add-conn-title">🔌 连接 Pod</h2>
         </div>
       </div>
       <div class="add-conn-grid">
         <section class="add-conn-card add-conn-form">
           <div class="add-conn-field">
-            <label class="add-conn-label">集群</label>
+            <div class="add-conn-label-row">
+              <label class="add-conn-label" for="poolSelCluster">集群</label>
+              <button type="button" class="add-conn-inline-btn" onclick="navigateTo('cluster-management')" title="前往集群管理创建集群">去集群管理创建</button>
+            </div>
             <select id="poolSelCluster" class="add-conn-select"><option value="">选择集群...</option></select>
           </div>
           <div class="add-conn-field">
@@ -439,12 +445,12 @@ document.addEventListener('DOMContentLoaded', function() {
                   <div class="conn-step-title">选择集群</div>
                   <div class="conn-step-sub">当前诊断入口，支持后续扩展用户级集群权限</div>
                 </div>
-                <button class="conn-hd-btn" onclick="openAddCluster()" title="添加集群">
-                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-                  <span>添加</span>
+                <button class="conn-hd-btn" onclick="navigateTo('cluster-management')" title="前往集群管理创建集群">
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><path d="M9 18l6-6-6-6"/></svg>
+                  <span>去管理</span>
                 </button>
               </div>
-              <div class="sb-cls sb-cls-main" id="sbCls"><div class="sb-empty">暂无集群<br>点击 ＋ 添加</div></div>
+              <div class="sb-cls sb-cls-main" id="sbCls"><div class="sb-empty">暂无集群<br>请到系统管理 → 集群管理创建</div></div>
 
               <div class="conn-step conn-step-gap">
                 <div class="conn-step-no">2</div>
@@ -857,6 +863,10 @@ document.addEventListener('DOMContentLoaded', function() {
     <!-- Embedded Admin Pages -->
     <div class="panel" id="panel-skill-management">
       <iframe class="admin-frame" data-src="skill-management.html?embed=1" title="Skill 管理"></iframe>
+    </div>
+
+    <div class="panel" id="panel-cluster-management">
+      <iframe class="admin-frame" data-src="cluster-management.html?embed=1" title="集群管理"></iframe>
     </div>
 
     <div class="panel" id="panel-user-management">
@@ -1986,7 +1996,7 @@ document.addEventListener('DOMContentLoaded', function() {
 <!-- Add Cluster Modal -->
 <div class="modal-bg" id="clModal">
   <div class="modal">
-    <div class="mhd"><span class="m-tt" id="m-tt">添加 K8s 集群</span><button class="m-cl" onclick="closeModal()">✕</button></div>
+    <div class="mhd"><span class="m-tt" id="m-tt">添加 K8s 集群</span><button class="m-cl" onclick="closeClusterModal()">✕</button></div>
     <div class="mbd">
       <div class="fg"><label class="fl">集群显示名称</label><input class="fi" id="mName" placeholder="生产-东区"></div>
       <div class="fg"><label class="fl">KubeConfig 文件路径（服务器上的绝对路径）</label><input class="fi" id="mKc" placeholder="/root/.kube/config"></div>
@@ -2004,8 +2014,8 @@ document.addEventListener('DOMContentLoaded', function() {
       <div id="mErr" style="color:var(--a5);font-size:11px;margin-top:6px;display:none"></div>
     </div>
     <div class="mft">
-      <button class="btn btn-g" onclick="closeModal()">取消</button>
-      <button class="btn btn-p" onclick="saveCluster()">保存并连接测试</button>
+      <button class="btn btn-g" onclick="closeClusterModal()">取消</button>
+      <button class="btn btn-p" id="mSaveBtn" onclick="saveCluster()">保存并连接测试</button>
     </div>
   </div>
 </div>
