@@ -134,6 +134,11 @@ cd k8s-arthas-tool
 ### 手动启动
 
 ```bash
+# 1. 创建并激活 conda 环境
+conda create -n arthas python=3.10 -y
+conda activate arthas
+
+# 2. 安装依赖并启动服务
 pip install -r requirements.txt
 python server.py                     # 默认 127.0.0.1:5005
 python server.py --port 8080         # 自定义端口

@@ -18,6 +18,7 @@ var NAV_ROUTES = {
   'filebrowser':      '/#files',
   'model-config':     '/#model-config',
   'mcp-center':       '/mcp-config.html',
+  'cluster-management': '/cluster-management.html',
   'skill-management': '/skill-management.html',
   'user-management':  '/user-management.html',
   'audit-logs':       '/audit-logs.html',

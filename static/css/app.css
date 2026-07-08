@@ -5083,6 +5083,30 @@ code{background:var(--bg3);padding:1px 5px;border-radius:3px;color:var(--a);font
   font-size:11px;
   color:var(--tx3);
 }
+.add-conn-label-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+}
+.add-conn-inline-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:4px 9px;
+  border:1px solid rgba(14,165,255,.35);
+  border-radius:999px;
+  background:rgba(14,165,255,.08);
+  color:var(--a);
+  font-size:11px;
+  line-height:1.2;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.add-conn-inline-btn:hover{
+  background:rgba(14,165,255,.16);
+  border-color:rgba(14,165,255,.58);
+}
 .add-conn-select{
   width:100%;
   padding:10px 12px;
