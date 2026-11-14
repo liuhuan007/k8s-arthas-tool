@@ -1544,6 +1544,37 @@ def arthas_session_close():
 # 性能分析任务
 # ═══════════════════════════════════════════════════════════════════════════════
 
+@app.route('/api/profile/approval', methods=['POST'])
+@login_required
+def issue_profiler_approval():
+    """Issue a one-time approval token after an explicit UI confirmation."""
+    d = request.json or {}
+    connection_id = d.get('connection_id') or d.get('conn_id') or ''
+    task_type = d.get('type', '')
+    try:
+        duration = int(d.get('duration', 0))
+    except (TypeError, ValueError):
+        return jsonify({"error": "duration 必须是整数"}), 400
+    if not connection_id or not _check_conn_owner(connection_id):
+        return jsonify({"error": "连接不存在或无权访问"}), 404
+
+    try:
+        from services.operation_approval_service import OperationApprovalService
+        token = OperationApprovalService(db).issue(
+            user_id=current_user.id,
+            connection_id=connection_id,
+            action=task_type,
+            duration=duration,
+            is_admin=current_user.is_admin,
+        )
+    except PermissionError as e:
+        return jsonify({"error": str(e)}), 403
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    return jsonify({"approval_token": token, "expires_in": 300})
+
+
 @app.route('/api/profile/start', methods=['POST'])
 @login_required
 def start_profiler():
@@ -1556,6 +1587,17 @@ def start_profiler():
         task_type = d.get('mode') or d.get('type', 'profiler')
         duration = int(d.get('duration', 60))
         fmt = d.get('format', 'html')
+        approval_token = d.get('approval_token')
+        if task_type == 'heapdump' and not current_user.is_admin:
+            return jsonify({"state": "FAILED", "message": "Heap Dump 仅管理员可执行"}), 403
+        if (task_type == 'heapdump' or duration > 120) and not approval_token:
+            return jsonify({
+                "state": "FAILED",
+                "requires_confirmation": True,
+                "message": "Heap Dump 或超过 120 秒的采样需要逐次审批令牌",
+            }), 428
+        if duration < 0 or duration > 1800:
+            return jsonify({"state": "FAILED", "message": "采样时长必须在 0 到 1800 秒之间"}), 400
         if task_type == 'jfr':
             event = d.get('event', d.get('jfr_settings', 'default'))
         elif task_type in ('threaddump', 'heapdump'):
@@ -1594,9 +1636,22 @@ def start_profiler():
         from services.audit_service import AuditService
         AuditService.log_task_created(user_id, task_id, task_type)
 
-        result = svc.start_task(task_id, conn_obj=conn)
+        result = svc.start_task(
+            task_id,
+            conn_obj=conn,
+            user_id=user_id,
+            is_admin=current_user.is_admin,
+            approval_token=approval_token
+        )
         if not result.get('success'):
-            return jsonify({"state": "FAILED", "message": result.get('message', '启动失败')}), 500
+            svc.delete_task(
+                task_id, user_id=user_id, is_admin=current_user.is_admin)
+            status_code = 403 if result.get('requires_confirmation') else 500
+            return jsonify({
+                "state": "FAILED",
+                "requires_confirmation": result.get('requires_confirmation', False),
+                "message": result.get('message', '启动失败')
+            }), status_code
 
         return jsonify({"ok": True, "task_id": task_id, "connection_id": conn_id})
 
@@ -1612,7 +1667,8 @@ def get_profile_status(task_id: str):
     from services.profiler_service import get_profiler_service
 
     svc = get_profiler_service()
-    result = svc.get_task_status(task_id)
+    result = svc.get_task_status(task_id, user_id=current_user.id,
+                                 is_admin=current_user.is_admin)
     if not result.get('success'):
         return jsonify({"error": result.get('message', '任务不存在'), "status": "failed"}), 404
 
@@ -1649,7 +1705,8 @@ def profile_status():
     task_id = d.get('task_id', '')
 
     svc = get_profiler_service()
-    result = svc.get_task_status(task_id)
+    result = svc.get_task_status(task_id, user_id=current_user.id,
+                                 is_admin=current_user.is_admin)
     if not result.get('success'):
         return jsonify({"status": "not_found", "error": result.get('message', '任务不存在')}), 404
 
@@ -1675,10 +1732,12 @@ def stop_profiler():
     task_id = d.get('task_id', '')
 
     svc = get_profiler_service()
-    result = svc.stop_task(task_id)
+    result = svc.stop_task(task_id, user_id=current_user.id,
+                           is_admin=current_user.is_admin)
     if not result.get('success'):
-        task = db.fetch_one('SELECT status FROM profiler_tasks WHERE id = ?', (task_id,))
-        if not task:
+        visible_task = svc.get_task_status(
+            task_id, user_id=current_user.id, is_admin=current_user.is_admin)
+        if not visible_task.get('success'):
             return jsonify({"error": "任务不存在"}), 404
         return jsonify({"ok": False, "msg": result.get('message', '无法停止')})
 
@@ -1691,12 +1750,18 @@ def stop_profiler():
 def save_profiler_log():
     """更新任务进度消息"""
     d = request.json or {}
-    task_id = d.get('task_id', '') or d.get('connection_id', '')
+    task_id = d.get('task_id', '')
     message = d.get('message', '')
     progress = d.get('progress')  # 可选
     
     if not task_id:
         return jsonify({"error": "task_id 必填"}), 400
+
+    task = db.fetch_one('SELECT user_id FROM profiler_tasks WHERE id = ?', (task_id,))
+    if not task:
+        return jsonify({"error": "任务不存在"}), 404
+    if not current_user.is_admin and task.get('user_id') != current_user.id:
+        return jsonify({"error": "任务不存在或无权访问"}), 404
     
     update_data = {'updated_at': datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
     if message:
@@ -1712,6 +1777,9 @@ def save_profiler_log():
 @login_required
 def get_profiler_logs(connection_id):
     """获取连接的采样任务日志"""
+    if not _check_conn_owner(connection_id):
+        return jsonify({"error": "连接不存在或无权访问"}), 404
+
     # 获取该连接的所有任务
     tasks = db.fetch_all(
         'SELECT id, status, message, progress, created_at, updated_at FROM profiler_tasks WHERE connection_id = ? ORDER BY created_at DESC LIMIT 20',
@@ -1727,6 +1795,9 @@ def get_profiler_logs(connection_id):
 @login_required
 def clear_profiler_logs(connection_id):
     """清除连接的采样日志记录（保留任务记录）"""
+    if not _check_conn_owner(connection_id):
+        return jsonify({"error": "连接不存在或无权访问"}), 404
+
     try:
         # 删除该连接下已失败/已取消的采样任务记录
         db.delete('profiler_tasks', "connection_id = ? AND status IN ('failed', 'cancelled', 'stopped')", (connection_id,))
@@ -1745,7 +1816,11 @@ def list_profiler_tasks():
     user_id = None if current_user.is_admin else current_user.id
 
     svc = get_profiler_service()
-    raw_tasks = svc.list_tasks(connection_id=conn_id or None, user_id=user_id)
+    raw_tasks = svc.list_tasks(
+        connection_id=conn_id or None,
+        user_id=current_user.id,
+        is_admin=current_user.is_admin
+    )
 
     tasks = []
     for t in raw_tasks:
@@ -1785,7 +1860,8 @@ def get_profiler_task(task_id: str):
     from services.profiler_service import get_profiler_service
 
     svc = get_profiler_service()
-    result = svc.get_task_status(task_id)
+    result = svc.get_task_status(task_id, user_id=current_user.id,
+                                 is_admin=current_user.is_admin)
     if not result.get('success'):
         return jsonify({"error": result.get('message', '任务不存在')}), 404
 
@@ -1823,10 +1899,12 @@ def cancel_profiler_task(task_id: str):
     from services.profiler_service import get_profiler_service
 
     svc = get_profiler_service()
-    result = svc.stop_task(task_id)
+    result = svc.stop_task(task_id, user_id=current_user.id,
+                           is_admin=current_user.is_admin)
     if not result.get('success'):
-        task = db.fetch_one('SELECT status FROM profiler_tasks WHERE id = ?', (task_id,))
-        if not task:
+        visible_task = svc.get_task_status(
+            task_id, user_id=current_user.id, is_admin=current_user.is_admin)
+        if not visible_task.get('success'):
             return jsonify({"error": "任务不存在"}), 404
         return jsonify({"ok": False, "msg": result.get('message', '无法取消')})
 
@@ -1844,6 +1922,8 @@ def download_profiler_result(task_id: str):
     # 非管理员检查任务归属
     if not current_user.is_admin and task.get('user_id') != current_user.id:
         return jsonify({"error": "无权限"}), 403
+    if task.get('type') == 'heapdump' and not current_user.is_admin:
+        return jsonify({"error": "Heap Dump 仅管理员可访问"}), 403
     
     if task['status'] != 'completed':
         return jsonify({"error": "任务未完成"}), 400

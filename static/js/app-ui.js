@@ -5186,6 +5186,20 @@ function pfSetDur(s) {
   const nm = document.getElementById('pfDurNum');  if(nm) nm.value = s;
 }
 
+async function pfRequestApproval(target, type, duration) {
+  const response = await fetch(`${API}/profile/approval`, {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    credentials: 'include',
+    body: JSON.stringify({...profilerTargetPayload(target), type, duration}),
+  });
+  const data = await response.json();
+  if (!response.ok || !data.approval_token) {
+    throw new Error(data.error || data.message || '审批令牌申请失败');
+  }
+  return data.approval_token;
+}
+
 async function pfStart() {
   if(window.ConnectionGuard && !ConnectionGuard.guard('profiler')) {
     // ConnectionGuard 已经显示了引导面板，这里添加额外的 toast 提示
@@ -5206,6 +5220,15 @@ async function pfStart() {
 
   // ── async-profiler (profiler start/stop) ──────────────────────────────────
   _pfDur   = Math.max(30, parseInt(document.getElementById('pfDurNum')?.value || document.getElementById('pfDur')?.value) || 60);
+  if (_pfDur > 1800) { toast('采样时长不能超过 1800 秒', 'warn'); return; }
+  const requiresApproval = _pfDur > 120;
+  if (requiresApproval && !window.confirm(
+    `本次采样将持续 ${_pfDur} 秒，可能增加目标 JVM 负载。确认启动？`)) return;
+  let approvalToken = null;
+  if (requiresApproval) {
+    try { approvalToken = await pfRequestApproval(t, 'profiler', _pfDur); }
+    catch(e) { toast(e.message, 'error'); return; }
+  }
   _pfStart = Date.now();
   const event  = document.getElementById('pfEvent')?.value  || 'cpu';
   const fmt    = document.getElementById('pfFmt')?.value    || 'html';
@@ -5221,7 +5244,7 @@ async function pfStart() {
   try {
     const r = await fetch(`${API}/profile/start`, {
       method:'POST', headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({...profilerTargetPayload(t), duration: _pfDur, format: fmt, event}),
+      body: JSON.stringify({...profilerTargetPayload(t), duration: _pfDur, format: fmt, event, approval_token: approvalToken}),
     });
     const d = await r.json(); 
     if(!r.ok) {
@@ -5253,6 +5276,15 @@ async function pfRunJfr(t) {
   // 注意: JFR 需要 JDK 11+，不同于 async-profiler 的 "profiler stop --format jfr"
   const name     = document.getElementById('jfrName')?.value.trim() || 'arthas-jfr';
   const dur      = Math.max(10, parseInt(document.getElementById('jfrDurNum')?.value) || 60);
+  if (dur > 1800) { toast('JFR 时长不能超过 1800 秒', 'warn'); return; }
+  const requiresApproval = dur > 120;
+  if (requiresApproval && !window.confirm(
+    `JFR 将持续录制 ${dur} 秒，可能增加目标 JVM 负载。确认启动？`)) return;
+  let approvalToken = null;
+  if (requiresApproval) {
+    try { approvalToken = await pfRequestApproval(t, 'jfr', dur); }
+    catch(e) { toast(e.message, 'error'); return; }
+  }
   const settings = document.getElementById('jfrSettings')?.value || 'default';
   const _jts    = fmtNowTs();
   const jfrFile  = `/tmp/jfr-${name}-${_jts}.jfr`;
@@ -5274,7 +5306,7 @@ async function pfRunJfr(t) {
       method:'POST', headers:{'Content-Type':'application/json'},
       body: JSON.stringify({...profilerTargetPayload(t), mode: 'jfr', jfr_name: name,
                             jfr_settings: settings, jfr_file: jfrFile,
-                            duration: dur, format: 'jfr', event: settings}),
+                            duration: dur, format: 'jfr', event: settings, approval_token: approvalToken}),
     });
     const d = await r.json(); 
     if(!r.ok) {
@@ -5301,6 +5333,13 @@ async function pfRunJfr(t) {
 async function pfRunDump(t) {
   // ── Dump: thread dump or heap dump ────────────────────────────────────────
   const dumpType = document.getElementById('dumpType')?.value || 'thread';
+  let approvalToken = null;
+  if (dumpType !== 'thread') {
+    if (!window.confirm(
+      'Heap Dump 会触发 JVM 停顿（STW），可能造成明显服务延迟。确认本次导出？')) return;
+    try { approvalToken = await pfRequestApproval(t, 'heapdump', 0); }
+    catch(e) { toast(e.message, 'error'); return; }
+  }
 
   // 更新任务信息面板
   _pfTaskInfo = { type: dumpType === 'thread' ? 'Thread Dump' : 'Heap Dump', event: '-', duration: '-', status: 'starting', progressPercent: 0 };
@@ -5352,7 +5391,7 @@ async function pfRunDump(t) {
       const r = await fetch(`${API}/profile/start`, {
         method:'POST', headers:{'Content-Type':'application/json'},
         body: JSON.stringify({...profilerTargetPayload(t), mode: 'heapdump', heap_file: file,
-                              heap_live: liveOnly, duration: 0, format: 'hprof'}),
+                              heap_live: liveOnly, duration: 0, format: 'hprof', approval_token: approvalToken}),
       });
       const d = await r.json(); 
       if(!r.ok) {

@@ -173,7 +173,7 @@ TOOLS = [
             "type": "object",
             "properties": {
                 "connection_id": {"type": "string", "description": "连接 ID"},
-                "duration": {"type": "integer", "default": 30, "description": "采样时长(秒)"},
+                "duration": {"type": "integer", "default": 30, "minimum": 1, "maximum": 120, "description": "采样时长(秒)，超过 120 秒需通过界面人工确认"},
                 "event": {"type": "string", "default": "cpu", "enum": ["cpu", "alloc", "lock", "wall"], "description": "采样事件类型"}
             },
             "required": ["connection_id"]
@@ -252,12 +252,16 @@ def _check_command_safety(command: str) -> Optional[str]:
     return None
 
 
-def _get_connection(connection_id: str):
-    """获取 Arthas 连接对象"""
+def _get_connection(connection_id: str, user_id: int = None,
+                    is_admin: bool = False):
+    """获取当前认证用户有权访问的 Arthas 连接对象"""
+    if not connection_id or user_id is None:
+        return None
     try:
-        from backend.app_context import connections, connections_lock
-        with connections_lock:
-            entry = connections.get(connection_id)
+        from backend.app_context import get_connection_entry
+        entry = get_connection_entry(connection_id)
+        if not entry or (not is_admin and entry.get("user_id") != user_id):
+            return None
         if entry and entry.get('conn'):
             conn = entry['conn']
             if hasattr(conn, 'http_client') and conn.http_client:
@@ -279,10 +283,14 @@ def _format_result(result: Any) -> str:
     return str(result)
 
 
-async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
+async def execute_tool(tool_name: str, arguments: Dict[str, Any],
+                       user_id: int = None, is_admin: bool = False) -> str:
     """执行 MCP Tool，返回文本结果"""
+    if user_id is None:
+        return "错误: MCP 工具调用必须绑定已认证用户。"
+
     conn_id = arguments.get("connection_id", "")
-    conn = _get_connection(conn_id)
+    conn = _get_connection(conn_id, user_id=user_id, is_admin=is_admin)
     if not conn:
         return f"错误: 连接 {conn_id} 不可用。请先在 Web 界面建立 Arthas 连接。"
 
@@ -372,6 +380,8 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
             from backend.config import Config
             workflow = ProfilerWorkflow(conn)
             duration = arguments.get("duration", 30)
+            if not isinstance(duration, int) or isinstance(duration, bool) or not 1 <= duration <= 120:
+                return "安全拒绝: MCP CPU 采样时长必须为 1 到 120 秒；更长采样请通过界面确认后启动。"
             event = arguments.get("event", "cpu")
             result = workflow.run(
                 duration=duration, fmt="html",
@@ -433,6 +443,9 @@ async def execute_tool(tool_name: str, arguments: Dict[str, Any]) -> str:
 
         elif tool_name == "execute_arthas":
             command = arguments.get("command", "").strip()
+            cmd_base = command.split()[0].lower() if command else ""
+            if cmd_base in {"heapdump", "profiler"}:
+                return "安全拒绝: 高影响采集必须通过界面逐次确认后执行。"
             err = _check_command_safety(command)
             if err:
                 return f"安全拒绝: {err}"

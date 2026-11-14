@@ -214,6 +214,23 @@ class Database:
                     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
                 )
             ''')
+
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS profiler_approvals (
+                    token_hash TEXT PRIMARY KEY,
+                    user_id INTEGER NOT NULL,
+                    connection_id TEXT NOT NULL,
+                    action TEXT NOT NULL,
+                    duration INTEGER NOT NULL,
+                    expires_at REAL NOT NULL,
+                    consumed_at REAL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+            cursor.execute(
+                'CREATE INDEX IF NOT EXISTS idx_profiler_approvals_expiry '
+                'ON profiler_approvals(expires_at, consumed_at)'
+            )
             
             # audit_logs 表
             cursor.execute('''

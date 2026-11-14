@@ -709,7 +709,7 @@
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ diagnosis: _diagData, connection_id: _diagConnId }),
+        body: JSON.stringify({ run_id: _diagData.run_id }),
       });
       const data = await resp.json();
 
@@ -767,8 +767,12 @@
 
     // 概览标签
     const triggered = data.rules_triggered || [];
-    let statusColor = triggered.length === 0 ? 'ok' : (triggered.length <= 2 ? 'warn' : 'danger');
-    let statusLabel = triggered.length === 0 ? '正常' : (triggered.length <= 2 ? '注意' : '异常');
+    let statusColor = data.status !== 'completed'
+      ? 'warn'
+      : (triggered.length === 0 ? 'ok' : (triggered.length <= 2 ? 'warn' : 'danger'));
+    let statusLabel = data.status !== 'completed'
+      ? '采集不完整'
+      : (triggered.length === 0 ? '正常' : (triggered.length <= 2 ? '注意' : '异常'));
     html += '<div class="diag-result-section">';
     html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
     html += `<span class="diag-tag ${statusColor}">${statusLabel}</span>`;
@@ -779,6 +783,16 @@
     html += '</div>';
     html += `<div style="font-size:12px;color:var(--tx);padding:8px 10px;background:var(--bg);border:1px solid var(--ln);border-radius:5px">${escapeHtml(data.summary || '无数据')}</div>`;
     html += '</div>';
+
+    if (data.steps && data.steps.length) {
+      html += '<div class="diag-result-section">';
+      html += '<div class="diag-section-title">采集步骤</div>';
+      data.steps.forEach(step => {
+        const label = step.status === 'completed' ? '完成' : step.status === 'failed' ? '失败' : '进行中';
+        html += `<div class="diag-rec"><div class="diag-rec-text">${escapeHtml(step.name)}：${label}${step.error ? ' — ' + escapeHtml(step.error) : ''}</div></div>`;
+      });
+      html += '</div>';
+    }
 
     // 规则触发
     if (triggered.length > 0) {

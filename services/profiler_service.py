@@ -31,6 +31,20 @@ class ProfilerService:
         # task_id -> ProfilerWorkflow 实例（仅在任务运行期间存在）
         self._running_workflows: Dict[str, ProfilerWorkflow] = {}
 
+    def _get_task_for_user(self, task_id: str, user_id: int = None,
+                           is_admin: bool = False) -> Optional[Dict[str, Any]]:
+        task = self.db.fetch_one(
+            'SELECT * FROM profiler_tasks WHERE id = ?',
+            (task_id,)
+        )
+        if not task:
+            return None
+        if task.get('type') == 'heapdump' and not is_admin:
+            return None
+        if not is_admin and (user_id is None or task.get('user_id') != user_id):
+            return None
+        return task
+
     def create_task(self, connection_id: str, task_type: str = 'cpu',
                    event: str = 'cpu', duration: int = 60,
                    fmt: str = 'html', user_id: int = None) -> str:
@@ -100,7 +114,9 @@ class ProfilerService:
         except Exception:
             log.debug("同步 Profiler 工作流进度失败: task_id=%s", task_id, exc_info=True)
 
-    def start_task(self, task_id: str, conn_obj=None) -> Dict[str, Any]:
+    def start_task(self, task_id: str, conn_obj=None, user_id: int = None,
+                   is_admin: bool = False,
+                   approval_token: str = None) -> Dict[str, Any]:
         """启动 Profiler 任务
 
         Args:
@@ -110,13 +126,36 @@ class ProfilerService:
             包含 success 和 message 的字典
         """
         # 获取任务信息
-        task = self.db.fetch_one(
-            'SELECT * FROM profiler_tasks WHERE id = ?',
-            (task_id,)
-        )
+        task = self._get_task_for_user(task_id, user_id, is_admin)
         
         if not task:
-            return {"success": False, "message": f"任务 {task_id} 不存在"}
+            return {"success": False, "message": "任务不存在或无权访问"}
+
+        try:
+            duration = int(task.get('duration') or 0)
+        except (TypeError, ValueError):
+            return {"success": False, "message": "任务采样时长无效"}
+        if duration < 0 or duration > 1800:
+            return {
+                "success": False,
+                "message": "采样时长必须在 0 到 1800 秒之间",
+            }
+        requires_confirmation = (
+            task.get('type') == 'heapdump'
+            or duration > 120
+        )
+        if requires_confirmation:
+            from services.operation_approval_service import OperationApprovalService
+            approvals = OperationApprovalService(self.db)
+            if not approvals.consume(
+                    approval_token, user_id, task['connection_id'],
+                    task.get('type', ''), duration):
+                action = "Heap Dump" if task.get('type') == 'heapdump' else "超过 120 秒的采样"
+                return {
+                    "success": False,
+                    "message": f"{action}需要有效且未使用的逐次审批令牌",
+                    "requires_confirmation": True,
+                }
         
         if task['status'] not in ('pending', 'stopped', 'failed'):
             return {
@@ -244,7 +283,8 @@ class ProfilerService:
 
         return {"success": True, "message": "任务已启动", "task_id": task_id}
 
-    def stop_task(self, task_id: str) -> Dict[str, Any]:
+    def stop_task(self, task_id: str, user_id: int = None,
+                  is_admin: bool = False) -> Dict[str, Any]:
         """停止 Profiler 任务
         
         Args:
@@ -253,13 +293,10 @@ class ProfilerService:
         Returns:
             包含 success 和 message 的字典
         """
-        task = self.db.fetch_one(
-            'SELECT * FROM profiler_tasks WHERE id = ?',
-            (task_id,)
-        )
+        task = self._get_task_for_user(task_id, user_id, is_admin)
         
         if not task:
-            return {"success": False, "message": f"任务 {task_id} 不存在"}
+            return {"success": False, "message": "任务不存在或无权访问"}
         
         if task['status'] not in ('running', 'starting'):
             return {
@@ -286,7 +323,8 @@ class ProfilerService:
         log.info("Profiler 任务已停止: task_id=%s", task_id)
         return {"success": True, "message": "任务已停止"}
 
-    def get_task_status(self, task_id: str) -> Dict[str, Any]:
+    def get_task_status(self, task_id: str, user_id: int = None,
+                        is_admin: bool = False) -> Dict[str, Any]:
         """查询任务状态
         
         Args:
@@ -295,13 +333,10 @@ class ProfilerService:
         Returns:
             包含任务详细信息的字典
         """
-        task = self.db.fetch_one(
-            'SELECT * FROM profiler_tasks WHERE id = ?',
-            (task_id,)
-        )
+        task = self._get_task_for_user(task_id, user_id, is_admin)
         
         if not task:
-            return {"success": False, "message": f"任务 {task_id} 不存在"}
+            return {"success": False, "message": "任务不存在或无权访问"}
         
         progress = task.get('progress', 0)
         
@@ -310,6 +345,7 @@ class ProfilerService:
             "task": {
                 "id": task['id'],
                 "connection_id": task['connection_id'],
+                "user_id": task.get('user_id'),
                 "type": task['type'],
                 "mode": task.get('mode', task['type']),
                 "event": task.get('event', ''),
@@ -325,7 +361,7 @@ class ProfilerService:
         }
 
     def list_tasks(self, connection_id: str = None, 
-                  user_id: int = None) -> List[Dict[str, Any]]:
+                  user_id: int = None, is_admin: bool = False) -> List[Dict[str, Any]]:
         """列出任务列表
         
         Args:
@@ -342,16 +378,22 @@ class ProfilerService:
             query += ' AND connection_id = ?'
             params.append(connection_id)
         
-        if user_id:
+        if not is_admin and user_id is None:
+            return []
+        if not is_admin:
             query += ' AND user_id = ?'
             params.append(user_id)
         
         query += ' ORDER BY created_at DESC LIMIT 50'
         
         tasks = self.db.fetch_all(query, tuple(params))
-        return [dict(t) for t in (tasks or [])]
+        return [
+            dict(task) for task in (tasks or [])
+            if is_admin or task.get('type') != 'heapdump'
+        ]
 
-    def delete_task(self, task_id: str) -> Dict[str, Any]:
+    def delete_task(self, task_id: str, user_id: int = None,
+                    is_admin: bool = False) -> Dict[str, Any]:
         """删除任务记录
         
         Args:
@@ -360,13 +402,10 @@ class ProfilerService:
         Returns:
             包含 success 和 message 的字典
         """
-        task = self.db.fetch_one(
-            'SELECT * FROM profiler_tasks WHERE id = ?',
-            (task_id,)
-        )
+        task = self._get_task_for_user(task_id, user_id, is_admin)
         
         if not task:
-            return {"success": False, "message": f"任务 {task_id} 不存在"}
+            return {"success": False, "message": "任务不存在或无权访问"}
         
         # 如果任务正在运行，不允许删除
         if task['status'] == 'running':

@@ -61,7 +61,24 @@ def execute_profiler_skill(params: Dict[str, Any], connection_id: str) -> Any:
         }
 
     task_type, default_event, default_format = type_info
-    duration = int(params.get("duration", 60))
+    user_id = params.get("_authenticated_user_id")
+    if not user_id:
+        return {
+            "ok": False,
+            "error": "Authenticated user context is required to run profiler skills",
+        }
+    try:
+        duration = int(params.get("duration", 60))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "Profiler duration must be an integer"}
+    if duration < 0 or duration > 1800:
+        return {"ok": False, "error": "Profiler duration must be between 0 and 1800 seconds"}
+    if task_type == "heapdump" or duration > 120:
+        return {
+            "ok": False,
+            "error": "Heap Dump and sampling over 120 seconds require per-run confirmation in the UI",
+            "requires_confirmation": True,
+        }
     fmt = params.get("format", default_format)
     event = params.get("event", default_event)
 
@@ -81,11 +98,15 @@ def execute_profiler_skill(params: Dict[str, Any], connection_id: str) -> Any:
             event=event,
             duration=duration,
             fmt=fmt,
-            user_id=None,  # Will be set by the calling context if available
+            user_id=user_id,
         )
 
         # Start execution (launches ProfilerWorkflow in background thread)
-        result = service.start_task(task_id)
+        result = service.start_task(
+            task_id,
+            user_id=user_id,
+            is_admin=bool(params.get("_authenticated_user_is_admin"))
+        )
 
         if result.get("success"):
             return {

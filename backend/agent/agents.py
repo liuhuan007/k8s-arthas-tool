@@ -19,6 +19,17 @@ def create_arthas_agent(llm_client, arthas_connection=None) -> Agent:
             return f"[arthas] 未连接到 Arthas Agent，请先建立连接"
         return executor
 
+    def _make_bounded_sampler(method_name, default_duration):
+        async def executor(**kwargs):
+            duration = kwargs.get("duration", default_duration)
+            if isinstance(duration, bool) or not isinstance(duration, int) or not 1 <= duration <= 120:
+                return "[需用户确认] 采样时长必须为 1 到 120 秒；更长任务请在性能分析页面逐次确认后启动"
+            return await _make_exec(method_name)(**kwargs)
+        return executor
+
+    async def _heapdump_requires_ui_approval(**kwargs):
+        return "[需用户确认] Agent 不直接执行 Heap Dump；请由管理员在性能分析页面逐次确认后启动"
+
     tools = [
         Tool(
             name="arthas_thread",
@@ -42,7 +53,7 @@ def create_arthas_agent(llm_client, arthas_connection=None) -> Agent:
                     "duration": {"type": "integer", "description": "采样时长（秒），默认 10"},
                 },
             },
-            executor=_make_exec("profiler_start"),
+            executor=_make_bounded_sampler("profiler_start", 10),
             risk_level="medium",
         ),
         Tool(
@@ -54,7 +65,7 @@ def create_arthas_agent(llm_client, arthas_connection=None) -> Agent:
                     "filename": {"type": "string", "description": "输出文件名"},
                 },
             },
-            executor=_make_exec("heapdump"),
+            executor=_heapdump_requires_ui_approval,
             risk_level="high",
         ),
         Tool(
@@ -66,7 +77,7 @@ def create_arthas_agent(llm_client, arthas_connection=None) -> Agent:
                     "duration": {"type": "integer", "description": "采样时长（秒），默认 60"},
                 },
             },
-            executor=_make_exec("jfr_start"),
+            executor=_make_bounded_sampler("jfr_start", 60),
             risk_level="medium",
         ),
         Tool(

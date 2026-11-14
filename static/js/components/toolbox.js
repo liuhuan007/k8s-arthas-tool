@@ -15,6 +15,7 @@
   const MAX_RECENT_TARGETS = 5;
 
   window.renderToolbox = async function() {
+    _distClusterCache = null;
     await Promise.all([
       loadBinaryTools(),
       loadScriptTools()
@@ -132,10 +133,14 @@
 
   let _distHistoryData = [];
   let _distHistoryFilter = 'all';
+  let _distHistoryQuery = '';
+  let _distHistoryPage = 1;
+  let _distHistoryHasMore = false;
 
   async function loadDistHistory(page = 1) {
     const container = document.getElementById('distHistoryList');
     if (!container) return;
+    _distHistoryPage = page;
     container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx2)">加载中...</div>';
 
     try {
@@ -143,11 +148,29 @@
       const offset = (page - 1) * limit;
       const data = await safeGet(`/tasks/tool-packages/distributions?limit=${limit}&offset=${offset}`);
       _distHistoryData = data.distributions || [];
+      _distHistoryHasMore = _distHistoryData.length === limit;
       renderDistHistory(_distHistoryData);
     } catch (e) {
-      container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx2)">加载失败</div>';
+      container.innerHTML = `<div style="text-align:center;padding:40px;color:var(--a5)">加载失败：${esc(e.message)}</div>`;
+      _distHistoryHasMore = false;
+      renderDistHistoryPagination();
     }
   }
+
+  function renderDistHistoryPagination() {
+    const pages = document.getElementById('distHistoryPages');
+    if (!pages) return;
+    pages.innerHTML = `
+      <button class="btn btn-g btn-sm" onclick="loadDistHistoryPage(${_distHistoryPage - 1})" ${_distHistoryPage <= 1 ? 'disabled' : ''}>上一页</button>
+      <span style="display:inline-flex;align-items:center;padding:0 8px;font-size:11px;color:var(--tx2)">第 ${_distHistoryPage} 页</span>
+      <button class="btn btn-g btn-sm" onclick="loadDistHistoryPage(${_distHistoryPage + 1})" ${_distHistoryHasMore ? '' : 'disabled'}>下一页</button>
+    `;
+  }
+
+  window.loadDistHistoryPage = function(page) {
+    if (page < 1) return;
+    loadDistHistory(page);
+  };
 
   function renderDistHistory(records) {
     const container = document.getElementById('distHistoryList');
@@ -158,14 +181,21 @@
     if (_distHistoryFilter !== 'all') {
       filtered = records.filter(r => r.status === _distHistoryFilter);
     }
+    if (_distHistoryQuery) {
+      filtered = filtered.filter(r => [
+        r.tool_name, r.package_name, r.target_cluster, r.target_namespace,
+        r.target_pod, r.target_container, r.install_path, r.error_message,
+      ].some(value => (value || '').toLowerCase().includes(_distHistoryQuery)));
+    }
 
     if (filtered.length === 0) {
       container.innerHTML = '<div style="text-align:center;padding:40px;color:var(--tx2)">暂无分发记录</div>';
-      if (countEl) countEl.textContent = '共 0 条记录';
+      if (countEl) countEl.textContent = '本页 0 条记录';
+      renderDistHistoryPagination();
       return;
     }
 
-    if (countEl) countEl.textContent = `共 ${filtered.length} 条记录`;
+    if (countEl) countEl.textContent = `本页 ${filtered.length} 条记录`;
 
     container.innerHTML = filtered.map(r => {
       const statusClass = r.status === 'success' ? 'running' : 'stopped';
@@ -178,7 +208,7 @@
       const failReason = formatDistFailureReason(r);
 
       return `
-        <div style="display:grid;grid-template-columns:60px 130px minmax(160px,1fr) minmax(180px,1.2fr) 70px 70px 90px;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(40,61,90,.2);font-size:12px;align-items:center">
+        <div class="dist-history-row" style="display:grid;grid-template-columns:60px 130px minmax(160px,1fr) minmax(180px,1.2fr) 70px 70px 90px;gap:8px;padding:12px 16px;border-bottom:1px solid rgba(40,61,90,.2);font-size:12px;align-items:center">
           <div><span style="background:rgba(0,122,255,.15);color:var(--a);padding:2px 6px;border-radius:4px;font-size:10px">Pod</span></div>
           <div style="color:var(--tx2);font-size:11px">${esc(time)}</div>
           <div>
@@ -195,6 +225,7 @@
         </div>
       `;
     }).join('');
+    renderDistHistoryPagination();
   }
 
   function formatDistFailureReason(record) {
@@ -212,14 +243,8 @@
   }
 
   window.filterDistHistory = function(query) {
-    query = query.toLowerCase();
-    const filtered = _distHistoryData.filter(r =>
-      !query ||
-      (r.tool_name || '').toLowerCase().includes(query) ||
-      (r.target_cluster || '').toLowerCase().includes(query) ||
-      (r.target_pod || '').toLowerCase().includes(query)
-    );
-    renderDistHistory(filtered);
+    _distHistoryQuery = (query || '').trim().toLowerCase();
+    renderDistHistory(_distHistoryData);
   };
 
   window.filterDistByStatus = function(status, btn) {
@@ -230,11 +255,19 @@
   };
 
   window.retryDist = async function(distId) {
-    if (!confirm('确认重试此分发？')) return;
+    const record = _distHistoryData.find(item => item.id === distId);
+    if (!record) { toast('当前页未找到这条分发记录，请刷新后重试', 'warn'); return; }
+    if (!confirm(`确认将 ${record.package_name || '工具'} 重新分发到 ${record.target_cluster}/${record.target_namespace}/${record.target_pod}？`)) return;
     try {
-      await safePost('/tasks/distributions/retry', { dist_id: distId });
+      await safePost(`/tasks/tool-packages/${record.package_id}/distribute`, {
+        cluster: record.target_cluster,
+        namespace: record.target_namespace,
+        pod: record.target_pod,
+        container: record.target_container || '',
+        install_path: record.install_path,
+      });
       toast('重试成功', 'ok');
-      loadDistHistory();
+      loadDistHistory(_distHistoryPage);
     } catch (e) {
       toast(`重试失败: ${e.message}`, 'err');
     }
@@ -245,6 +278,14 @@
   // ═══════════════════════════════════════════════════════════════
 
   window.openDistDetailModal = function(distId) {
+    const record = _distHistoryData.find(item => item.id === distId);
+    if (!record) { toast('当前页未找到这条分发记录，请刷新后重试', 'warn'); return; }
+    document.getElementById(`distDetailModal-${distId}`)?.remove();
+    const success = record.status === 'success';
+    const statusText = success ? '分发成功' : '分发失败';
+    const time = record.distributed_at || record.created_at;
+    const fullHash = record.local_sha256 || '';
+    const podHash = record.pod_sha256 || '';
     const modal = document.createElement('div');
     modal.className = 'dist-modal-overlay';
     modal.id = `distDetailModal-${distId}`;
@@ -255,22 +296,22 @@
           <button class="btn-close" onclick="closeModal('distDetailModal-${distId}')">✕</button>
         </div>
         <div class="dist-modal-body">
-          <div style="display:flex;align-items:center;gap:12px;padding:16px;background:rgba(52,199,89,.08);border:1px solid rgba(52,199,89,.2);border-radius:8px;margin-bottom:20px">
-            <span style="font-size:24px">✓</span>
+          <div style="display:flex;align-items:center;gap:12px;padding:16px;background:${success ? 'rgba(52,199,89,.08)' : 'rgba(255,59,48,.08)'};border:1px solid ${success ? 'rgba(52,199,89,.2)' : 'rgba(255,59,48,.2)'};border-radius:8px;margin-bottom:20px">
+            <span style="font-size:24px;color:${success ? '#34c759' : '#ff3b30'}">${success ? '✓' : '✕'}</span>
             <div>
-              <div style="font-size:14px;font-weight:700;color:#34c759">分发成功</div>
-              <div style="font-size:12px;color:var(--tx2)">耗时 2.3s</div>
+              <div style="font-size:14px;font-weight:700;color:${success ? '#34c759' : '#ff3b30'}">${statusText}</div>
+              <div style="font-size:12px;color:var(--tx2)">${esc(record.package_name || record.package_id || '工具包')}</div>
             </div>
           </div>
 
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:20px">
             <div>
               <div style="font-size:11px;color:var(--tx2);margin-bottom:4px">分发时间</div>
-              <div style="font-size:13px">2026-06-19 14:32:15</div>
+              <div style="font-size:13px">${esc(time ? new Date(time).toLocaleString('zh-CN') : '-')}</div>
             </div>
             <div>
               <div style="font-size:11px;color:var(--tx2);margin-bottom:4px">分发 ID</div>
-              <div style="font-size:13px;font-family:monospace">dist-a1b2c3d4</div>
+              <div style="font-size:13px;font-family:monospace">${esc(distId)}</div>
             </div>
           </div>
 
@@ -278,27 +319,25 @@
             <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px">目标信息</div>
             <div style="background:rgba(0,0,0,.2);border-radius:8px;padding:12px">
               <div style="display:grid;grid-template-columns:100px 1fr;gap:8px;font-size:12px">
-                <div style="color:var(--tx2)">集群</div><div>prod</div>
-                <div style="color:var(--tx2)">Namespace</div><div>default</div>
-                <div style="color:var(--tx2)">Pod</div><div>pod-a-7cc5f</div>
-                <div style="color:var(--tx2)">安装路径</div><div style="font-family:monospace">/app/arthas/arthas-boot.jar</div>
+              <div style="color:var(--tx2)">集群</div><div>${esc(record.target_cluster || '-')}</div>
+              <div style="color:var(--tx2)">Namespace</div><div>${esc(record.target_namespace || '-')}</div>
+              <div style="color:var(--tx2)">Pod</div><div>${esc(record.target_pod || '-')}</div>
+              <div style="color:var(--tx2)">容器</div><div>${esc(record.target_container || '默认容器')}</div>
+              <div style="color:var(--tx2)">安装路径</div><div style="font-family:monospace;word-break:break-all">${esc(record.install_path || '-')}</div>
               </div>
             </div>
           </div>
 
-          <div>
-            <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px">执行日志</div>
-            <div style="background:rgba(0,0,0,.3);border:1px solid rgba(40,61,90,.4);border-radius:6px;padding:12px;font-family:monospace;font-size:11px;max-height:150px;overflow-y:auto">
-              <div style="color:var(--tx3);margin-bottom:4px">[14:32:13] 开始分发</div>
-              <div style="color:var(--tx2);margin-bottom:4px">[14:32:14] 创建目录: mkdir -p /app/arthas</div>
-              <div style="color:var(--tx2);margin-bottom:4px">[14:32:14] 复制文件中...</div>
-              <div style="color:#34c759">[14:32:15] ✓ 分发完成</div>
-            </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:16px">
+            <div style="font-size:11px;color:var(--tx2)">源文件 SHA256<br><code style="color:var(--tx);word-break:break-all">${esc(fullHash || '无记录')}</code></div>
+            <div style="font-size:11px;color:var(--tx2)">目标文件 SHA256<br><code style="color:var(--tx);word-break:break-all">${esc(podHash || '未校验')}</code></div>
           </div>
+          ${record.pod_check_status ? `<div style="font-size:11px;color:var(--tx2);margin-bottom:12px">目标校验状态：${esc(record.pod_check_status)}${record.pod_file_size ? ` · 文件大小 ${esc(record.pod_file_size)}` : ''}</div>` : ''}
+          ${record.error_message || record.stderr ? `<div style="background:rgba(255,59,48,.06);border:1px solid rgba(255,59,48,.18);border-radius:8px;padding:12px;font-size:11px;white-space:pre-wrap;word-break:break-word;color:#ff8a80">${esc([record.error_message, record.stderr].filter(Boolean).join('\n'))}</div>` : ''}
         </div>
         <div class="dist-modal-footer">
           <button class="btn btn-g btn-sm" onclick="closeModal('distDetailModal-${distId}')">关闭</button>
-          <button class="btn btn-p btn-sm">重新分发</button>
+          ${!success ? `<button class="btn btn-p btn-sm" onclick="retryDist(${distId})">重试</button>` : ''}
         </div>
       </div>
     `;
@@ -771,8 +810,12 @@
     container.innerHTML = packages.map(p => {
       const sha = p.sha256 ? `${p.sha256.slice(0, 12)}...` : '未校验';
       const statusClass = p.status === 'active' ? 'running' : 'stopped';
-      const statusText = p.status === 'active' ? '可用' : '停用';
+      const statusText = p.status === 'active' ? '可用' : p.status === 'missing' ? '文件缺失' : '停用';
       const displayName = p.file_name || p.name;
+      const fileSize = formatFileSize(p.file_size);
+      const verifiedAt = p.last_verified_at
+        ? new Date(p.last_verified_at).toLocaleString('zh-CN')
+        : '尚未校验';
       return `
         <div class="toolbox-card toolbox-card-binary" data-id="${p.id}">
           <div class="toolbox-card-header">
@@ -786,16 +829,18 @@
           <div class="toolbox-card-meta">
             <span>类型 ${esc(p.tool_type)}</span>
             <span>版本 ${esc(p.version || '-')}</span>
-            <span>SHA ${sha}</span>
+            <span>${esc(fileSize)}</span>
           </div>
+          ${p.description ? `<div class="toolbox-card-meta toolbox-card-description" title="${esc(p.description)}">${esc(p.description)}</div>` : ''}
           <div class="toolbox-card-path">${esc(p.install_path || '-')}</div>
+          <div class="toolbox-card-meta"><span>SHA256 ${esc(sha)}</span><span>校验 ${esc(verifiedAt)}</span></div>
           <div class="toolbox-card-actions">
             <button class="btn btn-g btn-sm" onclick="openEditBinaryModal(${p.id})">编辑</button>
             <button class="btn btn-g btn-sm" onclick="toolboxVerify(${p.id})">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>
               校验
             </button>
-            <button class="btn btn-p btn-sm" onclick="openDistributeModal(${p.id}, 'binary', '${esc(p.install_path || '')}')">
+            <button class="btn btn-p btn-sm" onclick="openDistributeModal(${p.id}, 'binary')" ${p.status === 'missing' ? 'disabled title="请先检查或重新上传工具文件"' : ''}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
               分发→
             </button>
@@ -1056,9 +1101,9 @@
     const body = `
       <div style="display:flex;flex-direction:column;gap:12px">
         <div><label class="fl">工具名称</label><input id="tbUpName" class="inp" placeholder="例如：arthas-boot-3.7.2"></div>
-        <div><label class="fl">工具类型</label><select id="tbUpType" class="inp"><option value="arthas">Arthas</option><option value="async-profiler">async-profiler</option><option value="generic">通用</option></select></div>
+        <div><label class="fl">工具类型</label><select id="tbUpType" class="inp"><option value="arthas">Arthas</option><option value="async-profiler">async-profiler</option><option value="generic">通用</option></select><div id="tbUpTypeHint" style="font-size:11px;color:var(--tx3);margin-top:4px"></div></div>
         <div><label class="fl">版本</label><input id="tbUpVer" class="inp" placeholder="可选"></div>
-        <div><label class="fl">安装路径</label><input id="tbUpPath" class="inp" value="/tmp/arthas/arthas-boot.jar"></div>
+        <div><label class="fl">Pod 内安装路径</label><input id="tbUpPath" class="inp" value="/tmp/arthas/arthas-boot.jar"><div style="font-size:11px;color:var(--tx3);margin-top:4px">默认路径可修改；Arthas 文件必须使用 .jar 路径。</div></div>
         <div><label class="fl">说明</label><input id="tbUpDesc" class="inp" placeholder="可选"></div>
         <div>
           <label class="fl">二进制文件</label>
@@ -1075,23 +1120,70 @@
       <button class="btn btn-p" id="tbUpSubmitBtn">上传并登记</button>
     `;
     const modal = _openModal('上传二进制工具', body, footer);
+    const typeEl = modal.querySelector('#tbUpType');
+    const fileEl = modal.querySelector('#tbUpFile');
+    const pathEl = modal.querySelector('#tbUpPath');
+    const typeHint = modal.querySelector('#tbUpTypeHint');
+    let installPathEdited = false;
+    const updateUploadDefaults = () => {
+      const fileName = (fileEl?.files?.[0]?.name || 'tool').split(/[\\/]/).pop();
+      const safeName = fileName.replace(/[^A-Za-z0-9._-]/g, '_') || 'tool';
+      const type = typeEl?.value || 'arthas';
+      if (!installPathEdited) {
+        pathEl.value = type === 'arthas'
+          ? '/tmp/arthas/arthas-boot.jar'
+          : type === 'async-profiler'
+            ? `/tmp/async-profiler/${safeName}`
+            : `/tmp/${safeName}`;
+      }
+      if (typeHint) {
+        typeHint.textContent = type === 'arthas'
+          ? 'Arthas 包会使用标准目录，上传文件应为 arthas-boot.jar。'
+          : type === 'async-profiler'
+            ? '工具将以文件形式复制到目标 Pod 的临时目录。'
+            : '通用工具使用独立文件路径；请确认目标容器具备所需运行环境。';
+      }
+    };
+    typeEl?.addEventListener('change', updateUploadDefaults);
+    fileEl?.addEventListener('change', updateUploadDefaults);
+    pathEl?.addEventListener('input', () => { installPathEdited = true; });
+    updateUploadDefaults();
     modal.querySelector('#tbUpSubmitBtn').onclick = async () => {
       const fileEl = modal.querySelector('#tbUpFile');
       const file = fileEl?.files?.[0];
       if (!file) { toast('请选择文件', 'warn'); return; }
+      const toolType = typeEl?.value || 'arthas';
+      const installPath = pathEl?.value?.trim() || '';
+      if (!installPath.startsWith('/') || installPath.split('/').includes('..')) {
+        toast('请输入合法的 Pod 内绝对路径', 'warn');
+        pathEl?.focus();
+        return;
+      }
+      if (toolType === 'arthas' && !installPath.endsWith('.jar')) {
+        toast('Arthas 安装路径必须以 .jar 结尾', 'warn');
+        pathEl?.focus();
+        return;
+      }
+      const submit = modal.querySelector('#tbUpSubmitBtn');
+      submit.disabled = true;
+      submit.textContent = '上传中...';
       const form = new FormData();
       form.append('file', file);
       form.append('name', modal.querySelector('#tbUpName')?.value?.trim() || file.name);
-      form.append('tool_type', modal.querySelector('#tbUpType')?.value || 'arthas');
+      form.append('tool_type', toolType);
       form.append('version', modal.querySelector('#tbUpVer')?.value?.trim() || '');
-      form.append('install_path', modal.querySelector('#tbUpPath')?.value?.trim() || '/tmp/arthas/arthas-boot.jar');
+      form.append('install_path', installPath);
       form.append('description', modal.querySelector('#tbUpDesc')?.value?.trim() || '');
       try {
         await safeUploadToolPackage('/tasks/tool-packages/upload', form, 300000);
         toast('工具已上传', 'ok');
         modal.remove();
         loadBinaryTools();
-      } catch (e) { toast(`上传失败：${e.message}`, 'err'); }
+      } catch (e) {
+        toast(`上传失败：${e.message}`, 'err');
+        submit.disabled = false;
+        submit.textContent = '上传并登记';
+      }
     };
   };
 
@@ -1172,13 +1264,18 @@
   // ═══════════════════════════════════════════════════════════════
 
   let _distClusterCache = null;
+  const _distRequestIds = new Map();
+
+  function _nextDistRequestId(toolId) {
+    const requestId = (_distRequestIds.get(toolId) || 0) + 1;
+    _distRequestIds.set(toolId, requestId);
+    return requestId;
+  }
 
   async function _loadDistClusters() {
     if (_distClusterCache) return _distClusterCache;
-    try {
-      const data = await safeGet('/clusters');
-      _distClusterCache = data.clusters || [];
-    } catch (e) { _distClusterCache = []; }
+    const data = await safeGet('/clusters');
+    _distClusterCache = data.clusters || [];
     return _distClusterCache;
   }
 
@@ -1189,10 +1286,18 @@
 
     // Get tool info from card
     const card = document.querySelector(`.toolbox-card[data-id="${toolId}"]`);
-    const toolName = card?.querySelector('.toolbox-card-name')?.textContent || `Tool #${toolId}`;
+    const tool = _allTools.binary.find(item => item.id === toolId);
+    const toolName = card?.querySelector('.toolbox-card-name')?.textContent || tool?.name || `Tool #${toolId}`;
+    const installPath = defaultPath || tool?.install_path || '';
 
     // Load clusters
-    const clusters = await _loadDistClusters();
+    let clusters;
+    try {
+      clusters = await _loadDistClusters();
+    } catch (e) {
+      toast(`加载集群失败：${e.message}`, 'err');
+      return;
+    }
     const clusterOptions = clusters.map(c =>
       `<option value="${esc(c.name)}">${esc(c.name)}</option>`
     ).join('');
@@ -1217,7 +1322,7 @@
             <div class="dist-form-row" style="display:flex;align-items:center;gap:10px">
               <label style="font-size:12px;color:var(--tx2);min-width:70px;font-weight:600">集群</label>
               <select id="dist-cluster-${toolId}" class="inp" onchange="distOnClusterChange(${toolId})">
-                <option value="">选择集群</option>
+                <option value="">${clusters.length ? '选择集群...' : '无可访问的集群'}</option>
                 ${clusterOptions}
               </select>
             </div>
@@ -1238,19 +1343,19 @@
             </div>
             <div class="dist-form-row" style="display:flex;align-items:center;gap:10px">
               <label style="font-size:12px;color:var(--tx2);min-width:70px;font-weight:600">容器</label>
-              <select id="dist-ctr-${toolId}" class="inp">
-                <option value="">默认容器</option>
+              <select id="dist-ctr-${toolId}" class="inp" onchange="distUpdateSubmitState(${toolId})">
+                <option value="">选择 Pod 后加载</option>
               </select>
             </div>
             <div class="dist-form-row" style="display:flex;align-items:center;gap:10px">
               <label style="font-size:12px;color:var(--tx2);min-width:70px;font-weight:600">安装路径</label>
-              <input id="dist-path-${toolId}" class="inp" value="${esc(defaultPath || '/tmp/arthas/arthas-boot.jar')}">
+              <input id="dist-path-${toolId}" class="inp" value="${esc(installPath)}" oninput="distUpdateSubmitState(${toolId})">
             </div>
           </div>
         </div>
         <div class="dist-modal-footer">
           <button class="btn btn-g btn-sm" onclick="closeModal('distModal-${toolId}')">取消</button>
-          <button class="btn btn-p btn-sm" onclick="confirmModalDistribute(${toolId}, '${toolType}')">
+          <button class="btn btn-p btn-sm" id="dist-submit-${toolId}" onclick="confirmModalDistribute(${toolId}, '${toolType}')" disabled>
             确认分发
           </button>
         </div>
@@ -1258,6 +1363,8 @@
     `;
 
     document.body.appendChild(modal);
+
+    modal.addEventListener('click', event => { if (event.target === modal) modal.remove(); });
 
     // Render recent targets
     _renderRecentTargets(`distRecentList-${toolId}`);
@@ -1275,33 +1382,53 @@
   };
 
   window.distOnClusterChange = async function(toolId) {
+    const requestId = _nextDistRequestId(toolId);
     const clusterName = document.getElementById(`dist-cluster-${toolId}`)?.value;
     const nsSelect = document.getElementById(`dist-ns-${toolId}`);
-    if (!clusterName || !nsSelect) return;
+    const podSelect = document.getElementById(`dist-pod-${toolId}`);
+    const ctrSelect = document.getElementById(`dist-ctr-${toolId}`);
+    if (!nsSelect) return;
+    nsSelect.innerHTML = '<option value="">选择 Namespace...</option>';
+    if (podSelect) podSelect.innerHTML = '<option value="">选择 Namespace 后加载</option>';
+    if (ctrSelect) ctrSelect.innerHTML = '<option value="">选择 Pod 后加载</option>';
+    distUpdateSubmitState(toolId);
+    if (!clusterName) return;
     nsSelect.innerHTML = '<option value="">加载中...</option>';
     try {
       const nsData = await safeGet(`/clusters/${encodeURIComponent(clusterName)}/namespaces`);
-      const namespaces = nsData.namespaces || ['default'];
-      nsSelect.innerHTML = namespaces.map(ns =>
+      if (_distRequestIds.get(toolId) !== requestId ||
+          document.getElementById(`dist-cluster-${toolId}`)?.value !== clusterName) return;
+      const namespaces = nsData.namespaces || [];
+      nsSelect.innerHTML = '<option value="">选择 Namespace...</option>' + namespaces.map(ns =>
         `<option value="${esc(ns)}">${esc(ns)}</option>`
       ).join('');
-      distOnNsChange(toolId);
+      if (!namespaces.length) nsSelect.innerHTML = '<option value="">无可访问的 Namespace</option>';
     } catch (e) {
-      nsSelect.innerHTML = '<option value="default">default</option>';
+      if (_distRequestIds.get(toolId) !== requestId) return;
+      nsSelect.innerHTML = '<option value="">Namespace 加载失败</option>';
+      toast(`加载 Namespace 失败：${e.message}`, 'err');
     }
   };
 
   window.distOnNsChange = async function(toolId) {
+    const requestId = _nextDistRequestId(toolId);
     const clusterName = document.getElementById(`dist-cluster-${toolId}`)?.value;
     const ns = document.getElementById(`dist-ns-${toolId}`)?.value;
     const podSelect = document.getElementById(`dist-pod-${toolId}`);
     const ctrSelect = document.getElementById(`dist-ctr-${toolId}`);
-    if (!clusterName || !ns || !podSelect) return;
+    if (!podSelect) return;
+    podSelect.innerHTML = '<option value="">选择 Namespace 后加载</option>';
+    if (ctrSelect) ctrSelect.innerHTML = '<option value="">选择 Pod 后加载</option>';
+    distUpdateSubmitState(toolId);
+    if (!clusterName || !ns) return;
     podSelect.innerHTML = '<option value="">加载中...</option>';
     try {
       const podsData = await safeGet(`/clusters/${encodeURIComponent(clusterName)}/pods?namespace=${encodeURIComponent(ns)}`);
-      const pods = podsData.pods || [];
-      podSelect.innerHTML = '<option value="">选择 Pod</option>' +
+      if (_distRequestIds.get(toolId) !== requestId ||
+          document.getElementById(`dist-cluster-${toolId}`)?.value !== clusterName ||
+          document.getElementById(`dist-ns-${toolId}`)?.value !== ns) return;
+      const pods = (podsData.pods || []).filter(p => p.phase === 'Running');
+      podSelect.innerHTML = `<option value="">${pods.length ? '选择 Pod' : '此 Namespace 下没有 Running Pod'}</option>` +
         pods.map(p => {
           const ctrs = (p.containers || []).join(',');
           return `<option value="${esc(p.name)}" data-c="${esc(ctrs)}" data-phase="${esc(p.phase || '')}">${esc(p.name)} [${esc(p.phase || '')}]</option>`;
@@ -1310,14 +1437,35 @@
         const opt = podSelect.options[podSelect.selectedIndex];
         const ctrs = (opt?.dataset.c || '').split(',').filter(Boolean);
         if (ctrSelect) {
-          ctrSelect.innerHTML = '<option value="">默认容器</option>' + ctrs.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+          ctrSelect.innerHTML = ctrs.length > 1
+            ? '<option value="">请选择容器...</option>' + ctrs.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')
+            : '<option value="">默认容器</option>' + ctrs.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
           if (ctrs.length === 1) ctrSelect.value = ctrs[0];
         }
+        distUpdateSubmitState(toolId);
+        distOnPodChange(toolId);
       };
-      podSelect.onchange();
+      distUpdateSubmitState(toolId);
     } catch (e) {
-      podSelect.innerHTML = '<option value="">加载失败</option>';
+      if (_distRequestIds.get(toolId) !== requestId) return;
+      podSelect.innerHTML = '<option value="">Pod 加载失败</option>';
+      toast(`加载 Pod 失败：${e.message}`, 'err');
     }
+  };
+
+  window.distUpdateSubmitState = function(toolId) {
+    const cluster = document.getElementById(`dist-cluster-${toolId}`)?.value;
+    const namespace = document.getElementById(`dist-ns-${toolId}`)?.value;
+    const podSelect = document.getElementById(`dist-pod-${toolId}`);
+    const containerSelect = document.getElementById(`dist-ctr-${toolId}`);
+    const path = document.getElementById(`dist-path-${toolId}`)?.value?.trim() || '';
+    const option = podSelect?.options[podSelect.selectedIndex];
+    const containerCount = (option?.dataset.c || '').split(',').filter(Boolean).length;
+    const container = containerSelect?.value || '';
+    const ready = Boolean(cluster && namespace && podSelect?.value && path.startsWith('/') &&
+      (containerCount <= 1 || container));
+    const button = document.getElementById(`dist-submit-${toolId}`);
+    if (button) button.disabled = !ready;
   };
 
   window.distOnPodChange = async function(toolId) {
@@ -1330,12 +1478,16 @@
     if (!capEl) return;
     capEl.innerHTML = '';
 
+    distUpdateSubmitState(toolId);
     if (!cluster || !ns || !pod) return;
 
     try {
       const result = await safePost('/tasks/detect-capability', {
         cluster, namespace: ns, pod, container: ctr
       });
+      if (document.getElementById(`dist-cluster-${toolId}`)?.value !== cluster ||
+          document.getElementById(`dist-ns-${toolId}`)?.value !== ns ||
+          document.getElementById(`dist-pod-${toolId}`)?.value !== pod) return;
       if (result.capability_level === 'pod+arthas') {
         capEl.innerHTML = '<span class="dist-cap-badge cap-ok">✅ Java + Arthas</span>';
       } else if (result.capability_level === 'pod-only') {
@@ -1344,7 +1496,9 @@
         capEl.innerHTML = '<span class="dist-cap-badge cap-error">❌ 不兼容</span>';
       }
     } catch (e) {
-      // Ignore capability detection errors
+      if (document.getElementById(`dist-pod-${toolId}`)?.value === pod) {
+        capEl.innerHTML = '<span class="dist-cap-badge cap-warn">能力检测暂不可用</span>';
+      }
     }
   };
 
@@ -1362,11 +1516,9 @@
           distOnNsChange(toolId).then(() => {
             if (podEl) {
               podEl.value = target.pod;
-              distOnPodChange(toolId).then(() => {
-                if (ctrEl && target.container) {
-                  ctrEl.value = target.container;
-                }
-              });
+              podEl.onchange?.();
+              if (ctrEl && target.container) ctrEl.value = target.container;
+              distUpdateSubmitState(toolId);
             }
           });
         }
@@ -1380,9 +1532,20 @@
     const pod = document.getElementById(`dist-pod-${toolId}`)?.value || '';
     const ctr = document.getElementById(`dist-ctr-${toolId}`)?.value || '';
     const path = document.getElementById(`dist-path-${toolId}`)?.value || '/tmp/arthas/arthas-boot.jar';
+    const podOption = document.getElementById(`dist-pod-${toolId}`)?.selectedOptions?.[0];
+    const containerCount = (podOption?.dataset.c || '').split(',').filter(Boolean).length;
 
     if (!cluster) { toast('请选择集群', 'warn'); return; }
+    if (!ns) { toast('请选择 Namespace', 'warn'); return; }
     if (!pod) { toast('请选择 Pod', 'warn'); return; }
+    if (containerCount > 1 && !ctr) { toast('此 Pod 有多个容器，请明确选择目标容器', 'warn'); return; }
+    if (toolType === 'binary') {
+      const tool = _allTools.binary.find(item => item.id === toolId);
+      if (tool?.tool_type === 'arthas' && !path.trim().endsWith('.jar')) {
+        toast('Arthas 安装路径必须以 .jar 结尾', 'warn');
+        return;
+      }
+    }
 
     const payload = { tool_id: toolId, cluster, namespace: ns, pod, container: ctr, install_path: path };
 
@@ -1416,7 +1579,7 @@
 
     try {
       const startTime = Date.now();
-      await safePost('/tasks/distribute', payload);
+      await safePost(`/tasks/tool-packages/${toolId}/distribute`, payload);
       const duration = ((Date.now() - startTime) / 1000).toFixed(1);
 
       _saveRecentTarget({ cluster, namespace: ns, pod, container: ctr });
@@ -1435,6 +1598,8 @@
       setTimeout(() => {
         closeModal('distProgressModal');
         toast('分发成功', 'ok');
+        loadDistHistory();
+        loadBinaryTools();
       }, 1500);
 
     } catch (e) {
@@ -1449,6 +1614,7 @@
       setTimeout(() => {
         closeModal('distProgressModal');
         toast(`分发失败：${e.message}`, 'err');
+        loadDistHistory();
       }, 2000);
     }
   };
@@ -1458,6 +1624,9 @@
   // ═══════════════════════════════════════════════════════════════
 
   window.toolboxOpenBatchDistribute = function() {
+    document.getElementById('batchDistModal')?.remove();
+    _batchState = {selectedTools: [], selectedPods: []};
+    _batchPodData = [];
     const modal = document.createElement('div');
     modal.className = 'modal-overlay';
     modal.id = 'batchDistModal';
@@ -1470,97 +1639,39 @@
         <div class="modal-body">
           <!-- Step 1: 选择工具 -->
           <div style="margin-bottom:20px">
-            <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px;text-transform:uppercase">Step 1: 选择工具</div>
+            <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px;text-transform:uppercase">Step 1: 选择可分发工具包</div>
             <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:10px">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-              <input type="search" name="" placeholder="搜索工具..." inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
-            </div>
-            <div style="display:flex;gap:4px;margin-bottom:10px;padding:3px;background:rgba(0,0,0,.2);border-radius:6px">
-              <button class="btn btn-sm" style="flex:1;background:rgba(0,122,255,.15);color:var(--a)" onclick="switchBatchToolTab('binary', this)">📦 二进制</button>
-              <button class="btn btn-sm" style="flex:1" onclick="switchBatchToolTab('script', this)">🐍 脚本</button>
+              <input type="search" id="batchToolSearch" name="" placeholder="搜索工具..." oninput="filterBatchTools()" inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
             </div>
             <div id="batchToolListBinary" style="display:flex;flex-direction:column;gap:8px">加载中...</div>
-            <div id="batchToolListScript" style="display:none;flex-direction:column;gap:8px"></div>
           </div>
 
-          <!-- Step 2: 选择目标 -->
+          <!-- Step 2: 选择分发范围 -->
           <div style="margin-bottom:20px">
-            <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px;text-transform:uppercase">Step 2: 选择目标</div>
-            <div style="display:flex;gap:4px;margin-bottom:12px;padding:3px;background:rgba(0,0,0,.2);border-radius:6px">
-              <button class="btn btn-sm" style="flex:1;background:rgba(0,122,255,.15);color:var(--a)" onclick="switchBatchTargetTab('pod', this)">📦 按 Pod</button>
-              <button class="btn btn-sm" style="flex:1" onclick="switchBatchTargetTab('node', this)">🖥️ 按 Node</button>
-              <button class="btn btn-sm" style="flex:1" onclick="switchBatchTargetTab('namespace', this)">📁 按 NS</button>
-              <button class="btn btn-sm" style="flex:1" onclick="switchBatchTargetTab('label', this)">🏷️ 按标签</button>
-            </div>
-
-            <!-- Pod 选择 -->
+            <div style="font-size:12px;font-weight:600;color:var(--tx2);margin-bottom:10px;text-transform:uppercase">Step 2: 集群 → Namespace → Pod</div>
             <div id="batchTargetPod">
               <div style="display:flex;gap:12px;margin-bottom:10px">
                 <div style="flex:1">
                   <label style="font-size:11px;color:var(--tx2);display:block;margin-bottom:4px">集群</label>
-                  <select class="inp" onchange="loadBatchPods()"><option>选择集群...</option></select>
+                  <select id="batchCluster" class="inp" onchange="batchOnClusterChange()"><option value="">选择集群...</option></select>
                 </div>
                 <div style="flex:1">
                   <label style="font-size:11px;color:var(--tx2);display:block;margin-bottom:4px">Namespace</label>
-                  <select class="inp" onchange="loadBatchPods()"><option>选择 NS...</option></select>
+                  <select id="batchNamespace" class="inp" onchange="loadBatchPods()"><option value="">选择集群后加载</option></select>
                 </div>
               </div>
               <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:8px">
                 <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="search" name="" placeholder="搜索 Pod..." inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
+                <input type="search" id="batchPodSearch" name="" placeholder="搜索 Pod..." oninput="batchFilterPods()" inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
               </div>
-              <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
-                <button class="btn btn-g btn-sm">全部</button>
-                <button class="btn btn-g btn-sm">Java Pod</button>
-                <button class="btn btn-g btn-sm">已连接</button>
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+                <button class="btn btn-g btn-sm" onclick="batchSelectVisible(true)">选择本页</button>
+                <button class="btn btn-g btn-sm" onclick="batchSelectVisible(false)">清除本页</button>
+                <span id="batchSelectedCount" style="margin-left:auto;font-size:11px;color:var(--tx2)">已选 0 个 Pod</span>
               </div>
               <div id="batchPodList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto">
                 <div style="text-align:center;color:var(--tx2);font-size:12px;padding:20px">请先选择集群和 Namespace</div>
-              </div>
-            </div>
-
-            <!-- Node 选择 -->
-            <div id="batchTargetNode" style="display:none">
-              <div style="margin-bottom:10px">
-                <label style="font-size:11px;color:var(--tx2);display:block;margin-bottom:4px">集群</label>
-                <select class="inp"><option>选择集群...</option></select>
-              </div>
-              <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:8px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="search" name="" placeholder="搜索 Node..." inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
-              </div>
-              <div id="batchNodeList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto">
-                <div style="text-align:center;color:var(--tx2);font-size:12px;padding:20px">请先选择集群</div>
-              </div>
-              <div style="font-size:11px;color:var(--tx3);margin-top:8px">选择 Node 后将自动选择其上的所有 Java Pod</div>
-            </div>
-
-            <!-- Namespace 选择 -->
-            <div id="batchTargetNamespace" style="display:none">
-              <div style="margin-bottom:10px">
-                <label style="font-size:11px;color:var(--tx2);display:block;margin-bottom:4px">集群</label>
-                <select class="inp"><option>选择集群...</option></select>
-              </div>
-              <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;margin-bottom:8px">
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-                <input type="search" name="" placeholder="搜索 Namespace..." inputmode="search" autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" data-lpignore="true" data-1p-ignore="true" data-bwignore="true" data-form-type="other" style="flex:1;background:none;border:none;color:var(--tx);font-size:12px;outline:none">
-              </div>
-              <div id="batchNsList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto">
-                <div style="text-align:center;color:var(--tx2);font-size:12px;padding:20px">请先选择集群</div>
-              </div>
-              <div style="font-size:11px;color:var(--tx3);margin-top:8px">选择 Namespace 后将自动选择其中的所有 Java Pod</div>
-            </div>
-
-            <!-- 标签选择 -->
-            <div id="batchTargetLabel" style="display:none">
-              <div style="margin-bottom:10px">
-                <label style="font-size:11px;color:var(--tx2);display:block;margin-bottom:4px">集群</label>
-                <select class="inp"><option>选择集群...</option></select>
-              </div>
-              <div style="margin-bottom:10px">
-                <label style="font-size:11px;color:var(--tx2);display:block;margin-bottom:4px">标签选择器</label>
-                <input class="inp" placeholder="例如: app=frontend, env=production">
-                <div style="font-size:11px;color:var(--tx3);margin-top:4px">使用 Kubernetes 标签格式: key=value</div>
               </div>
             </div>
           </div>
@@ -1589,277 +1700,216 @@
     initBatchClusterSelects();
   };
 
-  let _batchState = { step: 1, selectedTools: [], selectedPods: [] };
-
-  async function loadBatchToolList() {
-    try {
-      const data = await safeGet('/tasks/tool-packages');
-      const packages = data.packages || [];
-      const container = document.getElementById('batchToolList');
-      if (!container) return;
-      container.innerHTML = packages.map(p => {
-        const toolDisplayName = p.file_name || p.name;
-        return `
-        <label class="batch-item">
-          <input type="checkbox" value="${p.id}" data-name="${esc(toolDisplayName)}" data-path="${esc(p.install_path || '')}" onchange="batchUpdateTools()">
-          <span class="batch-item-name">${esc(toolDisplayName)}</span>
-          <span class="batch-item-meta">${esc(p.tool_type)} · ${esc(p.version || '-')}</span>
-        </label>
-      `}).join('');
-    } catch (e) {
-      console.error('加载工具列表失败:', e);
-    }
-  }
-
-  window.switchBatchToolTab = function(tab, btn) {
-    btn.parentElement.querySelectorAll('.btn').forEach(b => {
-      b.style.background = '';
-      b.style.color = '';
-    });
-    btn.style.background = 'rgba(0,122,255,.15)';
-    btn.style.color = 'var(--a)';
-    document.getElementById('batchToolListBinary').style.display = tab === 'binary' ? 'flex' : 'none';
-    document.getElementById('batchToolListScript').style.display = tab === 'script' ? 'flex' : 'none';
-  };
-
-  window.switchBatchTargetTab = function(tab, btn) {
-    btn.parentElement.querySelectorAll('.btn').forEach(b => {
-      b.style.background = '';
-      b.style.color = '';
-    });
-    btn.style.background = 'rgba(0,122,255,.15)';
-    btn.style.color = 'var(--a)';
-    ['Pod', 'Node', 'Namespace', 'Label'].forEach(t => {
-      const el = document.getElementById('batchTarget' + t);
-      if (el) el.style.display = t.toLowerCase() === tab ? 'block' : 'none';
-    });
-  };
+  let _batchState = { selectedTools: [], selectedPods: [] };
 
   async function loadBatchToolLists() {
     try {
       const data = await safeGet('/tasks/tool-packages');
       const packages = data.packages || [];
-      const binaryList = document.getElementById('batchToolListBinary');
-      if (binaryList) {
-        binaryList.innerHTML = packages.filter(p => p.tool_type !== 'script').map(p => `
-          <label style="display:flex;align-items:center;gap:10px;padding:10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:8px;cursor:pointer">
-            <input type="checkbox" value="${p.id}" style="width:16px;height:16px">
-            <div style="flex:1">
-              <div style="font-size:13px;font-weight:600">${esc(p.file_name || p.name)}</div>
-              <div style="font-size:11px;color:var(--tx2)">${esc(p.tool_type)} · ${esc(p.version || '-')}</div>
-            </div>
-            <span class="badge badge-running">可用</span>
-          </label>
-        `).join('');
-      }
+      const render = items => items.map(p => `
+        <label class="batch-item" data-search="${esc(`${p.file_name || p.name} ${p.tool_type} ${p.version || ''}`.toLowerCase())}">
+          <input type="checkbox" value="${Number(p.id)}" data-name="${esc(p.file_name || p.name)}"
+            ${p.status === 'missing' ? 'disabled title="工具文件缺失，请先校验或重新上传"' : ''}
+            data-path="${esc(p.install_path || '')}" onchange="batchUpdateTools()">
+          <span class="batch-item-name">${esc(p.file_name || p.name)}</span>
+          <span class="batch-item-meta">${esc(p.tool_type)} · ${esc(p.version || '-')} · ${esc(p.install_path || '')}${p.status === 'missing' ? ' · 文件缺失' : ''}</span>
+        </label>
+      `).join('') || '<div class="sb-empty">暂无可分发工具</div>';
+      const binary = document.getElementById('batchToolListBinary');
+      if (binary) binary.innerHTML = render(packages);
     } catch (e) {
       console.error('加载工具列表失败:', e);
+      toast(`加载工具列表失败: ${e.message}`, 'err');
     }
   }
 
+  window.batchUpdateTools = function() {
+    _batchState.selectedTools = Array.from(
+      document.querySelectorAll('#batchDistModal #batchToolListBinary input:checked')
+    ).map(input => ({
+      id: Number(input.value),
+      name: input.dataset.name || input.value,
+      install_path: input.dataset.path || '',
+    }));
+    renderBatchSummary();
+  };
+
+  window.filterBatchTools = function() {
+    const query = (document.getElementById('batchToolSearch')?.value || '').trim().toLowerCase();
+    document.querySelectorAll('#batchDistModal .batch-item[data-search]').forEach(item => {
+      item.style.display = !query || item.dataset.search.includes(query) ? '' : 'none';
+    });
+  };
+
   async function _loadBatchClusters() {
-    try {
-      const data = await safeGet('/clusters');
-      return data.clusters || [];
-    } catch (e) {
-      return [];
-    }
+    const data = await safeGet('/clusters');
+    return data.clusters || [];
   }
 
   async function _loadBatchNamespaces(cluster) {
-    try {
-      const data = await safeGet(`/clusters/${encodeURIComponent(cluster)}/namespaces`);
-      return data.namespaces || [];
-    } catch (e) {
-      return ['default'];
-    }
+    const data = await safeGet(`/clusters/${encodeURIComponent(cluster)}/namespaces`);
+    return data.namespaces || [];
   }
 
   async function _loadBatchPods(cluster, namespace) {
-    try {
-      const data = await safeGet(`/clusters/${encodeURIComponent(cluster)}/pods?namespace=${encodeURIComponent(namespace)}`);
-      return data.pods || [];
-    } catch (e) {
-      return [];
-    }
+    const data = await safeGet(`/clusters/${encodeURIComponent(cluster)}/pods?namespace=${encodeURIComponent(namespace)}`);
+    return data.pods || [];
   }
 
   window.initBatchClusterSelects = async function() {
-    const clusters = await _loadBatchClusters();
-    const clusterOptions = clusters.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
-
-    // Pod target cluster select
-    const podCluster = document.querySelector('#batchTargetPod select');
-    if (podCluster) {
-      podCluster.innerHTML = '<option value="">选择集群</option>' + clusterOptions;
-      podCluster.onchange = async () => {
-        const ns = await _loadBatchNamespaces(podCluster.value);
-        const nsSelect = document.querySelectorAll('#batchTargetPod select')[1];
-        if (nsSelect) {
-          nsSelect.innerHTML = ns.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('');
-          nsSelect.onchange = () => loadBatchPodList(podCluster.value, nsSelect.value);
-          if (ns.length > 0) loadBatchPodList(podCluster.value, ns[0]);
-        }
-      };
-    }
-
-    // Node target cluster select
-    const nodeCluster = document.querySelector('#batchTargetNode select');
-    if (nodeCluster) {
-      nodeCluster.innerHTML = '<option value="">选择集群</option>' + clusterOptions;
-    }
-
-    // NS target cluster select
-    const nsCluster = document.querySelector('#batchTargetNamespace select');
-    if (nsCluster) {
-      nsCluster.innerHTML = '<option value="">选择集群</option>' + clusterOptions;
-    }
-
-    // Label target cluster select
-    const labelCluster = document.querySelector('#batchTargetLabel select');
-    if (labelCluster) {
-      labelCluster.innerHTML = '<option value="">选择集群</option>' + clusterOptions;
+    const clusterSelect = document.getElementById('batchCluster');
+    if (!clusterSelect) return;
+    clusterSelect.innerHTML = '<option value="">加载集群...</option>';
+    try {
+      const clusters = await _loadBatchClusters();
+      clusterSelect.innerHTML = '<option value="">选择集群...</option>' +
+        clusters.map(c => `<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('');
+      if (!clusters.length) clusterSelect.innerHTML = '<option value="">没有可访问的集群</option>';
+    } catch (e) {
+      clusterSelect.innerHTML = '<option value="">集群加载失败</option>';
+      toast(`加载集群失败: ${e.message}`, 'err');
     }
   };
 
-  async function loadBatchPodList(cluster, namespace) {
-    const container = document.getElementById('batchPodList');
-    if (!container || !cluster || !namespace) return;
-    container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx2)">加载中...</div>';
-
-    const pods = await _loadBatchPods(cluster, namespace);
-    if (pods.length === 0) {
-      container.innerHTML = '<div style="text-align:center;padding:20px;color:var(--tx2)">暂无 Pod</div>';
-      return;
+  window.batchOnClusterChange = async function() {
+    const cluster = document.getElementById('batchCluster')?.value || '';
+    const namespaceSelect = document.getElementById('batchNamespace');
+    const podList = document.getElementById('batchPodList');
+    if (!namespaceSelect || !podList) return;
+    _batchPodRequestId++;
+    namespaceSelect.innerHTML = '<option value="">加载 Namespace...</option>';
+    podList.innerHTML = '<div class="sb-empty">请先选择 Namespace</div>';
+    _batchPodData = [];
+    try {
+      const namespaces = cluster ? await _loadBatchNamespaces(cluster) : [];
+      namespaceSelect.innerHTML = '<option value="">选择 Namespace...</option>' +
+        namespaces.map(ns => `<option value="${esc(ns)}">${esc(ns)}</option>`).join('');
+      if (cluster && namespaces.length === 0) {
+        namespaceSelect.innerHTML = '<option value="">没有可访问的 Namespace</option>';
+      }
+    } catch (e) {
+      namespaceSelect.innerHTML = '<option value="">Namespace 加载失败</option>';
+      toast(`加载 Namespace 失败: ${e.message}`, 'err');
     }
-
-    container.innerHTML = pods.map(p => `
-      <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;background:rgba(0,0,0,.2);border:1px solid rgba(40,61,90,.4);border-radius:6px;cursor:pointer">
-        <input type="checkbox" value="${esc(p.name)}" style="width:14px;height:14px">
-        <div style="flex:1;font-size:12px">
-          <span style="font-weight:600">${esc(p.name)}</span>
-          <span style="color:var(--tx2);margin:0 4px">${esc(p.phase || 'Unknown')}</span>
-        </div>
-      </label>
-    `).join('');
-  }
+  };
 
   window.loadBatchPods = function() {
-    const cluster = document.querySelector('#batchTargetPod select')?.value;
-    const ns = document.querySelectorAll('#batchTargetPod select')[1]?.value;
-    if (cluster && ns) {
-      loadBatchPodList(cluster, ns);
+    const cluster = document.getElementById('batchCluster')?.value || '';
+    const namespace = document.getElementById('batchNamespace')?.value || '';
+    if (cluster && namespace) {
+      loadBatchPodList(cluster, namespace);
+    } else {
+      _batchPodRequestId++;
+      _batchPodData = [];
+      const podList = document.getElementById('batchPodList');
+      if (podList) podList.innerHTML = '<div class="sb-empty">请先选择 Namespace</div>';
     }
   };
 
   window.executeBatchDistribute = function() {
-    toast('批量分发功能开发中', 'info');
-    closeModal('batchDistModal');
-  };
-
-  function _updateBatchStepIndicator(step) {
-    const indicators = document.querySelectorAll('#batchWizardSteps .batch-step-indicator');
-    const lines = document.querySelectorAll('#batchWizardSteps .batch-step-line');
-    indicators.forEach((el, i) => {
-      const s = i + 1;
-      el.classList.remove('active', 'done');
-      if (s < step) el.classList.add('done');
-      else if (s === step) el.classList.add('active');
-    });
-    lines.forEach((el, i) => {
-      el.classList.toggle('done', i + 1 < step);
-    });
-  }
-
-  window.batchNextStep = function() {
-    if (_batchState.step === 1) {
-      if (_batchState.selectedTools.length === 0) { toast('请选择至少一个工具', 'warn'); return; }
-      _batchState.step = 2;
-      document.getElementById('batchStep1').style.display = 'none';
-      document.getElementById('batchStep2').style.display = 'block';
-      _updateBatchStepIndicator(2);
-      loadBatchPodList();
-    } else if (_batchState.step === 2) {
-      if (_batchState.selectedPods.length === 0) { toast('请选择至少一个 Pod', 'warn'); return; }
-      _batchState.step = 3;
-      document.getElementById('batchStep2').style.display = 'none';
-      document.getElementById('batchStep3').style.display = 'block';
-      _updateBatchStepIndicator(3);
-      renderBatchSummary();
-      document.getElementById('batchNextBtn').innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> 确认分发';
-      document.getElementById('batchNextBtn').onclick = batchExecute;
-    }
+    window.batchExecute();
   };
 
   let _batchPodData = [];
+  let _batchPodRequestId = 0;
 
-  async function loadBatchPodList() {
+  async function loadBatchPodList(cluster, namespace) {
+    const container = document.getElementById('batchPodList');
+    if (!container) return;
+    const requestId = ++_batchPodRequestId;
+    container.innerHTML = '<div class="sb-empty">加载 Pod...</div>';
     try {
-      const data = await safeGet('/clusters');
-      const clusters = data.clusters || [];
-      const container = document.getElementById('batchPodList');
-      if (!container) return;
-      container.innerHTML = '<div class="sb-empty">加载中...</div>';
-      _batchPodData = [];
-      for (const c of clusters) {
-        let namespaces = ['default'];
-        try {
-          const nsData = await safeGet(`/clusters/${c.name}/namespaces`);
-          if (nsData.namespaces && nsData.namespaces.length) namespaces = nsData.namespaces;
-        } catch (e) { /* use default */ }
-        for (const ns of namespaces) {
-          try {
-            const podsData = await safeGet(`/clusters/${c.name}/pods?namespace=${encodeURIComponent(ns)}`);
-            const pods = podsData.pods || [];
-            for (const pod of pods) {
-              _batchPodData.push({
-                cluster: c.name,
-                namespace: ns,
-                pod: pod.name,
-                phase: pod.phase || '',
-              });
-            }
-          } catch (e) { /* skip namespace */ }
-        }
-      }
+      const pods = await _loadBatchPods(cluster, namespace);
+      if (requestId !== _batchPodRequestId) return;
+      _batchPodData = pods.map(p => ({
+        cluster,
+        namespace,
+        pod: p.name,
+        phase: p.phase || 'Unknown',
+        containers: p.containers || [],
+      }));
       _renderBatchPodList(_batchPodData);
     } catch (e) {
-      console.error('加载 Pod 列表失败:', e);
+      if (requestId !== _batchPodRequestId) return;
+      _batchPodData = [];
+      container.innerHTML = `<div class="sb-empty">加载 Pod 失败: ${esc(e.message)}</div>`;
+      toast(`加载 Pod 失败: ${e.message}`, 'err');
     }
   }
 
   function _renderBatchPodList(pods) {
     const container = document.getElementById('batchPodList');
     if (!container) return;
+    const query = (document.getElementById('batchPodSearch')?.value || '').trim().toLowerCase();
+    const filtered = pods.filter(p => !query || p.pod.toLowerCase().includes(query));
     if (pods.length === 0) {
-      container.innerHTML = '<div class="sb-empty">无可用 Pod</div>';
+      container.innerHTML = '<div class="sb-empty">此 Namespace 下没有 Pod</div>';
       return;
     }
-    container.innerHTML = pods.map(p => `
-      <label class="batch-item">
-        <input type="checkbox" value="${esc(p.cluster)}:${esc(p.namespace)}:${esc(p.pod)}" onchange="batchUpdatePods()">
+    const selected = new Map(_batchState.selectedPods.map(target => [
+      `${target.cluster}/${target.namespace}/${target.pod}`, target
+    ]));
+    container.innerHTML = filtered.map(p => {
+      const key = `${p.cluster}/${p.namespace}/${p.pod}`;
+      const prior = selected.get(key);
+      const target = {
+        cluster: p.cluster,
+        namespace: p.namespace,
+        pod: p.pod,
+        container: prior?.container || '',
+        container_count: p.containers.length,
+      };
+      const options = p.containers.length > 1
+        ? `        <select class="inp batch-pod-container" onclick="event.stopPropagation()" onchange="batchUpdatePods()">
+             <option value="">选择容器...</option>
+             ${p.containers.map(name => `<option value="${esc(name)}" ${target.container === name ? 'selected' : ''}>${esc(name)}</option>`).join('')}
+           </select>`
+        : '';
+      if (p.containers.length === 1 && !target.container) target.container = p.containers[0];
+      const eligible = p.phase === 'Running';
+      return `
+      <label class="batch-item" style="${eligible ? '' : 'opacity:.55'}">
+        <input type="checkbox" value="${encodeURIComponent(JSON.stringify(target))}" ${prior ? 'checked' : ''} ${eligible ? '' : 'disabled'} onchange="batchUpdatePods()">
         <span class="batch-item-name">${esc(p.pod)}</span>
-        <span class="batch-item-meta">${esc(p.cluster)}/${esc(p.namespace)} · ${esc(p.phase)}</span>
+        <span class="batch-item-meta">${esc(p.phase)}${p.containers.length ? ` · ${p.containers.length} 容器` : ''}${eligible ? '' : ' · 不可分发'}</span>
+        ${options}
       </label>
-    `).join('');
+    `;
+    }).join('') || '<div class="sb-empty">没有匹配的 Pod</div>';
   }
 
-  window.batchFilterPods = function(filter) {
-    document.getElementById('batchFilterAll')?.classList.toggle('active-filter', filter === 'all');
-    document.getElementById('batchFilterJava')?.classList.toggle('active-filter', filter === 'java');
-    if (filter === 'java') {
-      _renderBatchPodList(_batchPodData.filter(p => /java|jvm|jdk|jre/i.test(p.pod)));
-    } else {
-      _renderBatchPodList(_batchPodData);
-    }
+  window.batchFilterPods = function() {
+    _renderBatchPodList(_batchPodData);
   };
 
   window.batchUpdatePods = function() {
-    const checkboxes = document.querySelectorAll('#batchPodList input[type=checkbox]:checked');
-    _batchState.selectedPods = Array.from(checkboxes).map(cb => {
-      const [cluster, namespace, pod] = cb.value.split(':');
-      return { cluster, namespace, pod };
+    const renderedKeys = new Set(
+      Array.from(document.querySelectorAll('#batchPodList input[type=checkbox]'))
+        .map(input => {
+          const target = JSON.parse(decodeURIComponent(input.value));
+          return `${target.cluster}/${target.namespace}/${target.pod}`;
+        })
+    );
+    const selectedElsewhere = _batchState.selectedPods.filter(target =>
+      !renderedKeys.has(`${target.cluster}/${target.namespace}/${target.pod}`));
+    const selectedHere = Array.from(document.querySelectorAll('#batchPodList input[type=checkbox]:checked'))
+      .map(checkbox => {
+        const target = JSON.parse(decodeURIComponent(checkbox.value));
+        const containerSelect = checkbox.closest('label')?.querySelector('.batch-pod-container');
+        if (containerSelect) target.container = containerSelect.value;
+        return target;
+      });
+    _batchState.selectedPods = [...selectedElsewhere, ...selectedHere];
+    const count = document.getElementById('batchSelectedCount');
+    if (count) count.textContent = `已选 ${_batchState.selectedPods.length} 个 Pod`;
+    renderBatchSummary();
+  };
+
+  window.batchSelectVisible = function(checked) {
+    document.querySelectorAll('#batchPodList input[type=checkbox]:not(:disabled)').forEach(input => {
+      input.checked = checked;
     });
+    batchUpdatePods();
   };
 
   function renderBatchSummary() {
@@ -1868,6 +1918,8 @@
     const toolCount = _batchState.selectedTools.length;
     const podCount = _batchState.selectedPods.length;
     const total = toolCount * podCount;
+    const scopes = [...new Set(_batchState.selectedPods.map(
+      target => `${target.cluster}/${target.namespace}`))];
     el.innerHTML = `
       <div class="batch-summary-card">
         <div class="batch-summary-stat">
@@ -1887,20 +1939,42 @@
           <div class="label">次分发</div>
         </div>
       </div>
+      <div style="margin-top:8px">范围: ${esc(scopes.join('、') || '未选择')} · 单次上限 200 次分发</div>
     `;
   }
 
   window.batchExecute = async function() {
-    const btn = document.getElementById('batchNextBtn');
-    if (btn) { btn.disabled = true; btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin"><circle cx="12" cy="12" r="10"/></svg> 分发中...'; }
-    const progressEl = document.getElementById('batchProgress');
+    const btn = document.querySelector('#batchDistModal .modal-footer .btn-p');
+    const total = _batchState.selectedTools.length * _batchState.selectedPods.length;
+    if (!_batchState.selectedTools.length) { toast('请至少选择一个工具', 'warn'); return; }
+    if (!_batchState.selectedPods.length) { toast('请至少选择一个 Pod', 'warn'); return; }
+    if (total > 200) { toast('单次最多分发 200 次，请缩小范围后重试', 'warn'); return; }
+    const missingContainer = _batchState.selectedPods.find(target => {
+      const pod = _batchPodData.find(p =>
+        p.cluster === target.cluster && p.namespace === target.namespace && p.pod === target.pod);
+      return target.container_count > 1 && !target.container;
+    });
+    if (missingContainer) {
+      toast(`请为多容器 Pod ${missingContainer.pod} 选择目标容器`, 'warn');
+      return;
+    }
+    const targetSummary = _batchState.selectedPods.map(target =>
+      `${target.cluster}/${target.namespace}/${target.pod}${target.container ? `:${target.container}` : ''}`
+    ).join('\n');
+    if (!window.confirm(
+      `即将分发 ${_batchState.selectedTools.length} 个工具到 ${_batchState.selectedPods.length} 个 Pod，共 ${total} 次操作。\n\n目标 Pod:\n${targetSummary}\n\n确认继续？`
+    )) return;
+    if (btn) { btn.disabled = true; btn.textContent = '分发中...'; }
+    const progressEl = document.getElementById('batchSummary');
     if (progressEl) progressEl.innerHTML = '<div class="batch-progress-bar"><div class="batch-progress-fill" style="width:30%"></div></div>';
     try {
       const result = await safePost('/tasks/batch-distribute', {
         tool_ids: _batchState.selectedTools.map(t => t.id),
-        tool_type: 'binary',
-        targets: _batchState.selectedPods,
-        install_path: _batchState.selectedTools[0]?.install_path || '/tmp/arthas/arthas-boot.jar',
+        targets: _batchState.selectedPods.map(({cluster, namespace, pod, container}) =>
+          ({cluster, namespace, pod, container})),
+        install_paths: Object.fromEntries(
+          _batchState.selectedTools.map(tool => [tool.id, tool.install_path])
+        ),
       });
       if (progressEl) {
         const summary = result.summary || {};
@@ -1916,7 +1990,8 @@
                   ${r.status === 'success'
                     ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>'
                     : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>'}
-                  <span>${esc(r.tool)} → ${esc(r.pod)}</span>
+                  <span>${esc(r.tool)} → ${esc(r.cluster)}/${esc(r.namespace)}/${esc(r.pod)}${r.container ? ` (${esc(r.container)})` : ''}</span>
+                  ${r.install_path ? `<span class="batch-path">${esc(r.install_path)}</span>` : ''}
                   ${r.error ? `<span class="batch-error">${esc(r.error)}</span>` : ''}
                   ${r.duration_ms ? `<span class="batch-duration">${r.duration_ms}ms</span>` : ''}
                 </div>
@@ -1925,12 +2000,17 @@
           </div>
         `;
       }
-      toast('批量分发完成', 'ok');
+      if (result.summary?.failed) {
+        toast(`批量分发完成：${result.summary.success || 0} 成功，${result.summary.failed} 失败`, 'warn');
+      } else {
+        toast('批量分发完成', 'ok');
+      }
+      loadDistHistory();
     } catch (e) {
       if (progressEl) progressEl.innerHTML = `<div style="display:flex;align-items:center;gap:6px;color:var(--a5);font-size:13px"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg> ${esc(e.message)}</div>`;
       toast(`批量分发失败：${e.message}`, 'err');
     } finally {
-      if (btn) { btn.disabled = false; btn.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg> 确认分发'; }
+      if (btn) { btn.disabled = false; btn.textContent = '确认分发'; }
     }
   };
 
@@ -1982,6 +2062,15 @@
   function updateSummary(elId, count) {
     const el = document.getElementById(elId);
     if (el) el.textContent = count;
+  }
+
+  function formatFileSize(bytes) {
+    const size = Number(bytes);
+    if (!Number.isFinite(size) || size <= 0) return '大小未知';
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    if (size < 1024 * 1024 * 1024) return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+    return `${(size / (1024 * 1024 * 1024)).toFixed(2)} GB`;
   }
 
   // ═══════════════════════════════════════════════════════════════

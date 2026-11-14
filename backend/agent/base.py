@@ -79,7 +79,7 @@ class Agent:
         """
         执行 Agent 循环。
         mode='auto':   全自动执行
-        mode='assist': 高风险操作需要用户确认
+        高风险操作必须由用户通过独立审批流程确认，Agent 不直接执行
         """
         messages = [
             {"role": "system", "content": self.system_prompt},
@@ -116,8 +116,8 @@ class Agent:
 
                 if not tool:
                     result = f"[未知工具] {tool_name}"
-                elif mode == "assist" and tool.risk_level == "high":
-                    result = f"[需确认] 高风险操作 {tool_name}，参数: {json.dumps(tool_args)}"
+                elif tool.risk_level == "high":
+                    result = f"[需用户确认] Agent 不执行高风险操作 {tool_name}，参数: {json.dumps(tool_args)}"
                     if on_step:
                         await on_step(tool_name, tool_args, result, needs_approval=True)
                 else:

@@ -949,13 +949,11 @@ def _arthas_diagnose_performance(target: str, class_pattern: str, method_pattern
 
         # 4. OOM 场景
         if target == 'oom':
-            try:
-                from backend.core.arthas_executor import ArthasCommandExecutor
-                heap_resp = ArthasCommandExecutor.execute(conn, "heapdump --live /tmp/diag.hprof", timeout_ms=60000, confirmed=True)
-                diagnosis['metrics']['heapdump_triggered'] = True
-                diagnosis['recommendations'].append("Heap dump 已触发，建议下载后使用 MAT 分析")
-            except Exception:
-                pass
+            diagnosis['metrics']['heapdump_triggered'] = False
+            diagnosis['recommendations'].append(
+                "可考虑执行 Heap Dump 进一步分析，但该操作会触发 Full GC 并可能造成服务停顿，"
+                "请由管理员在性能分析页面逐次确认后启动。"
+            )
 
         # 5. 生成自然语言总结
         triggered = diagnosis['rules_triggered']

@@ -60,22 +60,16 @@ def _get_arthas_connection(connection_id: str):
         ArthasConnection 或 None
     """
     try:
-        from backend.app_context import connections  # 全局活跃连接字典
-        if connections and connection_id in connections:
-            return connections[connection_id]
-    except (ImportError, AttributeError):
-        pass
-
-    # 尝试从 app context 获取
-    try:
-        from flask import current_app
-        manager = current_app.config.get('connection_manager')
-        if manager:
-            return manager.get(connection_id)
+        from backend.app_context import get_connection_entry
+        entry = get_connection_entry(connection_id)
+        if not entry or not current_user.is_authenticated:
+            return None
+        if not current_user.is_admin and entry.get('user_id') != current_user.id:
+            return None
+        return entry.get('conn')
     except Exception:
-        pass
-
-    return None
+        log.exception("Failed to authorize diagnosis connection access")
+        return None
 
 
 def _get_capability(capability_id: int) -> Optional[Dict[str, Any]]:

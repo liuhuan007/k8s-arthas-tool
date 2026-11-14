@@ -4,6 +4,7 @@ import pytest
 import json
 import sys
 import os
+from unittest.mock import MagicMock
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,7 +18,9 @@ class TestAgentToolGateway:
     def setup_method(self):
         """每个测试方法前执行"""
         self.gateway = AgentToolGateway()
-        self.gateway.db = self.gateway.db.__class__(":memory:")
+        self.gateway.db = MagicMock()
+        self.gateway._log_audit = MagicMock()
+        self.gateway._log_security_event = MagicMock()
 
     def test_register_tool(self):
         """测试注册工具"""
@@ -64,15 +67,43 @@ class TestAgentToolGateway:
         assert 'not found' in result['error'].lower()
 
     def test_execute_tool_with_context(self):
-        """测试执行工具时传递上下文"""
+        """不存在或未授权的连接不能通过工具上下文访问"""
         result = self.gateway.execute_tool(
             tool_name="get_pod_status",
-            params={"pod_name": "test-pod", "namespace": "default"},
+            params={},
             user_id=1,
             context={"connection_id": "test-connection"}
         )
 
-        assert result['success'] is True
+        assert result['success'] is False
+        assert result['error'] == "Permission denied"
+
+    def test_execute_tool_requires_authenticated_user(self):
+        result = self.gateway.execute_tool(
+            tool_name="list_capabilities",
+            params={}
+        )
+
+        assert result == {
+            "success": False,
+            "error": "Authenticated user is required",
+        }
+
+    def test_high_impact_heapdump_is_admin_only(self):
+        self.gateway._is_admin = lambda user_id: False
+
+        result = self.gateway.execute_tool(
+            tool_name="start_profiler",
+            params={
+                "connection_id": "test-connection",
+                "type": "heapdump",
+            },
+            user_id=1
+        )
+
+        assert result["success"] is False
+        assert result["requires_confirmation"] is True
+        assert "per-run confirmation" in result["error"]
 
 
 if __name__ == '__main__':

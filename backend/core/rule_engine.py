@@ -8,6 +8,7 @@
 - 返回结构化结果，包含：触发规则、高亮片段、摘要
 - 与诊断端点解耦，可独立调用
 """
+import json
 import re
 from typing import Any, Dict, List, Optional
 
@@ -335,46 +336,124 @@ def prescreen(data: Dict[str, Any]) -> Dict[str, Any]:
 def extract_metrics_from_diagnosis(diagnosis: Dict[str, Any]) -> Dict[str, Any]:
     """
     从诊断结果中提取规则引擎所需的指标。
-    支持从 dashboard/thread/trace 的原始文本中正则提取。
+    优先解析 Arthas 的结构化 JSON；仅对旧版文本输出使用正则回退。
     """
     import re
     metrics: Dict[str, Any] = {}
 
-    # 从 dashboard 原始文本提取
-    dash = diagnosis.get("metrics", {}).get("dashboard", "")
-    if dash:
+    def _read_json(value):
+        if isinstance(value, (dict, list)):
+            return value
+        if isinstance(value, str):
+            try:
+                return json.loads(value)
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _response_root(value):
+        value = _read_json(value)
+        if isinstance(value, dict):
+            body = value.get("body", value)
+            if isinstance(body, dict):
+                results = body.get("results")
+                if isinstance(results, list) and results:
+                    body = results[0]
+                    if isinstance(body, dict) and isinstance(body.get("results"), list) and body["results"]:
+                        body = body["results"][0]
+            return body
+        return value
+
+    def _number(value):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            if isinstance(value, str):
+                match = re.fullmatch(r"\s*(-?\d+(?:\.\d+)?)\s*%?\s*", value)
+                if match:
+                    return float(match.group(1))
+            return None
+
+    raw_metrics = diagnosis.get("metrics", {})
+    dash_text = raw_metrics.get("dashboard", "")
+    dash = _response_root(dash_text)
+    if isinstance(dash, dict):
+        # 只有显式 JVM/dashboard CPU 字段才作为整体 CPU 使用率；线程 CPU 不是 JVM CPU。
+        for key in ("cpu_percent", "cpuPercent", "cpuUsage", "jvmCpu"):
+            value = _number(dash.get(key))
+            if value is not None:
+                metrics["cpu_percent"] = value
+                break
+
+        memory = dash.get("memoryInfo") or dash.get("memory") or {}
+        heap = memory.get("heap", []) if isinstance(memory, dict) else []
+        if isinstance(heap, dict):
+            heap = list(heap.values())
+        if isinstance(heap, list):
+            for pool in heap:
+                if not isinstance(pool, dict):
+                    continue
+                pool_name = str(pool.get("name", pool.get("type", ""))).lower()
+                if not any(token in pool_name for token in ("old", "tenured")):
+                    continue
+                used = _number(pool.get("used", pool.get("usedBytes")))
+                if used is not None:
+                    metrics["old_gen_mb"] = used / (1024 * 1024)
+                    break
+
+        # GC collectionCount is cumulative since JVM start, not a rate. Keep
+        # gcInfos in the raw evidence, but do not trigger frequency rules from
+        # a single dashboard sample.
+
+    if isinstance(dash_text, str) and _read_json(dash_text) is None:
+        dash = dash_text
         cpu = re.search(r'cpu\s*=\s*(\d+(?:\.\d+)?)\s*%', dash, re.I)
         if cpu:
             metrics["cpu_percent"] = float(cpu.group(1))
-
         old = re.search(r'Old[^\d]*(\d+(?:\.\d+)?)\s*(MB|GB)', dash, re.I)
         if old:
-            v = float(old.group(1))
-            metrics["old_gen_mb"] = v * (1024 if old.group(2) == "GB" else 1)
+            value = float(old.group(1))
+            metrics["old_gen_mb"] = value * (1024 if old.group(2).upper() == "GB" else 1)
 
-        ygc = re.search(r'YGC[^\d]*(\d+)', dash, re.I)
-        if ygc:
-            metrics["young_gc_count"] = int(ygc.group(1))
-
-        fgc = re.search(r'FGC[^\d]*(\d+)', dash, re.I)
-        if fgc:
-            metrics["full_gc_count"] = int(fgc.group(1))
-
-    # 从 thread 原始文本提取 BLOCKED 数量
-    threads_raw = diagnosis.get("metrics", {}).get("threads", "")
-    if threads_raw:
-        metrics["blocked_threads"] = threads_raw.lower().count('"state":"blocked"')
+    # 线程规则只统计结构化线程状态，避免 JSON 格式空白差异导致漏计。
+    threads = _response_root(raw_metrics.get("threads", ""))
+    if isinstance(threads, dict):
+        threads = threads.get("busyThreads") or threads.get("threads") or []
+    if isinstance(threads, list):
+        blocked_count = sum(
+            1 for thread in threads
+            if isinstance(thread, dict) and str(thread.get("state", "")).upper() == "BLOCKED"
+        )
+        if threads:
+            metrics["blocked_threads"] = blocked_count
+    elif isinstance(raw_metrics.get("threads"), str):
+        metrics["blocked_threads"] = raw_metrics["threads"].lower().count('"state":"blocked"')
 
     # 从 deadlock_info 提取
     if diagnosis.get("deadlock_info"):
         metrics["deadlock_found"] = True
 
-    # 从 trace 原始文本提取耗时
-    trace_raw = diagnosis.get("metrics", {}).get("trace", "")
-    if trace_raw:
-        # 提取最大耗时（ms）
-        costs = re.findall(r'(\d+(?:\.\d+)?)\s*ms', trace_raw)
-        if costs:
-            metrics["trace_ms"] = max(float(c) for c in costs)
+    trace_raw = raw_metrics.get("trace", "")
+    trace = _response_root(trace_raw)
+    costs = []
+
+    def _collect_costs(value):
+        if isinstance(value, dict):
+            for key, child in value.items():
+                if str(key).lower() in ("cost", "cost_ms", "costms"):
+                    number = _number(child)
+                    if number is not None:
+                        costs.append(number)
+                else:
+                    _collect_costs(child)
+        elif isinstance(value, list):
+            for child in value:
+                _collect_costs(child)
+
+    _collect_costs(trace)
+    if not costs and isinstance(trace_raw, str):
+        costs = [float(cost) for cost in re.findall(r'(\d+(?:\.\d+)?)\s*ms', trace_raw)]
+    if costs:
+        metrics["trace_ms"] = max(costs)
 
     return metrics
