@@ -29,12 +29,15 @@ class AgentToolGateway:
         self.tools: Dict[str, Dict[str, Any]] = {}
         self._register_default_tools()
 
-    def _get_connection(self, connection_id: str):
-        """获取活跃的 Arthas 连接"""
+    def _get_connection(self, connection_id: str, user_id: int = None):
+        """获取当前用户有权访问的活跃 Arthas 连接"""
         try:
-            from backend.app_context import connections, connections_lock
-            with connections_lock:
-                entry = connections.get(connection_id)
+            from backend.app_context import get_connection_entry
+            entry = get_connection_entry(connection_id)
+            if not entry:
+                return None
+            if not self._is_admin(user_id) and entry.get('user_id') != user_id:
+                return None
             if entry and entry.get('conn'):
                 conn = entry['conn']
                 # 验证连接是否存活
@@ -42,7 +45,42 @@ class AgentToolGateway:
                     return conn
             return None
         except Exception:
+            log.exception("Failed to authorize Agent connection access")
             return None
+
+    def _is_admin(self, user_id: int = None) -> bool:
+        if not user_id:
+            return False
+        user = self.db.fetch_one(
+            'SELECT is_admin FROM users WHERE id = ?',
+            (user_id,)
+        )
+        return bool(user and user.get('is_admin'))
+
+    def _check_connection_access(self, connection_id: str, user_id: int) -> bool:
+        try:
+            from backend.app_context import get_connection_entry
+            entry = get_connection_entry(connection_id)
+            if not entry:
+                return False
+            return self._is_admin(user_id) or entry.get('user_id') == user_id
+        except Exception:
+            log.exception("Failed to authorize Agent connection access")
+            return False
+
+    def _log_security_event(self, tool_name: str, user_id: int,
+                            outcome: str, reason: str) -> None:
+        try:
+            from services.audit_service import AuditService
+            AuditService.log_event(
+                user_id,
+                action=f"agent_tool:{tool_name}",
+                resource_type='agent_tool',
+                resource_id=tool_name,
+                details=json.dumps({"outcome": outcome, "reason": reason})
+            )
+        except Exception:
+            log.exception("Failed to record Agent tool security event: %s", tool_name)
 
     def _register_default_tools(self):
         """注册默认工具"""
@@ -265,13 +303,47 @@ class AgentToolGateway:
         if not tool:
             return {"success": False, "error": f"Tool '{tool_name}' not found"}
 
+        if not user_id:
+            self._log_security_event(
+                tool_name, None, "denied", "missing_authenticated_user")
+            return {"success": False, "error": "Authenticated user is required"}
+
         # 检查权限
-        if not self._check_permission(tool_name, user_id):
+        risk_level = tool.get('risk_level', 'low')
+        if tool_name == 'start_profiler':
+            task_type = params.get('type', 'cpu')
+            raw_duration = params.get('duration', 60)
+            if isinstance(raw_duration, bool):
+                return {"success": False, "error": "Profiler duration must be an integer"}
+            try:
+                duration = int(raw_duration)
+            except (TypeError, ValueError):
+                return {"success": False, "error": "Profiler duration must be an integer"}
+            if duration < 0 or duration > 1800:
+                return {"success": False, "error": "Profiler duration must be between 0 and 1800 seconds"}
+            if task_type == 'heapdump' or duration > 120:
+                self._log_security_event(
+                    tool_name, user_id, "denied", "human_confirmation_required")
+                return {
+                    "success": False,
+                    "error": "Heap Dump and sampling over 120 seconds require per-run confirmation in the UI",
+                    "requires_confirmation": True,
+                }
+        if not self._check_permission(tool_name, user_id, risk_level=risk_level):
+            self._log_security_event(
+                tool_name, user_id, "denied", "tool_permission_denied")
+            return {"success": False, "error": "Permission denied"}
+
+        context = context or {}
+        connection_id = params.get('connection_id') or context.get('connection_id')
+        if connection_id and not self._check_connection_access(connection_id, user_id):
+            self._log_security_event(
+                tool_name, user_id, "denied", "connection_access_denied")
             return {"success": False, "error": "Permission denied"}
 
         # 执行工具
         try:
-            result = tool['handler'](params, context or {})
+            result = tool['handler'](params, context)
 
             # 记录审计日志
             self._log_audit(tool_name, params, user_id, context)
@@ -279,6 +351,7 @@ class AgentToolGateway:
             return {"success": True, "result": result}
         except Exception as e:
             log.error(f"Tool execution failed: {tool_name}, error: {e}")
+            self._log_security_event(tool_name, user_id, "failed", str(e))
             return {"success": False, "error": str(e)}
 
     def get_tool_definitions(self) -> List[Dict[str, Any]]:
@@ -292,34 +365,31 @@ class AgentToolGateway:
             })
         return definitions
 
-    def _check_permission(self, tool_name: str, user_id: int = None) -> bool:
+    def _check_permission(self, tool_name: str, user_id: int = None,
+                          risk_level: str = None) -> bool:
         """检查权限：high 风险工具仅 admin 可用"""
         tool = self.tools.get(tool_name)
         if not tool:
             return False
-        risk_level = tool.get('risk_level', 'low')
+        risk_level = risk_level or tool.get('risk_level', 'low')
         if risk_level != 'high':
             return True
-        if not user_id:
-            return False
         try:
-            from models.db import db
-            user = db.fetch_one('SELECT is_admin FROM users WHERE id = ?', (user_id,))
-            return bool(user and user.get('is_admin'))
+            return self._is_admin(user_id)
         except Exception:
             return False
 
     def _log_audit(self, tool_name: str, params: Dict[str, Any],
                   user_id: int = None, context: Dict[str, Any] = None):
         """记录审计日志"""
-        from services.audit_service import log_audit_action
-        log_audit_action(
+        from services.audit_service import AuditService
+        AuditService.log_event(
+            user_id,
             action=f"agent_tool:{tool_name}",
-            resource_type="agent_tool",
+            resource_type='agent_tool',
             resource_id=tool_name,
             details=json.dumps({
                 "params": params,
-                "user_id": user_id,
                 "context": context
             })
         )
@@ -355,7 +425,7 @@ class AgentToolGateway:
         if not connection_id:
             raise ValueError("connection_id is required")
 
-        conn = self._get_connection(connection_id)
+        conn = self._get_connection(connection_id, context.get('user_id'))
         if not conn:
             return {"error": f"连接 {connection_id} 不可用"}
 
@@ -386,7 +456,7 @@ class AgentToolGateway:
         if not connection_id:
             raise ValueError("connection_id is required")
 
-        conn = self._get_connection(connection_id)
+        conn = self._get_connection(connection_id, context.get('user_id'))
         if not conn:
             return {"error": f"连接 {connection_id} 不可用"}
 
@@ -443,7 +513,8 @@ class AgentToolGateway:
             (connection_id,)
         )
 
-        if not connection:
+        if not connection or not self._check_connection_access(
+                connection_id, context.get('user_id')):
             return {"error": f"Connection {connection_id} not found"}
 
         return {
@@ -467,7 +538,9 @@ class AgentToolGateway:
             (run_id,)
         )
 
-        if not run:
+        user_id = context.get('user_id')
+        if not run or (
+                run.get('user_id') != user_id and not self._is_admin(user_id)):
             return {"error": f"Execution {run_id} not found"}
 
         # 获取步骤日志
@@ -509,7 +582,7 @@ class AgentToolGateway:
         if cmd_name in forbidden:
             return {"error": f"Forbidden command: {cmd_name}"}
 
-        conn = self._get_connection(connection_id)
+        conn = self._get_connection(connection_id, context.get('user_id'))
         if not conn:
             return {"error": f"连接 {connection_id} 不可用"}
 
@@ -539,7 +612,7 @@ class AgentToolGateway:
         if not connection_id:
             raise ValueError("connection_id is required")
 
-        conn = self._get_connection(connection_id)
+        conn = self._get_connection(connection_id, context.get('user_id'))
         if not conn:
             return {"error": f"连接 {connection_id} 不可用"}
 
@@ -571,7 +644,7 @@ class AgentToolGateway:
         if not connection_id:
             raise ValueError("connection_id is required")
 
-        conn = self._get_connection(connection_id)
+        conn = self._get_connection(connection_id, context.get('user_id'))
         if not conn:
             return {"error": f"连接 {connection_id} 不可用"}
 
@@ -642,7 +715,8 @@ class AgentToolGateway:
             )
 
             # 启动任务
-            result = service.start_task(task_id)
+            result = service.start_task(
+                task_id, user_id=user_id, is_admin=self._is_admin(user_id))
 
             return {
                 "task_id": task_id,
@@ -665,7 +739,9 @@ class AgentToolGateway:
         try:
             from services.profiler_service import get_profiler_service
             service = get_profiler_service()
-            result = service.stop_task(task_id)
+            user_id = context.get('user_id')
+            result = service.stop_task(
+                task_id, user_id=user_id, is_admin=self._is_admin(user_id))
 
             if result.get('success'):
                 return {
@@ -691,7 +767,9 @@ class AgentToolGateway:
         try:
             from services.profiler_service import get_profiler_service
             service = get_profiler_service()
-            result = service.get_task_status(task_id)
+            user_id = context.get('user_id')
+            result = service.get_task_status(
+                task_id, user_id=user_id, is_admin=self._is_admin(user_id))
 
             if result.get('success'):
                 task = result.get('task', {})

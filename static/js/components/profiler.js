@@ -53,12 +53,30 @@ async function startProfilerTask(connId, mode, duration) {
     toast('请先选择连接', 'error');
     return;
   }
+
+  const requiresConfirmation = mode === 'heapdump' || duration > 120;
+  if (requiresConfirmation && !window.confirm(
+    mode === 'heapdump'
+      ? 'Heap Dump 会触发 JVM 停顿（STW），可能造成明显服务延迟。确认本次导出？'
+      : `本次采样将持续 ${duration} 秒，可能增加目标 JVM 负载。确认启动？`
+  )) return;
   
   try {
+    let approvalToken = null;
+    if (requiresConfirmation) {
+      const approval = await safePost('/api/profile/approval', {
+        connection_id: connId,
+        type: mode,
+        duration
+      });
+      approvalToken = approval.approval_token;
+      if (!approvalToken) throw new Error('审批令牌申请失败');
+    }
     const resp = await safePost('/api/profile/start', {
       connection_id: connId,
       type: mode,
-      duration: duration
+      duration: duration,
+      approval_token: approvalToken
     });
     
     _pfTaskId = resp.task_id;
@@ -164,12 +182,31 @@ async function startProfilerFromDiagnosisCenter(connId, mode, duration) {
     toast('请先建立连接', 'error');
     return;
   }
+
+  const resolvedMode = mode || 'cpu';
+  const resolvedDuration = duration || 60;
+  const requiresConfirmation = resolvedMode === 'heapdump' || resolvedDuration > 120;
+  if (requiresConfirmation && !window.confirm(
+    resolvedMode === 'heapdump'
+      ? 'Heap Dump 会触发 JVM 停顿（STW），可能造成明显服务延迟。确认本次导出？'
+      : `本次采样将持续 ${resolvedDuration} 秒，可能增加目标 JVM 负载。确认启动？`
+  )) return;
   
   try {
+    let approvalToken = null;
+    if (requiresConfirmation) {
+      const approval = await safePost('/api/profile/approval', {
+        connection_id: connId,
+        type: resolvedMode,
+        duration: resolvedDuration
+      });
+      approvalToken = approval.approval_token;
+      if (!approvalToken) throw new Error('审批令牌申请失败');
+    }
     const resp = await safePost('/api/profiler/tasks', {
       connection_id: connId,
-      type: mode || 'cpu',
-      duration: duration || 60
+      type: resolvedMode,
+      duration: resolvedDuration
     });
     
     if (!resp.success) {
@@ -178,7 +215,9 @@ async function startProfilerFromDiagnosisCenter(connId, mode, duration) {
     }
     
     // 启动任务
-    const startResp = await safePost('/api/profiler/tasks/' + resp.task_id + '/start');
+    const startResp = await safePost('/api/profiler/tasks/' + resp.task_id + '/start', {
+      approval_token: approvalToken
+    });
     
     if (startResp.success) {
       toast('性能采样已启动（任务ID: ' + resp.task_id + '）', 'success');

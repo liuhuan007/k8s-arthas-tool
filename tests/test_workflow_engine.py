@@ -1,23 +1,39 @@
 #!/usr/bin/env python3
 """Workflow Engine 单元测试"""
 import pytest
+import importlib
 import json
 import sys
 import os
+import pytest
 
 # 添加项目根目录到路径
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from backend.config import Config
 from services.workflow_engine import WorkflowEngine
+
+db_module = importlib.import_module("models.db")
 
 
 class TestWorkflowEngine:
     """WorkflowEngine 单元测试"""
 
-    def setup_method(self):
-        """每个测试方法前执行"""
+    @pytest.fixture(autouse=True)
+    def setup_method(self, tmp_path):
+        """Use an isolated initialized SQLite database for each test."""
+        original_db_file = Config.DB_FILE
+        Config.DB_FILE = str(tmp_path / "workflow-test.db")
+        db_module.Database._instance = None
+        db_module._db_instance = None
+        database = db_module.get_db()
+        database.initialize()
         self.engine = WorkflowEngine()
-        self.engine.db = self.engine.db.__class__(":memory:")
+        self.engine.db = database
+        yield
+        Config.DB_FILE = original_db_file
+        db_module.Database._instance = None
+        db_module._db_instance = None
 
     def test_create_run(self):
         """测试创建执行记录"""

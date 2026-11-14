@@ -47,7 +47,8 @@ class WorkflowEngine:
                 self._execute_command(run_id, capability['arthas_command'], params, connection_id)
             elif capability.get('handler'):
                 # AI 诊断（处理器）
-                self._execute_handler(run_id, capability['handler'], params, connection_id)
+                self._execute_handler(
+                    run_id, capability['handler'], params, connection_id, user_id)
             else:
                 raise ValueError("No execution method defined for capability")
 
@@ -173,7 +174,7 @@ class WorkflowEngine:
             raise
 
     def _execute_handler(self, run_id: str, handler: str, params: Dict[str, Any],
-                        connection_id: str):
+                        connection_id: str, user_id: int = None):
         """执行 Handler（AI 诊断）"""
         step_id = self._create_step(run_id, 1, {"handler": handler})
 
@@ -184,7 +185,14 @@ class WorkflowEngine:
             handler_func = getattr(module, function_name)
 
             # 执行 Handler
-            output = handler_func(params, connection_id)
+            handler_params = dict(params)
+            handler_params['_authenticated_user_id'] = user_id
+            user = self.db.fetch_one(
+                'SELECT is_admin FROM users WHERE id = ?', (user_id,)
+            ) if user_id else None
+            handler_params['_authenticated_user_is_admin'] = bool(
+                user and user.get('is_admin'))
+            output = handler_func(handler_params, connection_id)
 
             # 记录步骤完成
             self._update_step_status(step_id, "success", output=str(output))

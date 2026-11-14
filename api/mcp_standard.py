@@ -20,6 +20,15 @@ log = logging.getLogger(__name__)
 mcp_std_bp = Blueprint('mcp_standard', __name__)
 
 
+def _can_access_connection(connection_id: str) -> bool:
+    if current_user.is_admin:
+        return True
+
+    from backend.app_context import get_connection_entry
+    entry = get_connection_entry(connection_id)
+    return bool(entry and entry.get('user_id') == current_user.id)
+
+
 @mcp_std_bp.route('/api/mcp/v1/tools', methods=['GET'])
 def list_tools():
     """列出所有可用 MCP Tools（无需认证，供 AI 客户端发现工具）"""
@@ -53,11 +62,16 @@ def call_tool(tool_name):
         return jsonify({"error": f"未知工具: {tool_name}"}), 404
 
     d = request.json or {}
-    if not d.get("connection_id"):
+    connection_id = d.get("connection_id", "")
+    if not connection_id:
         return jsonify({"error": "connection_id 必填"}), 400
+    if not _can_access_connection(connection_id):
+        return jsonify({"error": "连接不存在或无权访问"}), 404
 
     try:
-        result = asyncio.run(execute_tool(tool_name, d))
+        result = asyncio.run(execute_tool(
+            tool_name, d, user_id=current_user.id,
+            is_admin=current_user.is_admin))
         return jsonify({"result": result, "tool": tool_name})
     except Exception as e:
         log.error("MCP tool '%s' 调用失败: %s", tool_name, e, exc_info=True)
@@ -81,13 +95,17 @@ def execute_batch():
         return jsonify({"error": "connection_id 必填"}), 400
     if not commands:
         return jsonify({"error": "commands 必填"}), 400
+    if not _can_access_connection(conn_id):
+        return jsonify({"error": "连接不存在或无权访问"}), 404
 
     results = []
     for cmd in commands[:10]:  # 最多 10 个
         tool_name = cmd.get("tool", "")
         args = {**cmd.get("args", {}), "connection_id": conn_id}
         try:
-            r = asyncio.run(execute_tool(tool_name, args))
+            r = asyncio.run(execute_tool(
+                tool_name, args, user_id=current_user.id,
+                is_admin=current_user.is_admin))
             results.append({"tool": tool_name, "result": r, "ok": True})
         except Exception as e:
             results.append({"tool": tool_name, "error": str(e), "ok": False})

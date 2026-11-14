@@ -16,6 +16,8 @@
 """
 import json
 import logging
+import time
+import uuid
 from datetime import datetime
 from flask import Blueprint, request, jsonify
 from flask_login import login_required, current_user
@@ -112,6 +114,48 @@ def _list_diagnosable_instances() -> list:
     return instances
 
 
+def _persist_diagnosis_run(diagnosis: dict, conn, user_id: int,
+                           duration_ms: int) -> str:
+    """Persist the server-collected evidence and return its opaque run identifier."""
+    from models.db import db
+
+    run_id = f"diag-{uuid.uuid4().hex}"
+    now = datetime.now().isoformat()
+    errors = [
+        f"{step['name']}: {step.get('error', '采集失败')}"
+        for step in diagnosis.get("steps", [])
+        if step.get("status") == "failed"
+    ]
+    db.insert("task_logs", {
+        "id": run_id,
+        "user_id": user_id,
+        "capability_id": None,
+        "execution_mode": "manual",
+        "execution_type": "diagnosis",
+        "run_type": "diagnosis",
+        "target_json": json.dumps({
+            "connection_id": diagnosis.get("connection_id", ""),
+            "cluster": conn.target.cluster_name,
+            "namespace": conn.target.namespace,
+            "pod": conn.target.pod_name,
+            "container": conn.target.container,
+            "target": diagnosis.get("target"),
+        }, ensure_ascii=False),
+        "params_json": json.dumps({
+            "target": diagnosis.get("target"),
+            "class_pattern": diagnosis.get("class_pattern", ""),
+            "method_pattern": diagnosis.get("method_pattern", ""),
+        }, ensure_ascii=False),
+        "status": diagnosis.get("status", "failed"),
+        "result_json": json.dumps(diagnosis, ensure_ascii=False),
+        "started_at": diagnosis.get("timestamp", now),
+        "finished_at": now,
+        "duration_ms": duration_ms,
+        "error_message": "; ".join(errors),
+    })
+    return run_id
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # 核心诊断逻辑
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -130,6 +174,8 @@ def _run_diagnosis(conn, target: str, class_pattern: str, method_pattern: str) -
     result = {
         "timestamp": datetime.now().isoformat(),
         "target": target,
+        "cluster": conn.target.cluster_name,
+        "container": conn.target.container,
         "pod": conn.target.pod_name,
         "namespace": conn.target.namespace,
         "java_pid": conn.java_pid,
@@ -140,19 +186,36 @@ def _run_diagnosis(conn, target: str, class_pattern: str, method_pattern: str) -
         "recommendations": [],
         "severity": "normal",
         "status": "running",
+        "class_pattern": class_pattern,
+        "method_pattern": method_pattern,
     }
 
     client = conn.http_client
     engine = RuleEngine()
 
     def _step(name: str):
-        result["steps"].append({"name": name, "time": datetime.now().strftime("%H:%M:%S")})
+        step = {
+            "name": name,
+            "started_at": datetime.now().isoformat(),
+            "status": "running",
+        }
+        result["steps"].append(step)
+        return step
+
+    def _step_finished(step: dict, status: str, error: str = None):
+        step["finished_at"] = datetime.now().isoformat()
+        step["status"] = status
+        if error:
+            step["error"] = error
 
     # ── Step 1: Dashboard 基线 ──────────────────────────────────────
-    _step("dashboard")
+    dashboard_step = _step("dashboard")
     try:
         from backend.core.arthas_executor import ArthasCommandExecutor
         dash_resp = ArthasCommandExecutor.execute(conn, "dashboard -n 1", timeout_ms=15000)
+        if isinstance(dash_resp, dict) and dash_resp.get("state") not in (
+                None, "", "SUCCEEDED", "SUCCESS", "COMPLETED"):
+            raise RuntimeError(dash_resp.get("message") or dash_resp["state"])
         # 从 Arthas 响应中提取核心指标，避免存储完整响应导致 JSON 过大被截断
         dash_body = dash_resp.get('body', dash_resp) if isinstance(dash_resp, dict) else {}
         dash_results = dash_body.get('results', []) if isinstance(dash_body, dict) else []
@@ -160,24 +223,35 @@ def _run_diagnosis(conn, target: str, class_pattern: str, method_pattern: str) -
             r0 = dash_results[0]
             all_threads = r0.get("threads", [])
             # 存储完整线程数据，前端按需分页
+            dashboard_evidence = {
+                "threads": all_threads,
+                "memoryInfo": r0.get("memoryInfo", {}),
+                "gcInfos": r0.get("gcInfos", []),
+                "runtimeInfo": r0.get("runtimeInfo", {}),
+            }
+            for key in ("cpu_percent", "cpuPercent", "cpuUsage", "jvmCpu"):
+                if key in r0:
+                    dashboard_evidence[key] = r0[key]
             result["metrics"]["dashboard"] = json.dumps({
                 "body": {
-                    "threads": all_threads,
-                    "memoryInfo": r0.get("memoryInfo", {}),
-                    "gcInfos": r0.get("gcInfos", []),
-                    "runtimeInfo": r0.get("runtimeInfo", {}),
+                    **dashboard_evidence,
                 }
             }, ensure_ascii=False)
         else:
-            result["metrics"]["dashboard"] = json.dumps(dash_resp, ensure_ascii=False)[:5000]
+            result["metrics"]["dashboard"] = json.dumps(dash_resp, ensure_ascii=False)
+        _step_finished(dashboard_step, "completed")
     except Exception as e:
         result["metrics"]["dashboard_error"] = str(e)
+        _step_finished(dashboard_step, "failed", str(e))
 
     # ── Step 2: Thread 快照 ───────────────────────────────────────
-    _step("thread")
+    thread_step = _step("thread")
     try:
         from backend.core.arthas_executor import ArthasCommandExecutor
         thread_resp = ArthasCommandExecutor.execute(conn, "thread -n 15", timeout_ms=20000)
+        if isinstance(thread_resp, dict) and thread_resp.get("state") not in (
+                None, "", "SUCCEEDED", "SUCCESS", "COMPLETED"):
+            raise RuntimeError(thread_resp.get("message") or thread_resp["state"])
         # 从 Arthas 响应中提取线程列表，避免存储完整响应被截断
         thread_body = thread_resp.get('body', thread_resp) if isinstance(thread_resp, dict) else {}
         thread_results = thread_body.get('results', []) if isinstance(thread_body, dict) else []
@@ -191,39 +265,63 @@ def _run_diagnosis(conn, target: str, class_pattern: str, method_pattern: str) -
                 }
             }, ensure_ascii=False)
         else:
-            result["metrics"]["threads"] = json.dumps(thread_resp, ensure_ascii=False)[:5000]
+            result["metrics"]["threads"] = json.dumps(thread_resp, ensure_ascii=False)
+        _step_finished(thread_step, "completed")
     except Exception as e:
         log.warning("Thread 指标采集失败: %s", e)
+        result["metrics"]["threads_error"] = str(e)
+        _step_finished(thread_step, "failed", str(e))
 
     # ── Step 3: Trace（method_slow / general 场景）────────────────
     if target in ("method_slow", "general") and class_pattern:
-        _step("trace")
+        trace_step = _step("trace")
         try:
             from backend.core.arthas_executor import ArthasCommandExecutor
             skip = "--skipJDKMethod true"
             trace_cmd = f"trace {class_pattern} {method_pattern or '*'} -n 10 '{skip} #cost > .5'"
             trace_resp = ArthasCommandExecutor.execute(conn, trace_cmd, timeout_ms=30000)
+            if isinstance(trace_resp, dict) and trace_resp.get("state") not in (
+                    None, "", "SUCCEEDED", "SUCCESS", "COMPLETED"):
+                raise RuntimeError(trace_resp.get("message") or trace_resp["state"])
             trace_raw = json.dumps(trace_resp, ensure_ascii=False)
-            result["metrics"]["trace"] = trace_raw[:2000]
-        except Exception:
-            pass
+            result["metrics"]["trace"] = trace_raw
+            _step_finished(trace_step, "completed")
+        except Exception as e:
+            log.warning("Trace 指标采集失败: %s", e)
+            result["metrics"]["trace_error"] = str(e)
+            _step_finished(trace_step, "failed", str(e))
 
     # ── Step 4: 规则引擎预筛 ────────────────────────────────────
-    _step("rule_engine")
+    rule_step = _step("rule_engine")
     raw_metrics = extract_metrics_from_diagnosis(result)
     rule_result = engine.evaluate(raw_metrics)
     result["rules_triggered"] = rule_result["triggered"]
     result["highlights"] = rule_result["highlights"]
     result["severity"] = rule_result["severity"]
+    result["summary"] = rule_result["summary"]
+    _step_finished(rule_step, "completed")
 
     # ── Step 5: 生成建议 ──────────────────────────────────────────
-    result["recommendations"] = _make_recommendations(result["rules_triggered"], target)
-
+    collection_steps = [step for step in result["steps"] if step["name"] != "rule_engine"]
+    successful_steps = sum(step["status"] == "completed" for step in collection_steps)
+    failed_steps = sum(step["status"] == "failed" for step in collection_steps)
     result["status"] = "completed"
+    if failed_steps:
+        result["status"] = "partial" if successful_steps else "failed"
+    if not raw_metrics:
+        result["status"] = "partial" if successful_steps else "failed"
+        result["severity"] = "unknown"
+    result["collection_complete"] = failed_steps == 0 and bool(raw_metrics)
+    if result["status"] != "completed":
+        result["summary"] = "诊断数据不完整；规则结果仅基于已采集证据，不能据此确认问题已排除"
+    result["recommendations"] = _make_recommendations(
+        result["rules_triggered"], target, result["status"])
+
     return result
 
 
-def _make_recommendations(triggered: list, target: str) -> list:
+def _make_recommendations(triggered: list, target: str,
+                          diagnosis_status: str = "completed") -> list:
     """根据规则命中情况生成优化建议"""
     recs = []
     rule_ids = {r["rule_id"] for r in triggered}
@@ -248,7 +346,9 @@ def _make_recommendations(triggered: list, target: str) -> list:
         recs.append("⚠️ Young GC 频率高，可能存在大量短生命周期对象，建议分析堆外内存或调整 Eden 区大小")
 
     if not recs:
-        if target == "oom":
+        if diagnosis_status != "completed":
+            recs.append("诊断数据采集不完整，当前结果不能用于确认或排除性能问题，请检查失败步骤后重试")
+        elif target == "oom":
             recs.append("未检测到明显内存异常，建议持续观察 Old 区趋势")
         elif target == "thread_block":
             recs.append("未检测到线程阻塞，建议扩大诊断范围或检查业务日志")
@@ -416,7 +516,12 @@ def diagnose_performance():
 
     # 执行诊断
     try:
+        started = time.monotonic()
         report = _run_diagnosis(conn, target, class_pattern, method_pattern)
+        report["connection_id"] = connection_id
+        report["duration_ms"] = int((time.monotonic() - started) * 1000)
+        report["run_id"] = _persist_diagnosis_run(
+            report, conn, current_user.id, report["duration_ms"])
 
         # 审计
         try:
@@ -445,17 +550,31 @@ def generate_diagnose_report():
 
     POST /api/ai/diagnose_performance/report
     {
-        "diagnosis": { ... }   // _run_diagnosis 返回的结构化数据
+        "run_id": "diag-..."   // 服务端保存的诊断运行 ID
     }
     """
     d = request.json or {}
-    diagnosis = d.get('diagnosis', {})
+    run_id = d.get('run_id', '')
+    if not isinstance(run_id, str) or not run_id.startswith("diag-"):
+        return jsonify({"error": "缺少有效的 run_id"}), 400
 
+    from models.db import db
+    run = db.fetch_one(
+        "SELECT * FROM task_logs WHERE id = ? AND is_archived = 0",
+        (run_id,))
+    if not run:
+        return jsonify({"error": "诊断记录不存在或已归档"}), 404
+    if run.get("user_id") != current_user.id and not current_user.is_admin:
+        return jsonify({"error": "无权访问该诊断记录"}), 403
+    try:
+        diagnosis = json.loads(run.get("result_json") or "{}")
+    except (TypeError, ValueError):
+        log.error("Invalid diagnosis result JSON: run_id=%s", run_id)
+        return jsonify({"error": "诊断记录数据损坏"}), 500
     if not diagnosis:
-        return jsonify({"error": "缺少 diagnosis 数据"}), 400
+        return jsonify({"error": "诊断记录没有可用数据"}), 422
 
     # 检查 AI 配置
-    from models.db import db
     config = db.fetch_one('SELECT * FROM ai_config WHERE user_id = ?', (current_user.id,))
     if not config:
         return jsonify({
@@ -497,7 +616,11 @@ def generate_diagnose_report():
         with urllib.request.urlopen(req, timeout=180) as resp:
             result = json.loads(resp.read().decode('utf-8'))
             content = result.get('choices', [{}])[0].get('message', {}).get('content', '')
+            db.update("task_logs", {
+                "ai_analysis_result": content,
+            }, "id = ?", (run_id,))
             return jsonify({
+                "run_id": run_id,
                 "report": content,
                 "diagnosis_summary": {
                     "severity": diagnosis.get('severity', 'unknown'),
@@ -522,6 +645,14 @@ def _build_llm_report_prompt(diagnosis: dict) -> str:
         f"目标 Pod: {diagnosis.get('namespace', '')}/{diagnosis.get('pod', '')}",
         f"Java PID: {diagnosis.get('java_pid', '')}",
         f"诊断场景: {diagnosis.get('target', 'general')}",
+        f"采集状态: {diagnosis.get('status', 'unknown')}（collection_complete={diagnosis.get('collection_complete', False)}）",
+        "",
+        "【采集步骤】",
+        *[
+            f"- {step.get('name')}: {step.get('status')}"
+            + (f" — {step.get('error')}" if step.get('error') else "")
+            for step in diagnosis.get('steps', [])
+        ],
         "",
         "【规则命中】",
     ]
@@ -533,11 +664,17 @@ def _build_llm_report_prompt(diagnosis: dict) -> str:
         lines.append("无")
 
     lines.extend(["", "【关键指标】"])
-    dash = metrics.get('dashboard', '')
-    if dash:
-        lines.append(dash[:800])
-    else:
-        lines.append("无 dashboard 数据")
+    for label, key, limit in (
+            ("Dashboard", "dashboard", 3000),
+            ("线程快照", "threads", 5000),
+            ("Trace", "trace", 5000)):
+        lines.extend(["", f"【{label} 证据】"])
+        evidence = metrics.get(key)
+        if evidence:
+            lines.append(str(evidence)[:limit])
+        else:
+            error = metrics.get(f"{key}_error")
+            lines.append(f"采集失败: {error}" if error else "无数据")
 
     lines.extend(["", "【高亮】"])
     if highlights:
@@ -545,6 +682,15 @@ def _build_llm_report_prompt(diagnosis: dict) -> str:
     else:
         lines.append("无明显异常")
 
-    lines.extend(["", "请生成一份结构化诊断报告，包含：", "1. 诊断结论（一句话概括）", "2. 问题根因分析", "3. 影响范围评估", "4. 优化建议（分紧急/中期/长期）"])
+    lines.extend([
+        "",
+        "约束：只依据提供的采集证据下结论；采集失败或数据不足时明确说明不确定性。",
+        "单次 GC 累积计数不能代表 GC 频率或趋势，不要据此判断 GC 过于频繁。",
+        "请生成一份结构化诊断报告，包含：",
+        "1. 诊断结论（一句话概括）",
+        "2. 问题根因分析",
+        "3. 影响范围评估",
+        "4. 优化建议（分紧急/中期/长期）",
+    ])
 
     return '\n'.join(lines)

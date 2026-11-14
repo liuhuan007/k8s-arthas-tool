@@ -198,6 +198,7 @@
           <section><h4>参数</h4><pre>${escapeHtml(JSON.stringify(params, null, 2))}</pre></section>
           <section><h4>实际命令</h4><pre>${escapeHtml(command || '无')}</pre></section>
           <section><h4>结果</h4><pre>${escapeHtml(JSON.stringify(result || {}, null, 2))}</pre></section>
+          ${run.ai_analysis_result ? `<section><h4>AI 分析报告</h4><pre>${escapeHtml(run.ai_analysis_result)}</pre></section>` : ''}
         </div>
       </div>
     `;

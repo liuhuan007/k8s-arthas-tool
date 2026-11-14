@@ -353,6 +353,7 @@ _TOOL_PACKAGE_ROOT = Path('data/tool_packages')
 _TOOL_TYPES = {'arthas', 'async-profiler', 'jattach', 'generic'}
 _BUILTIN_ARTHAS_PATH = str(Path(__file__).resolve().parent.parent / 'tools' / 'arthas' / 'arthas-boot.jar')
 _DEFAULT_ARTHAS_INSTALL_PATH = '/tmp/arthas/arthas-boot.jar'
+_MAX_BATCH_DISTRIBUTIONS = 200
 _SCHEDULER_STARTED = False
 _SCHEDULER_LOCK = threading.Lock()
 _SCHEDULER_POLL_SECONDS = 5
@@ -638,6 +639,16 @@ def _validate_pod_target(target: Any) -> Dict[str, str]:
     if not normalized['pod_name']:
         raise ValueError('Pod 执行目标缺少 Pod 名称')
     return normalized
+
+
+def _default_tool_install_path(tool_row: Dict[str, Any]) -> str:
+    configured = (tool_row.get('install_path') or '').strip()
+    if configured:
+        return configured
+    if tool_row.get('tool_type') == 'arthas':
+        return _DEFAULT_ARTHAS_INSTALL_PATH
+    filename = secure_filename(tool_row.get('file_name') or tool_row.get('name') or 'tool')
+    return f'/tmp/{filename or "tool"}'
 
 
 def _get_template(template_id: Optional[int]) -> Optional[Dict[str, Any]]:
@@ -1327,7 +1338,10 @@ def list_tool_packages():
         GROUP BY p.id
         ORDER BY p.is_builtin DESC, p.updated_at DESC, p.id DESC
     ''')
-    return jsonify({'packages': [_row_to_tool_package(row) for row in rows]})
+    packages = [_row_to_tool_package(row) for row in rows]
+    for package in packages:
+        package['install_path'] = _default_tool_install_path(package)
+    return jsonify({'packages': packages})
 
 
 @task_bp.route('/tool-packages', methods=['POST'])
@@ -1491,7 +1505,7 @@ def distribute_tool_package(package_id: int):
     try:
         target = _validate_pod_target(data)
         install_path = _validate_tool_install_path(
-            data.get('install_path') or row.get('install_path') or _DEFAULT_ARTHAS_INSTALL_PATH
+            data.get('install_path') or _default_tool_install_path(row)
         )
     except ValueError as exc:
         return _error(str(exc))
@@ -2082,7 +2096,7 @@ def distribute_single_tool():
     try:
         target = _validate_pod_target(data)
         install_path = _validate_tool_install_path(
-            data.get('install_path') or tool_row.get('install_path') or _DEFAULT_ARTHAS_INSTALL_PATH
+            data.get('install_path') or _default_tool_install_path(tool_row)
         )
     except ValueError as exc:
         return _error(str(exc))
@@ -2117,70 +2131,141 @@ def distribute_single_tool():
 @task_bp.route('/batch-distribute', methods=['POST'])
 @login_required
 def batch_distribute():
-    """批量分发工具到多个 Pod"""
+    """预检权限和目标后，按 Pod 批量分发工具。"""
     data = request.get_json(force=True)
+    if not isinstance(data, dict):
+        return _error('请求数据格式不正确')
     tool_ids = data.get('tool_ids', [])
-    tool_type = data.get('tool_type', 'binary')
     targets = data.get('targets', [])
-    install_path = data.get('install_path', '/tmp/arthas/arthas-boot.jar')
+    install_paths = data.get('install_paths') or {}
 
-    if not tool_ids or not targets:
-        return _error('请选择工具和目标 Pod')
+    if not isinstance(tool_ids, list) or not tool_ids:
+        return _error('请选择至少一个工具')
+    if not isinstance(targets, list) or not targets:
+        return _error('请选择至少一个 Pod')
+    if not isinstance(install_paths, dict):
+        return _error('工具安装路径格式不正确')
 
-    batch_id = f"batch-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-    results = []
+    normalized_tool_ids = []
+    try:
+        for raw_id in tool_ids:
+            if isinstance(raw_id, bool):
+                raise ValueError
+            tool_id = int(raw_id)
+            if tool_id <= 0:
+                raise ValueError
+            if tool_id not in normalized_tool_ids:
+                normalized_tool_ids.append(tool_id)
+    except (TypeError, ValueError):
+        return _error('工具 ID 格式不正确')
 
-    for tool_id in tool_ids:
+    normalized_targets = []
+    seen_targets = set()
+    try:
+        for raw_target in targets:
+            target = _validate_pod_target(raw_target)
+            key = (
+                target['cluster_name'], target['namespace'],
+                target['pod_name'], target['container'],
+            )
+            if key not in seen_targets:
+                seen_targets.add(key)
+                normalized_targets.append(target)
+    except ValueError as exc:
+        return _error(str(exc))
+
+    operation_count = len(normalized_tool_ids) * len(normalized_targets)
+    if operation_count > _MAX_BATCH_DISTRIBUTIONS:
+        return _error(
+            f'单次最多分发 {_MAX_BATCH_DISTRIBUTIONS} 次（工具数 × Pod 数），'
+            '请缩小目标范围后分批执行',
+            413,
+        )
+
+    # 完整预检后才开始写入，避免授权错误导致批次只执行一部分。
+    try:
+        checked_scopes = set()
+        for target in normalized_targets:
+            scope = (target['cluster_name'], target['namespace'])
+            if scope in checked_scopes:
+                continue
+            _get_cluster_config(target['cluster_name'])
+            auth_err, auth_code = AuthorizationService.require_namespace_access(
+                current_user, target['cluster_name'], target['namespace'])
+            if auth_err:
+                return _error(auth_err['error'], auth_code)
+            checked_scopes.add(scope)
+    except ValueError as exc:
+        return _error(str(exc), 403 if '无权' in str(exc) else 404)
+
+    tools = []
+    for tool_id in normalized_tool_ids:
         tool_row = db.fetch_one('SELECT * FROM tool_packages WHERE id = ?', (tool_id,))
         if not tool_row:
-            continue
-        tool_name = tool_row.get('name', f'tool-{tool_id}')
+            return _error(f'工具包不存在: {tool_id}', 404)
+        if tool_row.get('status') not in ('active', 'inactive'):
+            return _error(f"工具包不可分发: {tool_row.get('name', tool_id)}")
+        local_path = _resolve_tool_file_path(tool_row)
+        if not local_path or not local_path.exists():
+            return _error(f"工具文件不存在: {tool_row.get('file_path') or ''}", 404)
 
-        for target in targets:
-            cluster = target.get('cluster', '')
-            namespace = target.get('namespace', 'default')
-            pod = target.get('pod', '')
-            container = target.get('container', '')
-            dist_target = {
-                'cluster_name': cluster,
-                'namespace': namespace,
-                'pod_name': pod,
-                'container': container,
-            }
+        raw_path = (
+            install_paths.get(str(tool_id))
+            or install_paths.get(tool_id)
+            or data.get('install_path')
+            or _default_tool_install_path(tool_row)
+        )
+        try:
+            install_path = _validate_tool_install_path(raw_path)
+        except ValueError as exc:
+            return _error(f"{tool_row.get('name', tool_id)}: {exc}")
+        if tool_row.get('tool_type') == 'arthas' and not install_path.endswith('.jar'):
+            return _error('Arthas 工具必须分发为 .jar 文件')
+        tools.append((tool_row, install_path))
 
-            # 执行分发
+    batch_id = f"batch-{uuid.uuid4().hex[:12]}"
+    results = []
+    for tool_row, install_path in tools:
+        tool_name = tool_row.get('name', f"tool-{tool_row['id']}")
+        for target in normalized_targets:
+            start_time = time.time()
             try:
-                start_time = time.time()
-                _do_distribute(tool_row, cluster, namespace, pod, container, install_path)
+                _do_distribute(
+                    tool_row, target['cluster_name'], target['namespace'],
+                    target['pod_name'], target['container'], install_path)
                 duration_ms = int((time.time() - start_time) * 1000)
-                _record_tool_distribution(tool_row, dist_target, install_path, 'success')
+                _record_tool_distribution(tool_row, target, install_path, 'success')
                 results.append({
                     'tool': tool_name,
-                    'pod': pod,
+                    'cluster': target['cluster_name'],
+                    'namespace': target['namespace'],
+                    'pod': target['pod_name'],
+                    'container': target['container'],
+                    'install_path': install_path,
                     'status': 'success',
                     'duration_ms': duration_ms,
                 })
-            except Exception as e:
-                _record_tool_distribution(tool_row, dist_target, install_path, 'failed', str(e), str(e))
+            except Exception as exc:
+                _record_tool_distribution(
+                    tool_row, target, install_path, 'failed', str(exc), str(exc))
                 results.append({
                     'tool': tool_name,
-                    'pod': pod,
+                    'cluster': target['cluster_name'],
+                    'namespace': target['namespace'],
+                    'pod': target['pod_name'],
+                    'container': target['container'],
+                    'install_path': install_path,
                     'status': 'failed',
-                    'error': str(e),
+                    'error': str(exc),
                 })
 
-    success_count = sum(1 for r in results if r['status'] == 'success')
-    failed_count = sum(1 for r in results if r['status'] == 'failed')
-
+    success_count = sum(1 for result in results if result['status'] == 'success')
+    failed_count = len(results) - success_count
     return jsonify({
         'batch_id': batch_id,
         'total': len(results),
         'results': results,
-        'summary': {
-            'success': success_count,
-            'failed': failed_count,
-            'skipped': 0,
-        }
+        'summary': {'success': success_count, 'failed': failed_count, 'skipped': 0},
     })
 
 
@@ -2489,7 +2574,7 @@ def diagnosis_history():
     offset = int(request.args.get('offset', 0))
     status_filter = request.args.get('status', '').strip()
 
-    where_sql = "t.execution_type = 'diagnosis'"
+    where_sql = "t.execution_type = 'diagnosis' AND COALESCE(t.is_archived, 0) = 0"
     params = []
     if not getattr(current_user, 'is_admin', False):
         where_sql += ' AND t.user_id = ?'
@@ -2514,6 +2599,7 @@ def diagnosis_history():
             t.params_json,
             t.status,
             t.result_json,
+            t.ai_analysis_result,
             t.error_message,
             t.duration_ms,
             t.started_at,

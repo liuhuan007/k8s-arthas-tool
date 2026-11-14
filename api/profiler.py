@@ -24,6 +24,23 @@ log = logging.getLogger(__name__)
 profiler_bp = Blueprint('profiler', __name__)
 
 
+def _can_access_connection(connection_id: str) -> bool:
+    if current_user.is_admin:
+        return True
+
+    from backend.app_context import get_connection_entry
+    entry = get_connection_entry(connection_id)
+    if entry:
+        return entry.get('user_id') == current_user.id
+
+    from models.db import db
+    row = db.fetch_one(
+        'SELECT user_id FROM connections WHERE id = ?',
+        (connection_id,)
+    )
+    return bool(row and row.get('user_id') == current_user.id)
+
+
 @profiler_bp.route('/api/profiler/tasks', methods=['POST'])
 @login_required
 def create_task():
@@ -38,6 +55,11 @@ def create_task():
     
     if not connection_id:
         return jsonify({"success": False, "error": "connection_id 必填"}), 400
+    if not _can_access_connection(connection_id):
+        return jsonify({"success": False, "error": "连接不存在或无权访问"}), 404
+
+    if task_type == 'heapdump' and not current_user.is_admin:
+        return jsonify({"success": False, "error": "Heap Dump 仅管理员可执行"}), 403
     
     # 验证任务类型
     valid_types = ('cpu', 'jfr', 'threaddump', 'heapdump')
@@ -74,8 +96,14 @@ def create_task():
 def start_task(task_id: str):
     """启动 Profiler 任务"""
     try:
+        d = request.json or {}
         service = get_profiler_service()
-        result = service.start_task(task_id)
+        result = service.start_task(
+            task_id,
+            user_id=current_user.id,
+            is_admin=current_user.is_admin,
+            approval_token=d.get('approval_token')
+        )
         return jsonify(result)
     except Exception as e:
         log.error("启动 Profiler 任务失败: %s", e, exc_info=True)
@@ -88,7 +116,11 @@ def stop_task(task_id: str):
     """停止 Profiler 任务"""
     try:
         service = get_profiler_service()
-        result = service.stop_task(task_id)
+        result = service.stop_task(
+            task_id,
+            user_id=current_user.id,
+            is_admin=current_user.is_admin
+        )
         return jsonify(result)
     except Exception as e:
         log.error("停止 Profiler 任务失败: %s", e, exc_info=True)
@@ -101,7 +133,11 @@ def get_task_status(task_id: str):
     """查询任务状态"""
     try:
         service = get_profiler_service()
-        result = service.get_task_status(task_id)
+        result = service.get_task_status(
+            task_id,
+            user_id=current_user.id,
+            is_admin=current_user.is_admin
+        )
         return jsonify(result)
     except Exception as e:
         log.error("查询 Profiler 任务状态失败: %s", e, exc_info=True)
@@ -122,7 +158,8 @@ def list_tasks():
         # 如果不传 connection_id，根据权限返回
         tasks = service.list_tasks(
             connection_id=connection_id or None,
-            user_id=None if current_user.is_admin else user_id
+            user_id=user_id,
+            is_admin=current_user.is_admin
         )
         
         # 如果指定了状态，过滤

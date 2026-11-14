@@ -2,6 +2,7 @@
 import os
 import sys
 import json
+import importlib
 import sqlite3
 import tempfile
 import unittest
@@ -351,7 +352,8 @@ class ToolboxTestBase(unittest.TestCase):
         cls._test_db = _TestDB(cls._temp_db_path)
 
         # Patch models.db.get_db 使其返回测试 DB
-        cls._patcher = patch('models.db.get_db', return_value=cls._test_db)
+        database_module = importlib.import_module('models.db')
+        cls._patcher = patch.object(database_module, 'get_db', return_value=cls._test_db)
         cls._patcher.start()
 
     @classmethod
@@ -626,6 +628,76 @@ class TestBatchDistribute(ToolboxTestBase):
             'targets': [],
         })
         self.assertEqual(resp.status_code, 400)
+
+    def test_batch_distribute_prechecks_namespace_access_before_copy(self):
+        with patch('api.task_center._get_cluster_config', return_value={'name': 'test'}), \
+                patch('api.task_center.AuthorizationService.require_namespace_access',
+                      return_value=({'error': 'namespace denied'}, 403)), \
+                patch('api.task_center._do_distribute') as distribute:
+            resp = self.client.post('/api/tasks/batch-distribute', json={
+                'tool_ids': [1],
+                'targets': [{'cluster': 'test', 'namespace': 'restricted', 'pod': 'pod-1'}],
+            })
+
+        self.assertEqual(resp.status_code, 403)
+        distribute.assert_not_called()
+
+    def test_batch_distribute_enforces_operation_limit(self):
+        targets = [
+            {'cluster': 'test', 'namespace': 'default', 'pod': f'pod-{index}'}
+            for index in range(201)
+        ]
+        resp = self.client.post('/api/tasks/batch-distribute', json={
+            'tool_ids': [1],
+            'targets': targets,
+        })
+        self.assertEqual(resp.status_code, 413)
+
+    def test_batch_distribute_uses_each_tools_install_path(self):
+        from pathlib import Path
+
+        first_id = self._test_db.insert('tool_packages', {
+            'name': 'first-tool',
+            'tool_type': 'binary',
+            'file_path': '/tmp/first-tool',
+        })
+        second_id = self._test_db.insert('tool_packages', {
+            'name': 'arthas',
+            'tool_type': 'arthas',
+            'file_path': '/tmp/arthas.jar',
+        })
+        target = {
+            'cluster': 'test',
+            'namespace': 'default',
+            'pod': 'pod-1',
+            'container': 'app',
+        }
+        with tempfile.NamedTemporaryFile() as tool_file:
+            with patch('api.task_center._get_cluster_config', return_value={'name': 'test'}), \
+                    patch('api.task_center.AuthorizationService.require_namespace_access',
+                          return_value=(None, None)), \
+                    patch('api.task_center._resolve_tool_file_path',
+                          return_value=Path(tool_file.name)), \
+                    patch('api.task_center._do_distribute') as distribute, \
+                    patch('api.task_center._record_tool_distribution'):
+                resp = self.client.post('/api/tasks/batch-distribute', json={
+                    'tool_ids': [first_id, second_id],
+                    'targets': [target],
+                    'install_paths': {
+                        str(first_id): '/tmp/first-tool',
+                        str(second_id): '/tmp/arthas/arthas-boot.jar',
+                    },
+                })
+
+        self.assertEqual(resp.status_code, 200, resp.get_json())
+        self.assertEqual(
+            [call.args[-1] for call in distribute.call_args_list],
+            ['/tmp/first-tool', '/tmp/arthas/arthas-boot.jar'],
+        )
+        self.assertEqual(
+            [result['install_path'] for result in resp.get_json()['results']],
+            ['/tmp/first-tool', '/tmp/arthas/arthas-boot.jar'],
+        )
 
 
 if __name__ == '__main__':
